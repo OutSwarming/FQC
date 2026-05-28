@@ -9,6 +9,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("renders the home app shell with bottom navigation", async ({ page }) => {
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /user-scalable=no/);
   await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
   await expect(page.getByAltText("FQC wordmark")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Florida Quantum Computing", level: 2 })).toBeVisible();
@@ -60,4 +61,19 @@ test("updates the member profile name", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Alex", level: 2 })).toBeVisible();
   await expect(page.locator("#profile-initial")).toHaveText("A");
+});
+
+test("nukes local app data and reloads from profile troubleshooting", async ({ page }) => {
+  await navButton(page, "Profile").click({ force: true });
+  await page.getByLabel("Display name").fill("Alex");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("heading", { name: "Alex", level: 2 })).toBeVisible();
+
+  const reload = page.waitForEvent("framenavigated");
+  await page.getByRole("button", { name: "Nuke and Reload" }).click();
+  await reload;
+
+  await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
+  await expect(page.locator("#profile-initial")).toHaveText("F");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("fqc:name"))).toBeNull();
 });

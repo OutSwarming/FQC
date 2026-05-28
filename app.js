@@ -118,6 +118,41 @@ function saveState() {
   localStorage.setItem("fqc:notes", JSON.stringify(state.notes));
 }
 
+async function nukeAndReload() {
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch {}
+
+  try {
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+    }
+  } catch {}
+
+  try {
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+  } catch {}
+
+  Object.assign(state, {
+    view: "home",
+    memberName: "Future Member",
+    officerMode: false,
+    rsvps: [],
+    notes: []
+  });
+
+  window.setTimeout(() => window.location.reload(), 80);
+}
+
+function stopZoomGesture(event) {
+  event.preventDefault();
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -459,6 +494,15 @@ function renderProfile() {
       </section>
 
       <section class="section">
+        <h2>Fix and Troubleshooting</h2>
+        <p>Reset local app data, clear the offline cache, and reload a fresh copy.</p>
+        <button class="danger-button" id="nuke-reload" type="button">
+          <svg><use href="#icon-plus"></use></svg>
+          <span>Nuke and Reload</span>
+        </button>
+      </section>
+
+      <section class="section">
         <h2>Leaderboard</h2>
         <div class="leaderboard">
           ${leaders.map(([name, badge, score], index) => `
@@ -543,6 +587,10 @@ function bindViewEvents() {
     saveState();
     render();
   });
+
+  document.querySelector("#nuke-reload")?.addEventListener("click", () => {
+    nukeAndReload();
+  });
 }
 
 navItems.forEach((item) => {
@@ -556,5 +604,9 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   });
 }
+
+["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+  document.addEventListener(eventName, stopZoomGesture, { passive: false });
+});
 
 render();
