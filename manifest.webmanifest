@@ -8,7 +8,7 @@
   "theme_color": "#2f7d4d",
   "icons": [
     {
-      "src": "./assets/icon.svg",
+      "src": "./assets/fqc-logo.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

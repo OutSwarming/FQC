@@ -31,7 +31,7 @@ body {
   margin: 0;
   color: var(--ink);
   background:
-    linear-gradient(180deg, rgba(47, 125, 77, 0.08), rgba(244, 246, 241, 0) 280px),
+    linear-gradient(180deg, rgba(66, 99, 171, 0.1), rgba(244, 246, 241, 0) 280px),
     var(--bg);
 }
 
@@ -67,6 +67,21 @@ button {
   gap: 16px;
   padding: calc(8px + env(safe-area-inset-top, 0px)) 2px 12px;
   background: linear-gradient(180deg, rgba(244, 246, 241, 0.98) 75%, rgba(244, 246, 241, 0));
+}
+
+.brand-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-title img {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  box-shadow: 0 8px 22px rgba(20, 24, 34, 0.14);
 }
 
 .eyebrow {
@@ -161,11 +176,46 @@ p {
   object-fit: cover;
 }
 
+.logo-hero {
+  display: grid;
+  align-items: center;
+  min-height: 430px;
+  background:
+    linear-gradient(160deg, rgba(54, 53, 184, 0.96), rgba(11, 12, 39, 0.98)),
+    #12143d;
+}
+
+.logo-hero::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    linear-gradient(90deg, transparent 0 5%, rgba(78, 126, 205, 0.36) 5% 5.8%, transparent 5.8% 100%),
+    linear-gradient(135deg, transparent 0 18%, rgba(78, 126, 205, 0.26) 18% 18.8%, transparent 18.8% 100%),
+    linear-gradient(45deg, transparent 0 78%, rgba(78, 126, 205, 0.26) 78% 78.8%, transparent 78.8% 100%);
+}
+
+.logo-hero .opening-logo {
+  position: absolute;
+  inset: 28px 0 auto;
+  width: min(52%, 260px);
+  height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.34));
+}
+
 .hero::after {
   position: absolute;
   inset: 0;
   content: "";
   background: linear-gradient(180deg, rgba(12, 30, 22, 0.16), rgba(12, 30, 22, 0.78));
+}
+
+.logo-hero::after {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255, 127, 59, 0.18), transparent 32%),
+    linear-gradient(180deg, rgba(10, 12, 34, 0.02), rgba(10, 12, 34, 0.72));
 }
 
 .hero-content {
@@ -174,6 +224,14 @@ p {
   z-index: 1;
   padding: 22px;
   color: white;
+}
+
+.logo-hero .hero-content {
+  text-align: center;
+}
+
+.logo-hero .action-row {
+  justify-content: center;
 }
 
 .hero-content h2 {
@@ -664,6 +722,15 @@ textarea {
 
   .hero {
     min-height: 360px;
+  }
+
+  .logo-hero {
+    min-height: 500px;
+  }
+
+  .logo-hero .opening-logo {
+    top: 26px;
+    width: min(68%, 260px);
   }
 
   .hero-content {

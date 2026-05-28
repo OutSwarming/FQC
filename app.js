@@ -169,10 +169,10 @@ function renderHome() {
   const nextEvent = events[0];
   return `
     <section class="view" data-screen="home">
-      <article class="hero">
-        <img src="./assets/fqc-hero.png" alt="Florida technology and quantum computing landscape" />
+      <article class="hero logo-hero">
+        <img class="opening-logo" src="./assets/fqc-logo.svg" alt="Florida Quantum Computing logo" />
         <div class="hero-content">
-          <h2>Build the Florida quantum community.</h2>
+          <h2>Florida Quantum Computing</h2>
           <p>Track events, meetups, food plans, locations, points, and officer work from one app.</p>
           <div class="action-row">
             <button class="primary-button" type="button" data-jump="calendar">

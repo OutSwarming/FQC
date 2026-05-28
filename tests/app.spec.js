@@ -10,7 +10,8 @@ test.beforeEach(async ({ page }) => {
 
 test("renders the home app shell with bottom navigation", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Build the Florida quantum community." })).toBeVisible();
+  await expect(page.getByAltText("Florida Quantum Computing logo")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Florida Quantum Computing", level: 2 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
 
   const navLabels = ["Home", "Calendar", "Map", "Officers", "Profile"];
