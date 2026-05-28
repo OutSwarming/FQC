@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 
 test("renders the home app shell with bottom navigation", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
-  await expect(page.getByAltText("Florida Quantum Computing logo")).toBeVisible();
+  await expect(page.getByAltText("FQC wordmark")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Florida Quantum Computing", level: 2 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
 
@@ -28,7 +28,7 @@ test("navigates through member calendar and saves an RSVP", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Going" }).first()).toBeVisible();
 
   await page.reload();
-  await page.getByRole("button", { name: "Calendar" }).click();
+  await navButton(page, "Calendar").click({ force: true });
   await expect(page.getByRole("button", { name: "Going" }).first()).toBeVisible();
 });
 

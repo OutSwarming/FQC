@@ -81,6 +81,7 @@ button {
   height: 48px;
   flex: 0 0 auto;
   border-radius: 50%;
+  object-fit: cover;
   box-shadow: 0 8px 22px rgba(20, 24, 34, 0.14);
 }
 
@@ -176,16 +177,14 @@ p {
   object-fit: cover;
 }
 
-.logo-hero {
-  display: grid;
-  align-items: center;
-  min-height: 430px;
-  background:
-    linear-gradient(160deg, rgba(54, 53, 184, 0.96), rgba(11, 12, 39, 0.98)),
-    #12143d;
+.wordmark-hero {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  background: #0b0d2d;
 }
 
-.logo-hero::before {
+.wordmark-hero::before {
   position: absolute;
   inset: 0;
   content: "";
@@ -193,16 +192,18 @@ p {
     linear-gradient(90deg, transparent 0 5%, rgba(78, 126, 205, 0.36) 5% 5.8%, transparent 5.8% 100%),
     linear-gradient(135deg, transparent 0 18%, rgba(78, 126, 205, 0.26) 18% 18.8%, transparent 18.8% 100%),
     linear-gradient(45deg, transparent 0 78%, rgba(78, 126, 205, 0.26) 78% 78.8%, transparent 78.8% 100%);
+  pointer-events: none;
 }
 
-.logo-hero .opening-logo {
-  position: absolute;
-  inset: 28px 0 auto;
-  width: min(52%, 260px);
+.wordmark-hero .opening-wordmark {
+  position: relative;
+  inset: auto;
+  display: block;
+  width: 100%;
   height: auto;
-  margin: 0 auto;
-  object-fit: contain;
-  filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.34));
+  flex: 0 0 auto;
+  object-fit: cover;
+  background: #0b0d2d;
 }
 
 .hero::after {
@@ -212,10 +213,9 @@ p {
   background: linear-gradient(180deg, rgba(12, 30, 22, 0.16), rgba(12, 30, 22, 0.78));
 }
 
-.logo-hero::after {
+.wordmark-hero::after {
   background:
-    radial-gradient(circle at 50% 25%, rgba(255, 127, 59, 0.18), transparent 32%),
-    linear-gradient(180deg, rgba(10, 12, 34, 0.02), rgba(10, 12, 34, 0.72));
+    linear-gradient(180deg, rgba(10, 12, 34, 0), rgba(10, 12, 34, 0) 46%, rgba(10, 12, 34, 0.82) 100%);
 }
 
 .hero-content {
@@ -226,11 +226,15 @@ p {
   color: white;
 }
 
-.logo-hero .hero-content {
+.wordmark-hero .hero-content {
+  position: relative;
+  inset: auto;
+  margin-top: -4px;
   text-align: center;
+  background: #0b0d2d;
 }
 
-.logo-hero .action-row {
+.wordmark-hero .action-row {
   justify-content: center;
 }
 
@@ -722,15 +726,6 @@ textarea {
 
   .hero {
     min-height: 360px;
-  }
-
-  .logo-hero {
-    min-height: 500px;
-  }
-
-  .logo-hero .opening-logo {
-    top: 26px;
-    width: min(68%, 260px);
   }
 
   .hero-content {

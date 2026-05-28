@@ -1,11 +1,12 @@
-const CACHE_NAME = "fqc-app-v2";
+const CACHE_NAME = "fqc-app-v4";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./manifest.webmanifest",
-  "./assets/fqc-logo.svg"
+  "./assets/fqc-badge.png",
+  "./assets/fqc-wordmark.jpg"
 ];
 
 self.addEventListener("install", (event) => {
