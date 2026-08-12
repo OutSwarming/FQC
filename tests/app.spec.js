@@ -190,13 +190,15 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   const expandedTop = await planner.evaluate((element) => element.getBoundingClientRect().top);
   expect(expandedTop).toBeLessThan(initialTop - 80);
 
-  await intro.dispatchEvent("pointerdown", { button: 0, pointerId: 7, pointerType: "touch", clientY: 260 });
-  await intro.dispatchEvent("pointermove", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
-  await intro.dispatchEvent("pointerup", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
+  const visibleEvent = page.locator(".event-card-select").first();
+  await planner.evaluate((element) => { element.scrollTop = 90; });
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 7, pointerType: "touch", clientY: 300 });
+  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 7, pointerType: "touch", clientY: 500 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 7, pointerType: "touch", clientY: 500 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect.poll(() => planner.evaluate((element) => element.scrollTop)).toBe(0);
 
   const headerTop = await page.locator(".topbar").evaluate((element) => Math.round(element.getBoundingClientRect().top));
-  const visibleEvent = page.locator(".event-card-select").first();
   await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 8, pointerType: "touch", clientY: 730 });
   await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 8, pointerType: "touch", clientY: 500 });
   await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 8, pointerType: "touch", clientY: 500 });
@@ -204,12 +206,9 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await expect.poll(() => page.locator(".topbar").evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(headerTop);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
-  await intro.dispatchEvent("pointerdown", { button: 0, pointerId: 9, pointerType: "touch", clientY: 260 });
-  await intro.dispatchEvent("pointermove", { button: 0, pointerId: 9, pointerType: "touch", clientY: 520 });
-  await intro.dispatchEvent("pointerup", { button: 0, pointerId: 9, pointerType: "touch", clientY: 520 });
-  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
-
-  await handle.press("ArrowDown");
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 9, pointerType: "touch", clientY: 160 });
+  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 9, pointerType: "touch", clientY: 760 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 9, pointerType: "touch", clientY: 760 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "low");
   await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
@@ -233,6 +232,11 @@ test("calendar tab selects an event and preserves it across reloads", async ({ p
   await expect(page.locator(".calendar-agenda-event")).toHaveCount(4);
   await expect(page.getByRole("button", { name: "Previous month" })).toBeDisabled();
   if (testInfo.project.name === "mobile") {
+    await expect(page.locator("#event-planner")).toHaveAttribute("data-sheet-mode", "high");
+    await page.getByRole("tab", { name: "List" }).click();
+    await expect(page.getByRole("tab", { name: "List" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#event-planner")).toHaveAttribute("data-sheet-mode", "high");
+    await page.getByRole("tab", { name: "Calendar" }).click();
     await expect(page.locator("#event-planner")).toHaveAttribute("data-sheet-mode", "high");
   }
 

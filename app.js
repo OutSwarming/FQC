@@ -733,7 +733,10 @@ function setEventMode(mode) {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
   if (isMobileEventSheetViewport()) {
-    setMobileEventSheetMode(state.eventMode === "calendar" ? "high" : "medium");
+    const nextSheetMode = state.eventMode === "calendar" || mobileEventSheetMode === "high"
+      ? "high"
+      : "medium";
+    setMobileEventSheetMode(nextSheetMode);
   }
 }
 
@@ -845,9 +848,6 @@ function bindMobileEventSheet() {
 
   const startDrag = (event) => {
     if (event.button !== undefined && event.button !== 0) return;
-    const resizeFromHigh = event.target.closest("#event-sheet-handle, #event-intro");
-    const canResize = mobileEventSheetMode !== "high" || Boolean(resizeFromHigh);
-    if (!canResize) return;
     const metrics = getMobileEventSheetMetrics();
     const startHeight = planner.getBoundingClientRect().height;
     drag = {
@@ -859,7 +859,11 @@ function bindMobileEventSheet() {
       lastTime: performance.now(),
       velocity: 0,
       metrics,
-      moved: false
+      moved: false,
+      resizing: false,
+      modeAtStart: mobileEventSheetMode,
+      startScrollTop: planner.scrollTop,
+      resizeSurface: Boolean(event.target.closest("#event-sheet-handle, #event-intro"))
     };
   };
 
@@ -878,7 +882,19 @@ function bindMobileEventSheet() {
       planner.classList.add("event-sheet-dragging");
       try { planner.setPointerCapture(event.pointerId); } catch {}
     }
-    const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + delta));
+
+    let resizeDelta = delta;
+    if (drag.modeAtStart === "high" && !drag.resizeSurface) {
+      const maxScrollTop = Math.max(0, planner.scrollHeight - planner.clientHeight);
+      planner.scrollTop = Math.max(0, Math.min(maxScrollTop, drag.startScrollTop + delta));
+      const downwardPastTop = Math.max(0, -delta - drag.startScrollTop);
+      drag.resizing = downwardPastTop > 0;
+      resizeDelta = -downwardPastTop;
+    } else {
+      drag.resizing = true;
+    }
+
+    const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + resizeDelta));
     drag.currentHeight = nextHeight;
     pendingDragHeight = nextHeight;
     if (!dragFrame) {
@@ -900,18 +916,6 @@ function bindMobileEventSheet() {
     planner.classList.remove("event-sheet-dragging");
     const distance = finished.startY - finished.lastY;
     const meaningfulSwipe = Math.abs(distance) > 22;
-    let nextMode;
-
-    if (meaningfulSwipe && Math.abs(finished.velocity) > 0.12) {
-      const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
-      nextMode = MOBILE_EVENT_SHEET_MODES[Math.max(1, Math.min(3, startModeIndex + (distance > 0 ? 1 : -1)))];
-    } else {
-      nextMode = MOBILE_EVENT_SHEET_MODES.slice(1).reduce((nearest, candidate) => (
-        Math.abs(finished.metrics[candidate] - finished.currentHeight) < Math.abs(finished.metrics[nearest] - finished.currentHeight)
-          ? candidate
-          : nearest
-      ), "medium");
-    }
 
     if (Math.abs(distance) > 7) {
       suppressHandleClick = true;
@@ -919,6 +923,29 @@ function bindMobileEventSheet() {
       window.setTimeout(() => { suppressHandleClick = false; }, 280);
       window.setTimeout(() => { suppressSheetClick = false; }, 280);
     }
+
+    if (!finished.resizing) {
+      if (finished.modeAtStart === "high") setMobileEventSheetMode("high", { preserveScroll: true });
+      return;
+    }
+
+    const nearestMode = MOBILE_EVENT_SHEET_MODES.slice(1).reduce((nearest, candidate) => (
+      Math.abs(finished.metrics[candidate] - finished.currentHeight) < Math.abs(finished.metrics[nearest] - finished.currentHeight)
+        ? candidate
+        : nearest
+    ), "medium");
+    let nextMode = nearestMode;
+
+    if (meaningfulSwipe && Math.abs(finished.velocity) > 0.12) {
+      const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(finished.modeAtStart);
+      const nearestModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(nearestMode);
+      const directionalModeIndex = Math.max(1, Math.min(3, startModeIndex + (distance > 0 ? 1 : -1)));
+      const nextModeIndex = distance > 0
+        ? Math.max(nearestModeIndex, directionalModeIndex)
+        : Math.min(nearestModeIndex, directionalModeIndex);
+      nextMode = MOBILE_EVENT_SHEET_MODES[nextModeIndex];
+    }
+
     setMobileEventSheetMode(nextMode);
   };
 

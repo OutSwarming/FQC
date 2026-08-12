@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v13-locked-gestures";
+const CACHE_NAME = "fqc-app-v14-progressive-sheet";
 const ASSETS = [
   "./",
   "./index.html",
