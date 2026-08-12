@@ -47,7 +47,7 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.locator("#event-map")).toBeVisible();
   await expect(page.locator(".event-map-pin")).toHaveCount(7);
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Open the official University of Florida campus map" })).toContainText("UF CAMPUS");
+  await expect(page.locator(".event-map-campus")).toHaveCount(0);
 
   const navLabels = ["Home", "Officers", "Profile"];
   for (const label of navLabels) await expect(navButton(page, label)).toBeVisible();
@@ -86,7 +86,7 @@ test("rejects cached locations outside the UF Gainesville campus", async ({ page
   await expect(page.getByText("Wrong campus event")).toHaveCount(0);
   await expect(page.getByText("UCF Student Union")).toHaveCount(0);
   await expect(page.locator("#event-intro")).toContainText("Reitz Student Union");
-  await expect(page.getByRole("link", { name: "Open the official University of Florida campus map" })).toContainText("Gainesville, Florida");
+  await expect(page.locator(".event-map-campus")).toHaveCount(0);
 });
 
 test("rejects an unsafe saved schedule and replaces it with live Sheet data", async ({ page }) => {
@@ -206,9 +206,22 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await expect.poll(() => page.locator(".topbar").evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(headerTop);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
-  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 9, pointerType: "touch", clientY: 160 });
-  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 9, pointerType: "touch", clientY: 760 });
-  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 9, pointerType: "touch", clientY: 760 });
+  await planner.evaluate((element) => { element.scrollTop = 0; });
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 9, pointerType: "touch", clientY: 650 });
+  await page.waitForTimeout(24);
+  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 9, pointerType: "touch", clientY: 500 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 9, pointerType: "touch", clientY: 500 });
+  const scrollAtRelease = await planner.evaluate((element) => element.scrollTop);
+  await page.waitForTimeout(100);
+  const scrollAfterCoast = await planner.evaluate((element) => element.scrollTop);
+  expect(scrollAfterCoast).toBeGreaterThan(scrollAtRelease + 5);
+
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 10, pointerType: "touch", clientY: 300 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 10, pointerType: "touch", clientY: 300 });
+  await planner.evaluate((element) => { element.scrollTop = 0; });
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 11, pointerType: "touch", clientY: 160 });
+  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 11, pointerType: "touch", clientY: 760 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 11, pointerType: "touch", clientY: 760 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "low");
   await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");

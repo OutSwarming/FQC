@@ -663,39 +663,6 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 15%, transparent);
 }
 
-.event-map-campus {
-  position: absolute;
-  z-index: 500;
-  pointer-events: auto;
-  top: 16px;
-  left: 50%;
-  display: grid;
-  gap: 1px;
-  min-width: 154px;
-  padding: 8px 14px;
-  border: 2px solid #fa4616;
-  border-radius: 11px;
-  color: #ffffff;
-  background: #0021a5;
-  box-shadow: var(--shadow-soft);
-  text-align: center;
-  text-decoration: none;
-  transform: translateX(-50%);
-}
-
-.event-map-campus strong {
-  font-size: 0.75rem;
-  letter-spacing: 0.12em;
-}
-
-.event-map-campus span {
-  font-size: 0.61rem;
-  font-weight: 750;
-}
-
-.event-map-campus:hover { background: #001a85; }
-.event-map-campus:focus-visible { outline: 3px solid #fa4616; outline-offset: 3px; }
-
 .event-map-message {
   position: absolute;
   z-index: 510;
@@ -1267,7 +1234,6 @@ textarea { min-height: 96px; resize: vertical; }
   .event-detail-meta,
   .event-detail-focus { display: none; }
   .map-status { top: 10px; left: 10px; }
-  .event-map-campus { top: 58px; left: 10px; transform: none; }
   .leaflet-control-zoom { margin-top: 10px !important; margin-right: 10px !important; }
   .section-header { display: grid; }
   .officer-gate { margin-top: 20px; }
