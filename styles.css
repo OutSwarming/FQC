@@ -1135,7 +1135,7 @@ textarea { min-height: 96px; resize: vertical; }
   .event-planner[data-sheet-mode="high"] {
     overflow-y: auto;
     overscroll-behavior-y: contain;
-    touch-action: pan-y;
+    touch-action: none;
   }
 
   .event-planner[data-sheet-mode="closed"] {
