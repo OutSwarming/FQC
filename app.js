@@ -393,6 +393,8 @@ const themeToggle = document.querySelector("#theme-toggle");
 let eventMap = null;
 let eventMarkers = new Map();
 let pendingMapPan = null;
+const MOBILE_EVENT_SHEET_MODES = ["low", "medium", "high"];
+let mobileEventSheetMode = "medium";
 
 function saveState() {
   localStorage.setItem("fqc:view", state.view);
@@ -515,37 +517,38 @@ function render() {
 function renderHome() {
   return `
     <section class="view events-home" data-screen="home">
-      <section class="event-explorer" aria-label="FQC events and locations">
-        <div class="event-planner">
-          <div class="event-intro">
-            <p class="section-kicker">Explore together</p>
-            <h2>What’s happening</h2>
-            <p>Choose an event to see exactly where it meets.</p>
-            <div class="event-data-status" title="${escapeHtml(formatEventDataStatus())}">
-              <span aria-hidden="true"></span>
-              <strong>${eventDataSource === EVENT_DATA_SOURCE ? "Google Sheet connected" : "Schedule ready offline"}</strong>
+      <section class="event-explorer" data-sheet-mode="${mobileEventSheetMode}" aria-label="FQC events and locations">
+        <div class="event-planner" id="event-planner" data-sheet-mode="${mobileEventSheetMode}">
+          <button class="event-sheet-handle" id="event-sheet-handle" type="button" aria-label="Resize event list" aria-controls="event-planner-content" aria-expanded="${mobileEventSheetMode === "high"}">
+            <span aria-hidden="true"></span>
+            <small>Swipe for events</small>
+          </button>
+
+          <div id="event-planner-content">
+            <div class="event-intro" id="event-intro" aria-live="polite">
+              ${renderSelectedEventIntro()}
             </div>
-          </div>
 
-          <div class="event-tabs" role="tablist" aria-label="Event view">
-            <button type="button" role="tab" data-event-tab="list" aria-selected="${state.eventMode === "list"}">
-              <svg><use href="#icon-map"></use></svg>
-              List
-            </button>
-            <button type="button" role="tab" data-event-tab="calendar" aria-selected="${state.eventMode === "calendar"}">
-              <svg><use href="#icon-calendar"></use></svg>
-              Calendar
-            </button>
-          </div>
-
-          <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
-            <div class="event-list" aria-label="Published events">
-              ${events.map(renderEventCard).join("")}
+            <div class="event-tabs" role="tablist" aria-label="Event view">
+              <button type="button" role="tab" data-event-tab="list" aria-selected="${state.eventMode === "list"}">
+                <svg><use href="#icon-map"></use></svg>
+                List
+              </button>
+              <button type="button" role="tab" data-event-tab="calendar" aria-selected="${state.eventMode === "calendar"}">
+                <svg><use href="#icon-calendar"></use></svg>
+                Calendar
+              </button>
             </div>
-          </div>
 
-          <div class="event-mode-panel" data-event-panel="calendar" ${state.eventMode === "calendar" ? "" : "hidden"}>
-            <div id="event-calendar">${renderCalendarMonth()}</div>
+            <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
+              <div class="event-list" aria-label="Published events">
+                ${events.map(renderEventCard).join("")}
+              </div>
+            </div>
+
+            <div class="event-mode-panel" data-event-panel="calendar" ${state.eventMode === "calendar" ? "" : "hidden"}>
+              <div id="event-calendar">${renderCalendarMonth()}</div>
+            </div>
           </div>
         </div>
 
@@ -563,6 +566,24 @@ function renderHome() {
         </div>
       </section>
     </section>
+  `;
+}
+
+function renderSelectedEventIntro() {
+  const event = getEvent(state.selectedEventId);
+  const location = getEventLocation(event);
+  return `
+    <p class="section-kicker">${escapeHtml(formatEventDate(event, { weekday: "long", month: "long", day: "numeric" }))} · ${escapeHtml(event.time)}</p>
+    <h2>${escapeHtml(event.title)}</h2>
+    <div class="event-intro-location">
+      <svg><use href="#icon-location"></use></svg>
+      <span>${escapeHtml(location.name)} · ${escapeHtml(event.room)}</span>
+    </div>
+    <p class="event-intro-summary">${escapeHtml(event.description)}</p>
+    <div class="event-data-status" title="${escapeHtml(formatEventDataStatus())}">
+      <span aria-hidden="true"></span>
+      <strong>${eventDataSource === EVENT_DATA_SOURCE ? "Google Sheet connected" : "Schedule ready offline"}</strong>
+    </div>
   `;
 }
 
@@ -717,7 +738,163 @@ function selectEvent(eventId, options = {}) {
     bindRsvpEvents(details);
   }
 
+  const intro = document.querySelector("#event-intro");
+  if (intro) intro.innerHTML = renderSelectedEventIntro();
+
+  if (options.revealSheet === true && isMobileEventSheetViewport()) {
+    setMobileEventSheetMode("medium");
+  }
+
   if (options.focusMap !== false) focusSelectedEvent();
+}
+
+function isMobileEventSheetViewport() {
+  return window.matchMedia("(max-width: 680px)").matches;
+}
+
+function getMobileEventSheetMetrics() {
+  const explorer = document.querySelector(".event-explorer");
+  const availableHeight = explorer?.getBoundingClientRect().height || Math.max(520, window.innerHeight - 160);
+  const low = Math.min(220, Math.max(180, availableHeight * 0.3));
+  const high = Math.max(low, availableHeight - 8);
+  const medium = Math.min(high, Math.max(low + 100, availableHeight * 0.53));
+  return { low, medium, high };
+}
+
+function setMobileEventSheetMode(mode, options = {}) {
+  if (!isMobileEventSheetViewport()) return;
+  const planner = document.querySelector(".event-planner");
+  const explorer = document.querySelector(".event-explorer");
+  if (!planner || !explorer) return;
+
+  const nextMode = MOBILE_EVENT_SHEET_MODES.includes(mode) ? mode : "medium";
+  const metrics = getMobileEventSheetMetrics();
+  mobileEventSheetMode = nextMode;
+  planner.dataset.sheetMode = nextMode;
+  explorer.dataset.sheetMode = nextMode;
+  planner.style.height = `${Math.round(metrics[nextMode])}px`;
+  planner.classList.toggle("event-sheet-dragging", options.dragging === true);
+  document.querySelector("#event-sheet-handle")?.setAttribute("aria-expanded", String(nextMode === "high"));
+  if (nextMode !== "high" || options.preserveScroll !== true) planner.scrollTop = 0;
+  window.setTimeout(() => eventMap?.invalidateSize(), options.immediate ? 0 : 260);
+}
+
+function bindMobileEventSheet() {
+  const planner = document.querySelector(".event-planner");
+  const explorer = document.querySelector(".event-explorer");
+  const handle = document.querySelector("#event-sheet-handle");
+  const intro = document.querySelector("#event-intro");
+  if (!planner || !explorer || !handle || !intro || !isMobileEventSheetViewport()) return;
+
+  setMobileEventSheetMode(mobileEventSheetMode, { immediate: true });
+  let drag = null;
+  let suppressHandleClick = false;
+
+  const modeIndex = () => MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
+  const stepMode = (direction) => {
+    const nextIndex = Math.max(0, Math.min(MOBILE_EVENT_SHEET_MODES.length - 1, modeIndex() + direction));
+    setMobileEventSheetMode(MOBILE_EVENT_SHEET_MODES[nextIndex]);
+  };
+
+  const startDrag = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    const metrics = getMobileEventSheetMetrics();
+    const startHeight = planner.getBoundingClientRect().height;
+    drag = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      lastY: event.clientY,
+      startHeight,
+      currentHeight: startHeight,
+      lastTime: performance.now(),
+      velocity: 0,
+      metrics
+    };
+    planner.classList.add("event-sheet-dragging");
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    if (event.cancelable) event.preventDefault();
+  };
+
+  const moveDrag = (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const now = performance.now();
+    const elapsed = Math.max(1, now - drag.lastTime);
+    const instantVelocity = (drag.lastY - event.clientY) / elapsed;
+    drag.velocity = drag.velocity * 0.35 + instantVelocity * 0.65;
+    drag.lastY = event.clientY;
+    drag.lastTime = now;
+    const delta = drag.startY - event.clientY;
+    const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + delta));
+    drag.currentHeight = nextHeight;
+    planner.style.height = `${Math.round(nextHeight)}px`;
+    if (event.cancelable) event.preventDefault();
+  };
+
+  const finishDrag = (event) => {
+    if (!drag || (event.pointerId !== undefined && event.pointerId !== drag.pointerId)) return;
+    const finished = drag;
+    drag = null;
+    planner.classList.remove("event-sheet-dragging");
+    const distance = finished.startY - finished.lastY;
+    const meaningfulSwipe = Math.abs(distance) > 22;
+    let nextMode;
+
+    if (meaningfulSwipe && Math.abs(finished.velocity) > 0.12) {
+      const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
+      nextMode = MOBILE_EVENT_SHEET_MODES[Math.max(0, Math.min(2, startModeIndex + (distance > 0 ? 1 : -1)))];
+    } else {
+      nextMode = MOBILE_EVENT_SHEET_MODES.reduce((nearest, candidate) => (
+        Math.abs(finished.metrics[candidate] - finished.currentHeight) < Math.abs(finished.metrics[nearest] - finished.currentHeight)
+          ? candidate
+          : nearest
+      ), "medium");
+    }
+
+    if (Math.abs(distance) > 7) {
+      suppressHandleClick = true;
+      window.setTimeout(() => { suppressHandleClick = false; }, 280);
+    }
+    setMobileEventSheetMode(nextMode);
+  };
+
+  [handle, intro].forEach((surface) => {
+    surface.addEventListener("pointerdown", startDrag);
+    surface.addEventListener("pointermove", moveDrag, { passive: false });
+    surface.addEventListener("pointerup", finishDrag);
+    surface.addEventListener("pointercancel", finishDrag);
+  });
+
+  handle.addEventListener("click", (event) => {
+    if (suppressHandleClick) {
+      event.preventDefault();
+      return;
+    }
+    stepMode(mobileEventSheetMode === "high" ? -1 : 1);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowUp") {
+      stepMode(1);
+      event.preventDefault();
+    } else if (event.key === "ArrowDown") {
+      stepMode(-1);
+      event.preventDefault();
+    }
+  });
+
+  planner.addEventListener("wheel", (event) => {
+    if (Math.abs(event.deltaY) < 24) return;
+    if (event.deltaY > 0 && mobileEventSheetMode !== "high") {
+      stepMode(1);
+      event.preventDefault();
+    } else if (event.deltaY < 0 && planner.scrollTop <= 1 && mobileEventSheetMode !== "low") {
+      stepMode(-1);
+      event.preventDefault();
+    }
+  }, { passive: false });
+
+  const resizeSheet = () => setMobileEventSheetMode(mobileEventSheetMode, { immediate: true, preserveScroll: true });
+  window.addEventListener("resize", resizeSheet, { once: true });
 }
 
 function toggleRsvp(eventId) {
@@ -787,7 +964,7 @@ function initEventMap() {
         iconAnchor: [22, 44]
       })
     }).addTo(eventMap);
-    marker.on("click", () => selectEvent(event.id));
+    marker.on("click", () => selectEvent(event.id, { revealSheet: true }));
     eventMarkers.set(event.id, marker);
     bounds.push([location.lat, location.lng]);
   });
@@ -923,6 +1100,7 @@ function bindViewEvents() {
   });
   bindCalendarEvents();
   bindRsvpEvents();
+  bindMobileEventSheet();
 
   document.querySelector("#officer-login")?.addEventListener("click", () => {
     const input = document.querySelector("#officer-code");

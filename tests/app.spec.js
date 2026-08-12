@@ -42,7 +42,7 @@ test.beforeEach(async ({ page }) => {
 test("renders the unified event explorer and simplified navigation", async ({ page }) => {
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /user-scalable=no/);
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What’s happening", level: 2 })).toBeVisible();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "IonQ Quantum Networking Speaker Session", level: 2 })).toBeVisible();
   await expect(page.getByRole("region", { name: "FQC events and locations" })).toBeVisible();
   await expect(page.locator("#event-map")).toBeVisible();
   await expect(page.locator(".event-map-pin")).toHaveCount(7);
@@ -85,7 +85,7 @@ test("rejects cached locations outside the UF Gainesville campus", async ({ page
   await page.reload();
   await expect(page.getByText("Wrong campus event")).toHaveCount(0);
   await expect(page.getByText("UCF Student Union")).toHaveCount(0);
-  await expect(page.getByText("Reitz Student Union", { exact: true })).toBeVisible();
+  await expect(page.locator("#event-intro")).toContainText("Reitz Student Union");
   await expect(page.getByRole("link", { name: "Open the official University of Florida campus map" })).toContainText("Gainesville, Florida");
 });
 
@@ -147,33 +147,73 @@ test("keeps fixed navigation clear of event details in a short desktop window", 
   expect(layout.headerBottom).toBeLessThanOrEqual(layout.explorerTop);
 });
 
-test("selecting a list event synchronizes the detail card and map marker", async ({ page }) => {
+test("selecting a list event synchronizes the detail card and map marker", async ({ page }, testInfo) => {
   await page.locator('.event-list [data-select-event="fqc-2026-03-24-quirk"]').click();
 
   await expect(page.locator('[data-event-card="fqc-2026-03-24-quirk"]')).toHaveClass(/selected/);
-  await expect(page.locator("#event-details").getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
-  await expect(page.locator("#event-details").getByText("Larsen Hall")).toBeVisible();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
+  await expect(page.locator("#event-intro")).toContainText("Tuesday, March 24 · 6:00 PM");
+  await expect(page.locator("#event-intro")).toContainText("Larsen Hall · Room 234");
+  if (testInfo.project.name !== "mobile") {
+    await expect(page.locator("#event-details").getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
+    await expect(page.locator("#event-details").getByText("Larsen Hall")).toBeVisible();
+  }
   await expect(page.locator(".event-map-pin.active")).toHaveText("24");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("fqc:selected-event"))).toBe("fqc-2026-03-24-quirk");
 
   await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
-  await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  if (testInfo.project.name !== "mobile") {
+    await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  }
   await expect(page.locator('[data-event-card="fqc-2026-04-21-social"]')).toHaveClass(/selected/);
 });
 
-test("calendar tab selects an event and preserves it across reloads", async ({ page }) => {
+test("mobile event sheet expands, collapses, and reveals pin selections with swipe shortcuts", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "Mobile bottom-sheet interaction");
+
+  const planner = page.locator("#event-planner");
+  const handle = page.locator("#event-sheet-handle");
+  const intro = page.locator("#event-intro");
+  await expect(handle).toBeVisible();
+  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+
+  const initialTop = await planner.evaluate((element) => element.getBoundingClientRect().top);
+  await planner.dispatchEvent("wheel", { deltaY: 160 });
+  await expect(planner).toHaveAttribute("data-sheet-mode", "high");
+  await page.waitForTimeout(350);
+  const expandedTop = await planner.evaluate((element) => element.getBoundingClientRect().top);
+  expect(expandedTop).toBeLessThan(initialTop - 80);
+
+  await intro.dispatchEvent("pointerdown", { button: 0, pointerId: 7, pointerType: "touch", clientY: 260 });
+  await intro.dispatchEvent("pointermove", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
+  await intro.dispatchEvent("pointerup", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
+  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+
+  await handle.press("ArrowDown");
+  await expect(planner).toHaveAttribute("data-sheet-mode", "low");
+  await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
+  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect(intro.getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+});
+
+test("calendar tab selects an event and preserves it across reloads", async ({ page }, testInfo) => {
   await page.getByRole("tab", { name: "Calendar" }).click();
   await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");
 
   await page.getByRole("button", { name: "Next month" }).click();
   await expect(page.getByText("April 2026")).toBeVisible();
   await page.locator('.calendar-day[data-select-event="fqc-2026-04-21-social"]').click();
-  await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("April 2026")).toBeVisible();
-  await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  if (testInfo.project.name === "mobile") {
+    await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  } else {
+    await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  }
 });
 
 test("saves an RSVP from the unified home", async ({ page }) => {
