@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v11-event-sheet";
+const CACHE_NAME = "fqc-app-v12-sheet-calendar";
 const ASSETS = [
   "./",
   "./index.html",

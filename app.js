@@ -393,7 +393,7 @@ const themeToggle = document.querySelector("#theme-toggle");
 let eventMap = null;
 let eventMarkers = new Map();
 let pendingMapPan = null;
-const MOBILE_EVENT_SHEET_MODES = ["low", "medium", "high"];
+const MOBILE_EVENT_SHEET_MODES = ["closed", "low", "medium", "high"];
 let mobileEventSheetMode = "medium";
 
 function saveState() {
@@ -616,7 +616,11 @@ function renderCalendarMonth() {
   const firstDay = new Date(year, month - 1, 1);
   const daysInMonth = new Date(year, month, 0).getDate();
   const leadingDays = firstDay.getDay();
+  const previousMonthDays = new Date(year, month - 1, 0).getDate();
   const monthEvents = events.filter((event) => event.date.startsWith(state.calendarMonth));
+  const eventMonths = [...new Set(events.map((event) => event.date.slice(0, 7)))].sort();
+  const firstEventMonth = eventMonths[0];
+  const lastEventMonth = eventMonths[eventMonths.length - 1];
   const eventsByDay = new Map();
   monthEvents.forEach((event) => {
     const day = Number(event.date.slice(8, 10));
@@ -624,7 +628,9 @@ function renderCalendarMonth() {
   });
   const cells = [];
 
-  for (let index = 0; index < leadingDays; index += 1) cells.push('<span class="calendar-day outside" aria-hidden="true"></span>');
+  for (let index = 0; index < leadingDays; index += 1) {
+    cells.push(`<span class="calendar-day outside" aria-hidden="true"><span>${previousMonthDays - leadingDays + index + 1}</span></span>`);
+  }
   for (let day = 1; day <= daysInMonth; day += 1) {
     const dayEvents = eventsByDay.get(day) || [];
     if (dayEvents.length) {
@@ -632,32 +638,52 @@ function renderCalendarMonth() {
       const selected = dayEvents.some((event) => event.id === state.selectedEventId);
       cells.push(`
         <button class="calendar-day has-event${selected ? " selected" : ""}" type="button" data-select-event="${escapeHtml(selectedEvent.id)}" aria-pressed="${selected}" aria-label="${escapeHtml(dayEvents.map((event) => event.title).join(", "))}, ${escapeHtml(formatEventDate(selectedEvent, { month: "long", day: "numeric" }))}">
-          <span>${day}</span><i></i>
+          <span class="calendar-day-number">${day}</span>
+          <span class="calendar-day-label">${escapeHtml(selectedEvent.title)}</span>
+          <i aria-hidden="true"></i>
         </button>
       `);
     } else {
-      cells.push(`<span class="calendar-day"><span>${day}</span></span>`);
+      cells.push(`<span class="calendar-day"><span class="calendar-day-number">${day}</span></span>`);
     }
+  }
+  const trailingDays = 42 - cells.length;
+  for (let day = 1; day <= trailingDays; day += 1) {
+    cells.push(`<span class="calendar-day outside" aria-hidden="true"><span>${day}</span></span>`);
   }
 
   return `
     <div class="calendar-heading">
-      <button type="button" data-calendar-shift="-1" aria-label="Previous month"><svg><use href="#icon-chevron-left"></use></svg></button>
+      <button type="button" data-calendar-shift="-1" aria-label="Previous month" ${state.calendarMonth <= firstEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-left"></use></svg></button>
       <div>
         <strong>${new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(firstDay)}</strong>
-        <span>${monthEvents.length} ${monthEvents.length === 1 ? "event" : "events"}</span>
+        <span>${monthEvents.length} ${monthEvents.length === 1 ? "event" : "events"} · ${events.length} this semester</span>
       </div>
-      <button type="button" data-calendar-shift="1" aria-label="Next month"><svg><use href="#icon-chevron-right"></use></svg></button>
+      <button type="button" data-calendar-shift="1" aria-label="Next month" ${state.calendarMonth >= lastEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-right"></use></svg></button>
     </div>
     <div class="calendar-weekdays" aria-hidden="true">
       ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => `<span>${day}</span>`).join("")}
     </div>
     <div class="calendar-grid">${cells.join("")}</div>
     ${monthEvents.length ? `
+      <div class="calendar-agenda-heading">
+        <strong>Events this month</strong>
+        <span>${monthEvents.length} scheduled</span>
+      </div>
       <div class="calendar-agenda">
         ${monthEvents.map((event) => {
           const location = getEventLocation(event);
-          return `<button type="button" data-select-event="${event.id}"><strong>${escapeHtml(event.title)}</strong><span>${escapeHtml(event.time)} · ${escapeHtml(location.name)}</span></button>`;
+          const selected = event.id === state.selectedEventId;
+          return `
+            <button class="calendar-agenda-event${selected ? " selected" : ""}" type="button" data-select-event="${event.id}" aria-pressed="${selected}">
+              <span class="calendar-agenda-date"><small>${formatEventDate(event, { month: "short" })}</small><strong>${formatEventDate(event, { day: "2-digit" })}</strong></span>
+              <span class="calendar-agenda-copy">
+                <strong>${escapeHtml(event.title)}</strong>
+                <span>${escapeHtml(event.time)} · ${escapeHtml(location.name)} · ${escapeHtml(event.room)}</span>
+              </span>
+              <svg class="event-chevron"><use href="#icon-chevron-right"></use></svg>
+            </button>
+          `;
         }).join("")}
       </div>
     ` : '<p class="calendar-empty">No FQC events scheduled this month.</p>'}
@@ -701,6 +727,9 @@ function setEventMode(mode) {
   document.querySelectorAll("[data-event-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
+  if (isMobileEventSheetViewport()) {
+    setMobileEventSheetMode(state.eventMode === "calendar" ? "high" : "medium");
+  }
 }
 
 function shiftCalendarMonth(offset) {
@@ -716,8 +745,10 @@ function shiftCalendarMonth(offset) {
 }
 
 function selectEvent(eventId, options = {}) {
-  if (!events.some((event) => event.id === eventId)) return;
+  const selectedEvent = events.find((event) => event.id === eventId);
+  if (!selectedEvent) return;
   state.selectedEventId = eventId;
+  if (state.eventMode === "calendar") state.calendarMonth = selectedEvent.date.slice(0, 7);
   saveState();
 
   document.querySelectorAll("[data-event-card]").forEach((card) => {
@@ -741,6 +772,12 @@ function selectEvent(eventId, options = {}) {
   const intro = document.querySelector("#event-intro");
   if (intro) intro.innerHTML = renderSelectedEventIntro();
 
+  const calendar = document.querySelector("#event-calendar");
+  if (calendar && state.eventMode === "calendar") {
+    calendar.innerHTML = renderCalendarMonth();
+    bindCalendarEvents();
+  }
+
   if (options.revealSheet === true && isMobileEventSheetViewport()) {
     setMobileEventSheetMode("medium");
   }
@@ -755,10 +792,10 @@ function isMobileEventSheetViewport() {
 function getMobileEventSheetMetrics() {
   const explorer = document.querySelector(".event-explorer");
   const availableHeight = explorer?.getBoundingClientRect().height || Math.max(520, window.innerHeight - 160);
-  const low = Math.min(220, Math.max(180, availableHeight * 0.3));
-  const high = Math.max(low, availableHeight - 8);
-  const medium = Math.min(high, Math.max(low + 100, availableHeight * 0.53));
-  return { low, medium, high };
+  const low = Math.min(190, Math.max(154, availableHeight * 0.24));
+  const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
+  const high = Math.max(medium + 112, availableHeight * 0.78);
+  return { closed: 0, low, medium, high: Math.min(high, availableHeight - 92) };
 }
 
 function setMobileEventSheetMode(mode, options = {}) {
@@ -775,6 +812,8 @@ function setMobileEventSheetMode(mode, options = {}) {
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
   planner.classList.toggle("event-sheet-dragging", options.dragging === true);
   document.querySelector("#event-sheet-handle")?.setAttribute("aria-expanded", String(nextMode === "high"));
+  planner.setAttribute("aria-hidden", String(nextMode === "closed"));
+  planner.inert = nextMode === "closed";
   if (nextMode !== "high" || options.preserveScroll !== true) planner.scrollTop = 0;
   window.setTimeout(() => eventMap?.invalidateSize(), options.immediate ? 0 : 260);
 }
@@ -789,6 +828,8 @@ function bindMobileEventSheet() {
   setMobileEventSheetMode(mobileEventSheetMode, { immediate: true });
   let drag = null;
   let suppressHandleClick = false;
+  let dragFrame = null;
+  let pendingDragHeight = null;
 
   const modeIndex = () => MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
   const stepMode = (direction) => {
@@ -826,7 +867,13 @@ function bindMobileEventSheet() {
     const delta = drag.startY - event.clientY;
     const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + delta));
     drag.currentHeight = nextHeight;
-    planner.style.height = `${Math.round(nextHeight)}px`;
+    pendingDragHeight = nextHeight;
+    if (!dragFrame) {
+      dragFrame = requestAnimationFrame(() => {
+        planner.style.height = `${Math.round(pendingDragHeight)}px`;
+        dragFrame = null;
+      });
+    }
     if (event.cancelable) event.preventDefault();
   };
 
@@ -834,6 +881,9 @@ function bindMobileEventSheet() {
     if (!drag || (event.pointerId !== undefined && event.pointerId !== drag.pointerId)) return;
     const finished = drag;
     drag = null;
+    if (dragFrame) cancelAnimationFrame(dragFrame);
+    dragFrame = null;
+    pendingDragHeight = null;
     planner.classList.remove("event-sheet-dragging");
     const distance = finished.startY - finished.lastY;
     const meaningfulSwipe = Math.abs(distance) > 22;
@@ -841,9 +891,9 @@ function bindMobileEventSheet() {
 
     if (meaningfulSwipe && Math.abs(finished.velocity) > 0.12) {
       const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
-      nextMode = MOBILE_EVENT_SHEET_MODES[Math.max(0, Math.min(2, startModeIndex + (distance > 0 ? 1 : -1)))];
+      nextMode = MOBILE_EVENT_SHEET_MODES[Math.max(1, Math.min(3, startModeIndex + (distance > 0 ? 1 : -1)))];
     } else {
-      nextMode = MOBILE_EVENT_SHEET_MODES.reduce((nearest, candidate) => (
+      nextMode = MOBILE_EVENT_SHEET_MODES.slice(1).reduce((nearest, candidate) => (
         Math.abs(finished.metrics[candidate] - finished.currentHeight) < Math.abs(finished.metrics[nearest] - finished.currentHeight)
           ? candidate
           : nearest
@@ -950,6 +1000,10 @@ function initEventMap() {
     attribution: "&copy; OpenStreetMap contributors"
   }).addTo(eventMap);
 
+  eventMap.on("click", () => {
+    if (isMobileEventSheetViewport()) setMobileEventSheetMode("closed");
+  });
+
   const bounds = [];
   events.forEach((event) => {
     const location = getEventLocation(event);
@@ -962,7 +1016,8 @@ function initEventMap() {
         html: `<span class="event-map-pin${event.id === state.selectedEventId ? " active" : ""}" data-event-id="${event.id}"><span>${day}</span></span>`,
         iconSize: [44, 48],
         iconAnchor: [22, 44]
-      })
+      }),
+      bubblingMouseEvents: false
     }).addTo(eventMap);
     marker.on("click", () => selectEvent(event.id, { revealSheet: true }));
     eventMarkers.set(event.id, marker);
