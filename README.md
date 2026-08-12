@@ -4,14 +4,16 @@ A responsive Firebase web app for Florida Quantum Computing with a unified event
 
 - Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
 - Officers: live event check-in controls and an officer-specific profile workspace.
-- Administrators: member/officer role assignment from one protected account directory.
+- President and Treasurer: protected ordinary-officer promotion and removal from the Firebase-backed account directory.
 
 ## Authentication and access
 
 - Google and Apple use Firebase Authentication.
 - Members can register a device passkey and later sign in with Face ID, Touch ID, Windows Hello, or another WebAuthn authenticator.
-- New accounts start as members. Only administrators can assign the officer role.
-- The bootstrap administrator is promoted server-side on first sign-in; role claims and attendance writes are never trusted from the browser.
+- After social sign-in, a new account enters an eight-digit UFID once. The raw UFID is HMAC-hashed inside a Cloud Function and is never stored in the browser, Firestore, logs, or the website-readable spreadsheet.
+- The `Officer Access` tab in the events workbook contains only HMAC fingerprints, active flags, and officer titles. Firebase refreshes it on a five-minute cache cycle. A match receives the listed title; no match becomes a Member.
+- Any officer can recommend a member. Only the President and Treasurer can complete promotions or remove ordinary officers, and their own leadership roles are protected.
+- Role claims and attendance writes are enforced server-side and are never trusted from the browser.
 - Firestore security rules keep profiles private, passkey credentials server-only, and check-in mutations restricted to Cloud Functions.
 
 ## Event Data Workflow
@@ -44,5 +46,7 @@ The Firestore emulator requires Java 21 or newer.
 ## Deployment
 
 The production app deploys to Firebase Hosting with `npm run deploy`. The default Firebase project is `florida-quantum-computing`. Cloud Functions run on Node.js 22 in `us-central1`.
+
+The `OFFICER_UFID_PEPPER` Firebase Functions secret must match the local FQC keychain value used to generate spreadsheet fingerprints. Never commit or place that secret in Google Sheets.
 
 GitHub Pages retains a small redirect so existing links under `outswarming.github.io/FQC/` continue to reach the Firebase-hosted app.

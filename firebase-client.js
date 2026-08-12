@@ -34,6 +34,7 @@ let mockCheckInObserver = null;
 let mockProfile = null;
 let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true };
 let mockMembers = [];
+let mockUfidDirectory = new Map();
 let redirectResultChecked = false;
 
 if (!testMode) {
@@ -49,15 +50,20 @@ function callable(name) {
 }
 
 function normalizedProfile(profile = {}) {
+  const leadership = ["president", "vice_president", "treasurer"].includes(profile.leadership) ? profile.leadership : "";
   return {
     uid: String(profile.uid || ""),
     displayName: String(profile.displayName || "FQC Member"),
     email: String(profile.email || ""),
     photoURL: String(profile.photoURL || ""),
     role: profile.role === "officer" ? "officer" : "member",
-    isAdmin: profile.isAdmin === true,
+    leadership,
+    officerTitle: String(profile.officerTitle || ""),
+    canManageOfficers: profile.canManageOfficers === true || leadership === "president" || leadership === "treasurer",
+    ufidStatus: ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member",
     checkedInEvents: Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [],
-    passkeyCount: Number(profile.passkeyCount) || 0
+    passkeyCount: Number(profile.passkeyCount) || 0,
+    officerNomination: profile.officerNomination === "pending" ? "pending" : ""
   };
 }
 
@@ -75,7 +81,10 @@ function mockSignIn(profile = {}) {
     displayName: profile.displayName || "Alex",
     email: profile.email || "alex@ufl.edu",
     role: profile.role || "member",
-    isAdmin: profile.isAdmin === true,
+    leadership: profile.leadership || "",
+    officerTitle: profile.officerTitle || "",
+    canManageOfficers: profile.canManageOfficers === true,
+    ufidStatus: profile.ufidStatus || (profile.role === "officer" ? "matched" : "member"),
     checkedInEvents: profile.checkedInEvents || [],
     passkeyCount: profile.passkeyCount || 0
   });
@@ -88,7 +97,8 @@ if (testMode) {
     signInAs: mockSignIn,
     signOut: () => { mockProfile = null; emitMockSession(); },
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
-    setMembers: (members) => { mockMembers = members.map(normalizedProfile); }
+    setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
+    setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); }
   };
 }
 
@@ -140,12 +150,13 @@ async function socialSignIn(provider) {
     mockSignIn({
       uid: provider.providerId === "apple.com" ? "apple-user" : "google-user",
       displayName: provider.providerId === "apple.com" ? "Apple Member" : "Google Member",
-      email: provider.providerId === "apple.com" ? "apple@privaterelay.appleid.com" : "member@ufl.edu"
+      email: provider.providerId === "apple.com" ? "apple@privaterelay.appleid.com" : "member@ufl.edu",
+      ufidStatus: "required"
     });
     return;
   }
   const prefersRedirect = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    || globalThis.matchMedia?.("(max-width: 680px)").matches;
+    || globalThis.matchMedia?.("(max-width: 680px)")?.matches;
   if (prefersRedirect) {
     await signInWithRedirect(auth, provider);
     return;
@@ -212,6 +223,32 @@ export async function updateProfileName(displayName) {
   return normalizedProfile(result.data);
 }
 
+export async function verifyUfid(ufid) {
+  if (testMode) {
+    const match = mockUfidDirectory.get(String(ufid));
+    const officerTitle = String(match?.officerTitle || "");
+    const leadership = officerTitle.toLowerCase() === "president"
+      ? "president"
+      : officerTitle.toLowerCase() === "vice president"
+        ? "vice_president"
+        : officerTitle.toLowerCase() === "treasurer" ? "treasurer" : "";
+    mockProfile = normalizedProfile({
+      ...mockProfile,
+      role: match ? "officer" : "member",
+      officerTitle,
+      leadership,
+      canManageOfficers: leadership === "president" || leadership === "treasurer",
+      ufidStatus: match ? "matched" : "member"
+    });
+    mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
+    emitMockSession();
+    return mockProfile;
+  }
+  const result = await callable("claimUfidRole")({ ufid });
+  await auth.currentUser?.getIdToken(true);
+  return normalizedProfile(result.data);
+}
+
 export async function recordCheckIn() {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
@@ -241,10 +278,23 @@ export async function loadMembers() {
 
 export async function changeMemberRole(uid, role) {
   if (testMode) {
-    mockMembers = mockMembers.map((member) => member.uid === uid ? { ...member, role: role === "officer" ? "officer" : "member" } : member);
+    if (!mockProfile?.canManageOfficers) throw new Error("Only the President or Treasurer can change officer roles.");
+    mockMembers = mockMembers.map((member) => member.uid === uid
+      ? { ...member, role: role === "officer" ? "officer" : "member", officerNomination: "" }
+      : member);
     return mockMembers.find((member) => member.uid === uid);
   }
   const result = await callable("setMemberRole")({ uid, role });
+  return result.data;
+}
+
+export async function recommendOfficer(uid) {
+  if (testMode) {
+    if (mockProfile?.role !== "officer") throw new Error("Officer access is required.");
+    mockMembers = mockMembers.map((member) => member.uid === uid ? { ...member, officerNomination: "pending" } : member);
+    return { uid, officerNomination: "pending" };
+  }
+  const result = await callable("nominateOfficer")({ uid });
   return result.data;
 }
 

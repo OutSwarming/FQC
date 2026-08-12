@@ -11,15 +11,15 @@ service cloud.firestore {
     }
 
     function isOfficer() {
-      return signedIn() && (request.auth.token.role == 'officer' || request.auth.token.admin == true);
+      return signedIn() && request.auth.token.role == 'officer';
     }
 
-    function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+    function canManageOfficers() {
+      return signedIn() && request.auth.token.manageOfficers == true;
     }
 
     match /users/{uid} {
-      allow read: if isSelf(uid) || isAdmin();
+      allow read: if isSelf(uid) || canManageOfficers();
       allow create, update, delete: if false;
 
       match /passkeys/{passkeyId} {
@@ -42,6 +42,14 @@ service cloud.firestore {
     }
 
     match /passkeyChallenges/{challengeId} {
+      allow read, write: if false;
+    }
+
+    match /officerNominations/{uid} {
+      allow read, write: if false;
+    }
+
+    match /ufidClaimAttempts/{uid} {
       allow read, write: if false;
     }
 

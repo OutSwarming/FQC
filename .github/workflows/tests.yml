@@ -40,6 +40,9 @@ jobs:
       - name: Validate Cloud Functions
         run: node --check functions/index.js
 
+      - name: Test Cloud Functions role logic
+        run: npm run test:functions
+
       - name: Test Firestore rules
         run: npm run test:rules
 

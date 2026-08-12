@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { defineSecret } from "firebase-functions/params";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -18,7 +19,11 @@ const auth = getAuth();
 const region = "us-central1";
 const rpName = "Florida Quantum Computing";
 const challengeLifetimeMs = 5 * 60 * 1000;
-const bootstrapAdminEmails = new Set(["floridaquantumcomputingsociety@gmail.com"]);
+const officerRosterSpreadsheetId = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
+const officerRosterSheetName = "Officer Access";
+const officerRosterCacheMs = 5 * 60 * 1000;
+const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
+let officerRosterCache = { expiresAt: 0, entries: [] };
 const allowedOrigins = new Map([
   ["https://florida-quantum-computing.web.app", "florida-quantum-computing.web.app"],
   ["https://florida-quantum-computing.firebaseapp.com", "florida-quantum-computing.firebaseapp.com"],
@@ -31,6 +36,7 @@ const callableOptions = {
   cors: [...allowedOrigins.keys()],
   maxInstances: 10
 };
+const ufidCallableOptions = { ...callableOptions, secrets: [officerUfidPepper] };
 
 function requireAuth(request) {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Sign in is required.");
@@ -45,21 +51,127 @@ function profileRole(value) {
   return value === "officer" ? "officer" : "member";
 }
 
-function isBootstrapAdmin(token = {}) {
-  return bootstrapAdminEmails.has(String(token.email || "").toLowerCase());
+export function leadershipForRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  if (normalized === "president") return "president";
+  if (normalized === "vice president" || normalized === "vice-president" || normalized === "vp") return "vice_president";
+  if (normalized === "treasurer") return "treasurer";
+  return "";
 }
 
-function requireAdmin(request) {
+export function canManageOfficerRoles(token = {}) {
+  return token.manageOfficers === true || token.leadership === "president" || token.leadership === "treasurer";
+}
+
+export function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (character === "\n") {
+      row.push(cell.replace(/\r$/, ""));
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell.replace(/\r$/, ""));
+    rows.push(row);
+  }
+  return rows;
+}
+
+function rosterUrl() {
+  const sheet = encodeURIComponent(officerRosterSheetName);
+  return `https://docs.google.com/spreadsheets/d/${officerRosterSpreadsheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}`;
+}
+
+async function loadOfficerRoster() {
+  if (officerRosterCache.expiresAt > Date.now()) return officerRosterCache.entries;
+  const response = await fetch(rosterUrl(), { headers: { accept: "text/csv" } });
+  if (!response.ok) throw new HttpsError("unavailable", "The officer roster is temporarily unavailable.");
+  const csv = await response.text();
+  if (csv.length > 250_000) throw new HttpsError("data-loss", "The officer roster is unexpectedly large.");
+  const [headers = [], ...rows] = parseCsv(csv);
+  const headerIndex = Object.fromEntries(headers.map((header, index) => [header.trim().toLowerCase(), index]));
+  const entries = rows.map((row) => ({
+    name: cleanText(row[headerIndex["officer name"]], 80),
+    role: cleanText(row[headerIndex.role], 80),
+    fingerprint: cleanText(row[headerIndex["ufid fingerprint"]], 64).toLowerCase(),
+    active: /^(yes|true|1|active)$/i.test(cleanText(row[headerIndex.active], 12))
+  })).filter((entry) => entry.active && entry.role && /^[a-f0-9]{64}$/.test(entry.fingerprint));
+  officerRosterCache = { expiresAt: Date.now() + officerRosterCacheMs, entries };
+  return entries;
+}
+
+export function resolvedAccess(existing = {}, rosterEntry = null) {
+  const rosterLeadership = leadershipForRole(rosterEntry?.role);
+  if (rosterLeadership) {
+    return {
+      role: "officer",
+      leadership: rosterLeadership,
+      officerTitle: rosterEntry.role,
+      canManageOfficers: rosterLeadership === "president" || rosterLeadership === "treasurer"
+    };
+  }
+  if (existing.roleOverride === "officer") {
+    return { role: "officer", leadership: "", officerTitle: cleanText(existing.officerTitle || "Officer", 80), canManageOfficers: false };
+  }
+  if (existing.roleOverride === "member") {
+    return { role: "member", leadership: "", officerTitle: "", canManageOfficers: false };
+  }
+  if (rosterEntry) {
+    return { role: "officer", leadership: "", officerTitle: rosterEntry.role, canManageOfficers: false };
+  }
+  return { role: "member", leadership: "", officerTitle: "", canManageOfficers: false };
+}
+
+async function setAccessClaims(userRecord, access) {
+  const nextClaims = {
+    ...(userRecord.customClaims || {}),
+    role: access.role,
+    leadership: access.leadership,
+    manageOfficers: access.canManageOfficers,
+    admin: false
+  };
+  if (userRecord.customClaims?.role !== nextClaims.role
+    || userRecord.customClaims?.leadership !== nextClaims.leadership
+    || userRecord.customClaims?.manageOfficers !== nextClaims.manageOfficers
+    || userRecord.customClaims?.admin !== false) {
+    await auth.setCustomUserClaims(userRecord.uid, nextClaims);
+  }
+}
+
+function requireOfficerManager(request) {
   const caller = requireAuth(request);
-  if (caller.token.admin !== true && !isBootstrapAdmin(caller.token)) {
-    throw new HttpsError("permission-denied", "Administrator access is required.");
+  if (!canManageOfficerRoles(caller.token)) {
+    throw new HttpsError("permission-denied", "Only the President or Treasurer can change officer roles.");
   }
   return caller;
 }
 
 function requireOfficer(request) {
   const caller = requireAuth(request);
-  if (caller.token.role !== "officer" && caller.token.admin !== true && !isBootstrapAdmin(caller.token)) {
+  if (caller.token.role !== "officer" && !canManageOfficerRoles(caller.token)) {
     throw new HttpsError("permission-denied", "Officer access is required.");
   }
   return caller;
@@ -79,24 +191,30 @@ function publicProfile(uid, data = {}) {
     email: cleanText(data.email, 180),
     photoURL: cleanText(data.photoURL, 500),
     role: profileRole(data.role),
-    isAdmin: data.isAdmin === true,
+    leadership: ["president", "vice_president", "treasurer"].includes(data.leadership) ? data.leadership : "",
+    officerTitle: cleanText(data.officerTitle, 80),
+    canManageOfficers: data.canManageOfficers === true,
+    ufidStatus: !data.ufidFingerprint ? "required" : data.ufidMatched === true ? "matched" : "member",
     checkedInEvents: Array.isArray(data.checkedInEvents) ? data.checkedInEvents.slice(0, 250) : [],
-    passkeyCount: Number(data.passkeyCount) || 0
+    passkeyCount: Number(data.passkeyCount) || 0,
+    officerNomination: data.officerNomination === "pending" ? "pending" : ""
   };
 }
 
 async function ensureProfileForUser(userRecord) {
   const userRef = db.collection("users").doc(userRecord.uid);
-  const admin = bootstrapAdminEmails.has(String(userRecord.email || "").toLowerCase());
   const snapshot = await userRef.get();
   const existing = snapshot.exists ? snapshot.data() : {};
-  const role = admin ? "officer" : profileRole(existing.role);
+  const roster = existing.ufidFingerprint ? await loadOfficerRoster() : [];
+  const rosterEntry = roster.find((entry) => entry.fingerprint === existing.ufidFingerprint) || null;
+  const access = resolvedAccess(existing, rosterEntry);
   const data = {
     displayName: cleanText(existing.displayName || userRecord.displayName || userRecord.email?.split("@")[0] || "FQC Member", 80),
     email: cleanText(userRecord.email, 180),
     photoURL: cleanText(userRecord.photoURL, 500),
-    role,
-    isAdmin: admin || existing.isAdmin === true,
+    ...access,
+    ufidFingerprint: existing.ufidFingerprint || "",
+    ufidMatched: Boolean(rosterEntry),
     checkedInEvents: Array.isArray(existing.checkedInEvents) ? existing.checkedInEvents : [],
     passkeyCount: Number(existing.passkeyCount) || 0,
     createdAt: existing.createdAt || FieldValue.serverTimestamp(),
@@ -104,10 +222,7 @@ async function ensureProfileForUser(userRecord) {
   };
 
   await userRef.set(data, { merge: true });
-  const nextClaims = { ...(userRecord.customClaims || {}), role: data.role, admin: data.isAdmin };
-  if (userRecord.customClaims?.role !== nextClaims.role || userRecord.customClaims?.admin !== nextClaims.admin) {
-    await auth.setCustomUserClaims(userRecord.uid, nextClaims);
-  }
+  await setAccessClaims(userRecord, access);
   return publicProfile(userRecord.uid, data);
 }
 
@@ -115,6 +230,44 @@ export const ensureUserProfile = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
   const userRecord = await auth.getUser(caller.uid);
   return ensureProfileForUser(userRecord);
+});
+
+export const claimUfidRole = onCall(ufidCallableOptions, async (request) => {
+  const caller = requireAuth(request);
+  const ufid = String(request.data?.ufid || "").trim();
+  if (!/^\d{8}$/.test(ufid)) throw new HttpsError("invalid-argument", "Enter an eight-digit UFID.");
+  const attemptRef = db.collection("ufidClaimAttempts").doc(caller.uid);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(attemptRef);
+    const attempt = snapshot.data() || {};
+    const windowStartedAt = attempt.windowStartedAt?.toMillis?.() || 0;
+    const withinWindow = Date.now() - windowStartedAt < 15 * 60 * 1000;
+    const count = withinWindow ? Number(attempt.count) || 0 : 0;
+    if (count >= 5) throw new HttpsError("resource-exhausted", "Too many UFID attempts. Try again in 15 minutes.");
+    transaction.set(attemptRef, {
+      count: count + 1,
+      windowStartedAt: withinWindow ? attempt.windowStartedAt : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+  });
+
+  const fingerprint = createHmac("sha256", officerUfidPepper.value()).update(ufid, "utf8").digest("hex");
+  const roster = await loadOfficerRoster();
+  const rosterEntry = roster.find((entry) => entry.fingerprint === fingerprint) || null;
+  const userRecord = await auth.getUser(caller.uid);
+  const userRef = db.collection("users").doc(caller.uid);
+  const snapshot = await userRef.get();
+  const existing = snapshot.data() || {};
+  const access = resolvedAccess(existing, rosterEntry);
+  const data = {
+    ...access,
+    ufidFingerprint: fingerprint,
+    ufidMatched: Boolean(rosterEntry),
+    ufidVerifiedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  };
+  await Promise.all([userRef.set(data, { merge: true }), setAccessClaims(userRecord, access)]);
+  return publicProfile(caller.uid, { ...existing, ...data });
 });
 
 export const updateUserProfile = onCall(callableOptions, async (request) => {
@@ -130,25 +283,76 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
 });
 
 export const listMembers = onCall(callableOptions, async (request) => {
-  requireAdmin(request);
-  const snapshot = await db.collection("users").orderBy("displayName").limit(250).get();
-  return { members: snapshot.docs.map((doc) => publicProfile(doc.id, doc.data())) };
+  requireOfficer(request);
+  const [snapshot, nominations] = await Promise.all([
+    db.collection("users").orderBy("displayName").limit(250).get(),
+    db.collection("officerNominations").where("status", "==", "pending").limit(250).get()
+  ]);
+  const nominated = new Set(nominations.docs.map((doc) => doc.id));
+  return {
+    members: snapshot.docs.map((doc) => publicProfile(doc.id, {
+      ...doc.data(),
+      officerNomination: nominated.has(doc.id) ? "pending" : ""
+    }))
+  };
 });
 
 export const setMemberRole = onCall(callableOptions, async (request) => {
-  requireAdmin(request);
+  const caller = requireOfficerManager(request);
   const uid = cleanText(request.data?.uid, 160);
   const role = profileRole(request.data?.role);
   if (!uid) throw new HttpsError("invalid-argument", "Choose a member.");
-  const targetUser = await auth.getUser(uid);
-  const targetIsAdmin = bootstrapAdminEmails.has(String(targetUser.email || "").toLowerCase());
-  const finalRole = targetIsAdmin ? "officer" : role;
-  const claims = { ...(targetUser.customClaims || {}), role: finalRole, admin: targetIsAdmin };
-  await Promise.all([
-    auth.setCustomUserClaims(uid, claims),
-    db.collection("users").doc(uid).set({ role: finalRole, isAdmin: targetIsAdmin, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+  const [targetUser, targetSnapshot] = await Promise.all([
+    auth.getUser(uid),
+    db.collection("users").doc(uid).get()
   ]);
-  return { uid, role: finalRole, isAdmin: targetIsAdmin };
+  const targetData = targetSnapshot.data() || {};
+  if (targetData.leadership || targetUser.customClaims?.leadership) {
+    throw new HttpsError("failed-precondition", "President and Treasurer roles are protected.");
+  }
+  const claims = {
+    ...(targetUser.customClaims || {}),
+    role,
+    leadership: "",
+    manageOfficers: false,
+    admin: false
+  };
+  const batch = db.batch();
+  batch.set(db.collection("users").doc(uid), {
+    role,
+    leadership: "",
+    officerTitle: role === "officer" ? "Officer" : "",
+    canManageOfficers: false,
+    roleOverride: role,
+    roleUpdatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  }, { merge: true });
+  batch.delete(db.collection("officerNominations").doc(uid));
+  await Promise.all([auth.setCustomUserClaims(uid, claims), batch.commit()]);
+  return { uid, role, leadership: "", canManageOfficers: false };
+});
+
+export const nominateOfficer = onCall(callableOptions, async (request) => {
+  const caller = requireOfficer(request);
+  const uid = cleanText(request.data?.uid, 160);
+  if (!uid || uid === caller.uid) throw new HttpsError("invalid-argument", "Choose another member.");
+  const [targetUser, targetProfile, callerProfile] = await Promise.all([
+    auth.getUser(uid),
+    db.collection("users").doc(uid).get(),
+    db.collection("users").doc(caller.uid).get()
+  ]);
+  if (targetProfile.data()?.leadership || profileRole(targetProfile.data()?.role) === "officer") {
+    throw new HttpsError("failed-precondition", "That account is already an officer.");
+  }
+  await db.collection("officerNominations").doc(uid).set({
+    uid,
+    status: "pending",
+    nominatedBy: caller.uid,
+    nominatedByName: cleanText(callerProfile.data()?.displayName || caller.token.name || caller.token.email, 80),
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  }, { merge: true });
+  return { uid, officerNomination: "pending" };
 });
 
 export const setActiveCheckIn = onCall(callableOptions, async (request) => {

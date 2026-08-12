@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
+const finishMemberSetup = async (page, ufid = "00000000") => {
+  await expect(page.getByRole("heading", { name: "Enter your UFID" })).toBeVisible();
+  await page.getByLabel("Eight-digit UFID").fill(ufid);
+  await page.getByRole("button", { name: "Create Member Account" }).click();
+};
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
 "GBM 2","2026-03-10","6:00 PM","Malachowsky Hall","1142","A community meeting to connect students interested in quantum computing, share semester progress, and explain ways to get involved. Pizza was served.","Yes","fqc-2026-03-10-gbm-2","https://www.linkedin.com/company/florida-quantum-computing-society"
@@ -295,12 +300,13 @@ test("switches between light and dark themes and remembers the choice", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
-test("one login assigns an officer role and exposes admin controls in Profile", async ({ page }) => {
+test("an officer login exposes officer controls in Profile", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
-  await expect(page.getByText("Officer", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+  await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Officer metrics").getByText("$1,840")).toBeVisible();
 
   await page.getByLabel("Area").selectOption("Permits");
@@ -319,6 +325,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
   await page.getByRole("button", { name: "Open Profile Login" }).click();
   await page.getByRole("button", { name: "Continue with Google" }).click();
+  await finishMemberSetup(page);
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
 
@@ -335,26 +342,63 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await expect(page.locator("#profile-initial")).toHaveText("A");
 });
 
-test("an administrator can assign member and officer roles", async ({ page }) => {
+test("a current officer can recommend a member but cannot directly change roles", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.setMembers([
-      { uid: "admin-1", displayName: "Carter", email: "admin@ufl.edu", role: "officer", isAdmin: true },
+      { uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" },
       { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
     ]);
-    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "admin-1", displayName: "Carter", email: "admin@ufl.edu", role: "officer", isAdmin: true });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" });
   });
 
-  await expect(page.getByRole("heading", { name: "Member Roles" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+  const row = page.locator('[data-member-id="member-1"]');
+  await expect(row.locator("select")).toHaveCount(0);
+  await row.getByRole("button", { name: "Recommend officer" }).click();
+  await expect(row.getByRole("button", { name: "Recommended" })).toBeDisabled();
+});
+
+test("the Treasurer can add and remove ordinary officers while leadership stays protected", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "president-1", displayName: "Alex", email: "alex@ufl.edu", role: "officer", leadership: "president", officerTitle: "President" },
+      { uid: "vp-1", displayName: "Taylor", email: "taylor@ufl.edu", role: "officer", leadership: "vice_president", officerTitle: "Vice President" },
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
+  const president = page.locator('[data-member-id="president-1"]');
+  await expect(president.locator("select")).toBeDisabled();
+  await expect(president.getByRole("button", { name: "Save role" })).toBeDisabled();
+  const vicePresident = page.locator('[data-member-id="vp-1"]');
+  await expect(vicePresident.locator("select")).toBeDisabled();
+  await expect(vicePresident.getByRole("button", { name: "Save role" })).toBeDisabled();
   const row = page.locator('[data-member-id="member-1"]');
   await row.locator("select").selectOption("officer");
   await row.getByRole("button", { name: "Save role" }).click();
   await expect(row.locator("select")).toHaveValue("officer");
 });
 
+test("a matching UFID assigns the spreadsheet officer title during account creation", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUfidDirectory({
+    "12345678": { officerTitle: "President" }
+  }));
+  await page.getByRole("button", { name: "Continue with Google" }).click();
+  await finishMemberSetup(page, "12345678");
+  await expect(page.getByText("President", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
+});
+
 test("a signed-in member can add a device passkey", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Continue with Google" }).click();
+  await finishMemberSetup(page);
   await expect(page.getByText("0 passkeys")).toBeVisible();
   await page.getByRole("button", { name: "Set Up Face ID / Touch ID" }).click();
   await expect(page.getByText("1 passkey", { exact: true })).toBeVisible();
@@ -364,6 +408,7 @@ test("a signed-in member can add a device passkey", async ({ page }) => {
 test("nukes local app data and reloads a fresh events home", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Continue with Google" }).click();
+  await finishMemberSetup(page);
   await expect(page.getByRole("heading", { name: "Google Member", level: 2 })).toBeVisible();
 
   const reload = page.waitForEvent("framenavigated");

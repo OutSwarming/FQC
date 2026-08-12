@@ -44,11 +44,12 @@ test("clients cannot change role fields directly", async () => {
   await assertFails(setDoc(doc(database, "users", "member-1"), { role: "officer" }, { merge: true }));
 });
 
-test("admins can read member profiles but passkey records stay server-only", async () => {
-  const database = testEnvironment.authenticatedContext("admin-1", { role: "officer", admin: true }).firestore();
+test("President and Treasurer claims can read member profiles but secrets stay server-only", async () => {
+  const database = testEnvironment.authenticatedContext("treasurer-1", { role: "officer", leadership: "treasurer", manageOfficers: true }).firestore();
   const profile = await assertSucceeds(getDoc(doc(database, "users", "member-2")));
   assert.equal(profile.data().displayName, "Other Member");
   await assertFails(getDoc(doc(database, "passkeyCredentials", "credential-1")));
+  await assertFails(getDoc(doc(database, "ufidClaimAttempts", "member-1")));
 });
 
 test("check-in state is public while mutations remain server-only", async () => {

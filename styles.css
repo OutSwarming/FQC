@@ -1016,6 +1016,17 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
   font-weight: 900;
 }
 
+.ufid-onboarding {
+  max-width: 680px;
+  margin: clamp(1rem, 7vh, 4.5rem) auto;
+}
+
+.ufid-card #member-ufid {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3em;
+  font-size: 1.08rem;
+}
+
 .member-roster { display: grid; gap: 10px; }
 
 .member-role-row {

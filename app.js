@@ -7,6 +7,7 @@ import {
   observeCheckIn,
   observeSession,
   readableAuthError,
+  recommendOfficer,
   recordCheckIn,
   registerPasskey,
   signInWithApple,
@@ -14,7 +15,8 @@ import {
   signInWithPasskey,
   supportsPasskeys,
   updateActiveCheckIn,
-  updateProfileName
+  updateProfileName,
+  verifyUfid
 } from "./firebase-client.js";
 
 const allowedViews = new Set(["home", "checkin", "profile"]);
@@ -67,7 +69,10 @@ const state = {
   authMessage: "",
   authUser: null,
   memberRole: "member",
-  isAdmin: false,
+  leadership: "",
+  officerTitle: "",
+  canManageOfficers: false,
+  ufidStatus: "",
   passkeyCount: 0,
   members: [],
   membersLoading: false,
@@ -1182,7 +1187,15 @@ function renderMetrics(metrics) {
 }
 
 function roleLabel() {
-  return state.memberRole === "officer" ? "Officer" : "Member";
+  if (state.leadership === "president") return "President";
+  if (state.leadership === "treasurer") return "Treasurer";
+  return state.memberRole === "officer" ? state.officerTitle || "Officer" : "Member";
+}
+
+function profileRoleLabel(profile) {
+  if (profile.leadership === "president") return "President";
+  if (profile.leadership === "treasurer") return "Treasurer";
+  return profile.role === "officer" ? profile.officerTitle || "Officer" : "Member";
 }
 
 function applyMemberProfile(profile) {
@@ -1190,7 +1203,10 @@ function applyMemberProfile(profile) {
   state.memberEmail = profile.email || "";
   state.memberPhotoURL = profile.photoURL || "";
   state.memberRole = profile.role === "officer" ? "officer" : "member";
-  state.isAdmin = profile.isAdmin === true;
+  state.leadership = ["president", "vice_president", "treasurer"].includes(profile.leadership) ? profile.leadership : "";
+  state.officerTitle = profile.officerTitle || "";
+  state.canManageOfficers = profile.canManageOfficers === true;
+  state.ufidStatus = ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member";
   state.passkeyCount = Number(profile.passkeyCount) || 0;
   state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
   localStorage.setItem("fqc:name", state.memberName);
@@ -1215,7 +1231,7 @@ async function runAuthAction(action, successMessage = "") {
 }
 
 async function refreshMemberDirectory() {
-  if (!state.isAdmin) return;
+  if (state.memberRole !== "officer") return;
   state.membersLoading = true;
   render();
   try {
@@ -1266,6 +1282,20 @@ function renderCheckIn() {
     `;
   }
 
+  if (state.ufidStatus === "required") {
+    return `
+      <section class="view" data-screen="checkin">
+        <section class="section checkin-gate">
+          <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
+          <p class="section-kicker">One-time account setup</p>
+          <h2>Verify your UFID first</h2>
+          <p>Finish your secure profile before checking in to an event.</p>
+          <button class="primary-button" id="go-to-login" type="button">Finish Account Setup</button>
+        </section>
+      </section>
+    `;
+  }
+
   const event = getEvent(state.activeCheckInEventId);
   const location = getEventLocation(event);
   const checkedIn = state.checkedInEvents.includes(event.id);
@@ -1293,7 +1323,7 @@ function renderCheckIn() {
       </section>
       <section class="section identity-card">
         <span class="role-badge ${state.memberRole}">${roleLabel()}</span>
-        <div><strong>${escapeHtml(state.memberName)}</strong><p>${state.isAdmin ? "Administrator · " : ""}Signed in and ready for attendance.</p></div>
+        <div><strong>${escapeHtml(state.memberName)}</strong><p>${escapeHtml(roleLabel())} · Signed in and ready for attendance.</p></div>
       </section>
     </section>
   `;
@@ -1331,12 +1361,18 @@ function renderOfficerWorkspace() {
   `;
 }
 
-function renderAdminWorkspace() {
-  if (!state.isAdmin) return "";
+function renderRoleWorkspace() {
+  if (state.memberRole !== "officer") return "";
   return `
     <section class="section admin-roster">
       <div class="section-header">
-        <div><p class="section-kicker">Administrator</p><h2>Member Roles</h2><p>Choose whether each signed-in FQC account is a Member or Officer.</p></div>
+        <div>
+          <p class="section-kicker">${state.canManageOfficers ? "President & Treasurer" : "Current officers"}</p>
+          <h2>${state.canManageOfficers ? "Officer Management" : "Officer Recommendations"}</h2>
+          <p>${state.canManageOfficers
+            ? "Promote members or remove ordinary officers. President and Treasurer accounts are protected."
+            : "Recommend a signed-in member for officer access. The President or Treasurer completes every role change."}</p>
+        </div>
         <button class="secondary-button" id="refresh-members" type="button" ${state.membersLoading ? "disabled" : ""}>${state.membersLoading ? "Loading…" : "Refresh"}</button>
       </div>
       <div class="member-roster" aria-live="polite">
@@ -1344,16 +1380,20 @@ function renderAdminWorkspace() {
           <article class="member-role-row" data-member-id="${escapeHtml(member.uid)}">
             <div class="member-identity">
               <strong>${escapeHtml(member.displayName)}</strong>
-              <span>${escapeHtml(member.email || "No shared email")}${member.isAdmin ? " · Administrator" : ""}</span>
+              <span>${escapeHtml(member.email || "No shared email")} · ${escapeHtml(profileRoleLabel(member))}${member.officerNomination === "pending" ? " · Recommendation pending" : ""}</span>
             </div>
-            <label>
-              <span class="sr-only">Role for ${escapeHtml(member.displayName)}</span>
-              <select data-member-role="${escapeHtml(member.uid)}" ${member.isAdmin ? "disabled" : ""}>
-                <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
-                <option value="officer" ${member.role === "officer" ? "selected" : ""}>Officer</option>
-              </select>
-            </label>
-            <button class="secondary-button" data-save-member-role="${escapeHtml(member.uid)}" type="button" ${member.isAdmin ? "disabled" : ""}>Save role</button>
+            ${state.canManageOfficers ? `
+              <label>
+                <span class="sr-only">Role for ${escapeHtml(member.displayName)}</span>
+                <select data-member-role="${escapeHtml(member.uid)}" ${member.leadership ? "disabled" : ""}>
+                  <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
+                  <option value="officer" ${member.role === "officer" ? "selected" : ""}>Officer</option>
+                </select>
+              </label>
+              <button class="secondary-button" data-save-member-role="${escapeHtml(member.uid)}" type="button" ${member.leadership ? "disabled" : ""}>Save role</button>
+            ` : member.role === "member" ? `
+              <button class="secondary-button" data-recommend-officer="${escapeHtml(member.uid)}" type="button" ${member.officerNomination === "pending" ? "disabled" : ""}>${member.officerNomination === "pending" ? "Recommended" : "Recommend officer"}</button>
+            ` : '<span class="role-badge officer">Officer</span>'}
           </article>
         `).join("") : '<p class="empty-state">No FQC accounts have signed in yet.</p>'}
       </div>
@@ -1371,6 +1411,29 @@ function renderNotes() {
   `).join("");
 }
 
+function renderUfidForm(onboarding = false) {
+  return `
+    <section class="section ufid-card${onboarding ? " ufid-onboarding" : ""}">
+      <div class="section-header">
+        <div>
+          <p class="section-kicker">${onboarding ? "One-time account setup" : "Secure role verification"}</p>
+          <h2>${onboarding ? "Enter your UFID" : "Verify a different UFID"}</h2>
+          <p>Firebase compares a protected fingerprint with the officer roster. The eight-digit UFID is never saved or sent back to the browser.</p>
+        </div>
+        ${onboarding ? `<button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button>` : ""}
+      </div>
+      <div class="form-row">
+        <label for="member-ufid">Eight-digit UFID</label>
+        <input id="member-ufid" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="••••••••" />
+      </div>
+      <button class="primary-button" id="verify-ufid" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>${onboarding ? "Create Member Account" : "Check UFID Role"}</span></button>
+      ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Checking the secure officer roster…</p>' : ""}
+      ${onboarding ? renderAuthFeedback() : ""}
+      <p class="auth-privacy">A matching active roster entry receives its listed role, including President, Treasurer, Vice President, or another officer title. No match creates a normal Member account.</p>
+    </section>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
@@ -1382,7 +1445,7 @@ function renderProfile() {
             <div>
               <p class="section-kicker">One secure FQC account</p>
               <h2>Sign in to FQC</h2>
-              <p>Use Google, Apple, or your device passkey. Officers are assigned by an FQC administrator after sign-in.</p>
+              <p>Sign in normally with Google, Apple, or a device passkey. New accounts begin as members.</p>
             </div>
           </div>
           <div class="auth-provider-list">
@@ -1404,13 +1467,17 @@ function renderProfile() {
     `;
   }
 
+  if (state.ufidStatus === "required") {
+    return `<section class="view" data-screen="profile">${renderUfidForm(true)}</section>`;
+  }
+
   const points = 730 + state.rsvps.length * 50;
   return `
     <section class="view" data-screen="profile">
       <section class="section">
         <div class="profile-summary">
           <div class="avatar">${profileInitial.textContent}</div>
-          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${state.isAdmin ? "Administrator · " : ""}${state.memberRole === "officer" ? "FQC officer workspace" : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
+          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${state.memberRole === "officer" ? `${escapeHtml(roleLabel())} workspace` : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
         </div>
       </section>
       <section class="section">
@@ -1423,6 +1490,7 @@ function renderProfile() {
         <div class="section-header"><div><p class="section-kicker">Passwordless security</p><h2>Passkeys</h2><p>Use Face ID, Touch ID, your screen lock, or a hardware security key next time.</p></div><span class="passkey-count">${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</span></div>
         <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
       </section>
+      ${renderUfidForm(false)}
       ${state.memberRole === "officer" ? renderOfficerWorkspace() : `
         <section class="section">
           <h2>Member Activity</h2>
@@ -1433,7 +1501,7 @@ function renderProfile() {
           <div class="leaderboard">${leaders.map(([name, badge, score], index) => `<article class="leader-card"><span class="leader-rank">${index + 1}</span><div><h3>${name}</h3><p>${badge}</p></div><strong>${score}</strong></article>`).join("")}</div>
         </section>
       `}
-      ${renderAdminWorkspace()}
+      ${renderRoleWorkspace()}
       <section class="section">
         <h2>Fix and Troubleshooting</h2><p>Sign out, reset local app data, clear the offline cache, and reload a fresh copy. Your Firebase account and attendance remain safe.</p>
         <button class="danger-button" id="nuke-reload" type="button"><svg><use href="#icon-plus"></use></svg><span>Nuke and Reload</span></button>
@@ -1459,6 +1527,23 @@ function bindViewEvents() {
   document.querySelector("#sign-in-apple")?.addEventListener("click", () => runAuthAction(signInWithApple));
   document.querySelector("#sign-in-passkey")?.addEventListener("click", () => runAuthAction(signInWithPasskey));
   document.querySelector("#profile-logout")?.addEventListener("click", () => runAuthAction(logOut));
+  document.querySelector("#verify-ufid")?.addEventListener("click", async () => {
+    const input = document.querySelector("#member-ufid");
+    const ufid = input?.value.trim() || "";
+    if (!/^\d{8}$/.test(ufid)) {
+      state.authError = "Enter an eight-digit UFID.";
+      render();
+      return;
+    }
+    const profile = await runAuthAction(() => verifyUfid(ufid), "UFID checked securely. Your account role is updated.");
+    if (profile) {
+      if (input) input.value = "";
+      applyMemberProfile(profile);
+      state.members = [];
+      render();
+      if (state.memberRole === "officer") queueMicrotask(refreshMemberDirectory);
+    }
+  });
   document.querySelector("#register-passkey")?.addEventListener("click", async () => {
     const profile = await runAuthAction(registerPasskey, "Passkey added. You can now use Face ID, Touch ID, or your device lock to sign in.");
     if (profile) {
@@ -1519,6 +1604,13 @@ function bindViewEvents() {
       if (updated) await refreshMemberDirectory();
     });
   });
+  document.querySelectorAll("[data-recommend-officer]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const uid = button.dataset.recommendOfficer;
+      const recommended = await runAuthAction(() => recommendOfficer(uid), "Officer recommendation sent to the President and Treasurer.");
+      if (recommended) await refreshMemberDirectory();
+    });
+  });
 
   document.querySelector("#nuke-reload")?.addEventListener("click", nukeAndReload);
 }
@@ -1554,14 +1646,17 @@ observeSession((session) => {
     state.memberEmail = "";
     state.memberPhotoURL = "";
     state.memberRole = "member";
-    state.isAdmin = false;
+    state.leadership = "";
+    state.officerTitle = "";
+    state.canManageOfficers = false;
+    state.ufidStatus = "";
     state.passkeyCount = 0;
     state.checkedInEvents = [];
     state.members = [];
     localStorage.removeItem("fqc:name");
   }
   render();
-  if (state.isAdmin && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
+  if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
 }, (error) => {
   state.authReady = true;
   state.authError = readableAuthError(error);
