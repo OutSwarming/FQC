@@ -1,9 +1,21 @@
 # Florida Quantum Computing App
 
-A responsive web app prototype for Florida Quantum Computing. It is designed for GitHub Pages hosting and focuses on two audiences:
+A responsive Firebase web app for Florida Quantum Computing with a unified events experience and secure member accounts:
 
 - Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
-- Officers: attendance, budget, permits, rooms, advertising, socials, and quick planning records.
+- Settings: explicit update checking, an in-app version history, and a destructive device reset hidden under Advanced settings.
+- Officers: live event check-in controls and an officer-specific profile workspace.
+- President and Treasurer: protected ordinary-officer promotion and removal from the Firebase-backed account directory.
+
+## Authentication and access
+
+- Email/password, Google, and Apple use Firebase Authentication. The login screen has separate Log In and Create Account tabs plus password reset.
+- Members can register a device passkey and later sign in with Face ID, Touch ID, Windows Hello, or another WebAuthn authenticator.
+- Email accounts enter an eight-digit UFID during account creation; new social accounts enter it immediately afterward. The raw UFID is HMAC-hashed inside a Cloud Function and is never stored in the browser, Firestore, logs, or the website-readable spreadsheet.
+- The `Officer Access` tab in the events workbook contains only HMAC fingerprints, active flags, and officer titles. Firebase refreshes it on a five-minute cache cycle. A match receives the listed title; no match becomes a Member.
+- Any officer can recommend a member. Only the President and Treasurer can complete promotions or remove ordinary officers, and their own leadership roles are protected.
+- Role claims and attendance writes are enforced server-side and are never trusted from the browser.
+- Firestore security rules keep profiles private, passkey credentials server-only, and check-in mutations restricted to Cloud Functions.
 
 ## Event Data Workflow
 
@@ -15,34 +27,11 @@ The public event explorer reads from the organization-owned native Google Sheet 
 - The app refreshes the Sheet when it opens, when the tab becomes active, and every five minutes while online.
 - A last-good local copy and a bundled copy of the verified Spring 2026 schedule keep the UI usable if Google Sheets is unavailable.
 
-## Milestone Plan
-
-1. Static app foundation
-   - Mobile app shell with bottom navigation.
-   - GitHub Pages-compatible file structure.
-   - Project roadmap and deployment notes.
-
-2. Member experience
-   - Unified Events home with list and calendar tabs.
-   - Leaflet map synchronized with event selection.
-   - Responsive event detail card with directions and RSVP actions.
-   - Persistent light and dark themes.
-   - Profile and leaderboard preview.
-
-3. Officer portal
-   - Officer mode sign-in prototype.
-   - Budget, attendance, permits, rooms, advertising, and socials cards.
-   - Local demo data persistence.
-
-4. Testing and deployment
-   - Playwright smoke tests.
-   - GitHub Pages workflow.
-   - Repository published under `OutSwarming`.
-
 ## Local Development
 
 ```bash
 npm install
+npm install --prefix functions
 npm run dev
 ```
 
@@ -50,10 +39,15 @@ npm run dev
 
 ```bash
 npm test
+npm run test:rules
 ```
 
-## GitHub Pages
+The Firestore emulator requires Java 21 or newer.
 
-This repo includes `.github/workflows/pages.yml`, which publishes the static site whenever `main` is pushed.
+## Deployment
 
-In GitHub, set Pages source to `GitHub Actions` if it is not already selected.
+The production app deploys to Firebase Hosting with `npm run deploy`. The default Firebase project is `florida-quantum-computing`. Cloud Functions run on Node.js 22 in `us-central1`.
+
+The `OFFICER_UFID_PEPPER` Firebase Functions secret must match the local FQC keychain value used to generate spreadsheet fingerprints. Never commit or place that secret in Google Sheets.
+
+GitHub Pages retains a small redirect so existing links under `outswarming.github.io/FQC/` continue to reach the Firebase-hosted app.

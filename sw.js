@@ -1,19 +1,8 @@
-const CACHE_NAME = "fqc-app-v16-identity-checkin";
+const CACHE_NAME = "fqc-app-v19-settings-history";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./manifest.webmanifest",
-  "./vendor/leaflet/leaflet.css",
-  "./vendor/leaflet/leaflet.js",
-  "./vendor/leaflet/images/layers-2x.png",
-  "./vendor/leaflet/images/layers.png",
-  "./vendor/leaflet/images/marker-icon-2x.png",
-  "./vendor/leaflet/images/marker-icon.png",
-  "./vendor/leaflet/images/marker-shadow.png",
-  "./assets/fqc-badge.png",
-  "./assets/fqc-wordmark.jpg"
+  "./manifest.webmanifest"
 ];
 
 self.addEventListener("install", (event) => {

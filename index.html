@@ -7,7 +7,6 @@
     <title>Florida Quantum Computing</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./assets/fqc-wordmark.jpg" type="image/jpeg" />
-    <link rel="stylesheet" href="./vendor/leaflet/leaflet.css?v=event-sheet-1" />
     <link rel="stylesheet" href="./styles.css?v=event-sheet-1" />
     <script>
       try {
@@ -39,6 +38,10 @@
       </symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24">
         <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.55 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.55a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.45 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.16.37.37.7.6 1 .3.28.68.42 1.1.4h.1v4h-.1A1.7 1.7 0 0 0 19.4 15Z" />
       </symbol>
       <symbol id="icon-sun" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="4" />
@@ -72,6 +75,9 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <button class="theme-toggle settings-toggle" id="settings-toggle" type="button" aria-label="Open settings">
+            <svg><use href="#icon-settings"></use></svg>
+          </button>
           <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Use dark theme">
             <svg class="sun-icon"><use href="#icon-sun"></use></svg>
             <svg class="moon-icon"><use href="#icon-moon"></use></svg>
@@ -107,7 +113,6 @@
       </article>
     </template>
 
-    <script src="./vendor/leaflet/leaflet.js?v=identity-checkin-1"></script>
-    <script src="./app.js?v=identity-checkin-1" type="module"></script>
+    <script src="./app.js?v=firebase-auth-1" type="module"></script>
   </body>
 </html>
