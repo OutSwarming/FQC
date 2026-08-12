@@ -195,14 +195,32 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
   await expect(intro.getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+
+  await page.locator("#event-map").click({ position: { x: 190, y: 180 } });
+  await expect(planner).toHaveAttribute("data-sheet-mode", "closed");
+  await expect(planner).toHaveCSS("height", "0px");
+  await page.locator('.event-map-pin[data-event-id="fqc-2026-04-14-gbm-3"]').click();
+  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect(intro.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
 });
 
 test("calendar tab selects an event and preserves it across reloads", async ({ page }, testInfo) => {
   await page.getByRole("tab", { name: "Calendar" }).click();
   await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");
 
+  await expect(page.locator(".calendar-day")).toHaveCount(42);
+  await expect(page.locator(".calendar-day.outside").first()).toBeVisible();
+  await expect(page.locator(".calendar-day-label")).toHaveCount(4);
+  await expect(page.locator(".calendar-agenda-event")).toHaveCount(4);
+  await expect(page.getByRole("button", { name: "Previous month" })).toBeDisabled();
+  if (testInfo.project.name === "mobile") {
+    await expect(page.locator("#event-planner")).toHaveAttribute("data-sheet-mode", "high");
+  }
+
   await page.getByRole("button", { name: "Next month" }).click();
   await expect(page.getByText("April 2026")).toBeVisible();
+  await expect(page.locator(".calendar-agenda-event")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "Next month" })).toBeDisabled();
   await page.locator('.calendar-day[data-select-event="fqc-2026-04-21-social"]').click();
   await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
 
