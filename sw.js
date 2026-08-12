@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v20-event-logistics";
+const CACHE_NAME = "fqc-app-v21-google-auth";
 const ASSETS = [
   "./",
   "./index.html",

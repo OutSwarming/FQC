@@ -22,9 +22,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.0.1";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.0.1", "Repaired Google sign-in with the registered Firebase OAuth callback"],
   ["2.0.0", "Live 2026 Event Logistics schedule and secure leader roster integration"],
   ["1.9.0", "App settings, update recovery, version history, and safer cache refreshes"],
   ["1.8.0", "Email/password login, password reset, and UFID account setup"],
