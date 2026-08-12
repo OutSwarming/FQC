@@ -22,9 +22,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "1.9.0";
+const APP_VERSION = "2.0.0";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.0.0", "Live 2026 Event Logistics schedule and secure leader roster integration"],
   ["1.9.0", "App settings, update recovery, version history, and safer cache refreshes"],
   ["1.8.0", "Email/password login, password reset, and UFID account setup"],
   ["1.7.0", "Firebase Functions, secure officer roles, Google and passkey authentication"],
@@ -33,10 +34,10 @@ const RELEASE_HISTORY = [
 ];
 const allowedViews = new Set(["home", "checkin", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-const EVENT_SHEET_ID = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
+const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EVENT_DATA_CACHE_KEY = "fqc:event-data";
-const EVENT_DATA_SOURCE = "FQC Events Google Sheet";
+const EVENT_DATA_SOURCE = "2026 Event Logistics Google Sheet";
 const MAX_EVENTS = 250;
 const MAX_LOCATIONS = 250;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,80}$/i;
@@ -239,6 +240,34 @@ function normalizeSheetTime(value) {
   return String(value || "").trim().replace(/^(\d{1,2}:\d{2}):\d{2}\s/i, "$1 ");
 }
 
+function eventIdFor(date, title) {
+  const slug = locationIdFor(title).slice(0, 52) || "meeting";
+  return `fqc-${date}-${slug}`;
+}
+
+function logisticsLocation(value) {
+  const text = String(value || "").trim();
+  const compact = text.replace(/\s*\(.*\)\s*$/, "").trim();
+  const match = compact.match(/^(Reitz|Larsen|Marston)\s*(.*)$/i);
+  if (!match) {
+    return {
+      location: "University of Florida",
+      room: text && !/^campus$/i.test(text) ? text : "Location to be announced"
+    };
+  }
+
+  const building = match[1].toLowerCase();
+  const names = {
+    reitz: "Reitz Student Union",
+    larsen: "Larsen Hall",
+    marston: "Marston Science Library"
+  };
+  return {
+    location: names[building],
+    room: match[2] ? `Room ${match[2].replace(/^room\s+/i, "")}` : "Room details to be announced"
+  };
+}
+
 function buildSheetEventData(eventsCsv, locationsCsv) {
   const nextLocations = {};
   csvObjects(locationsCsv).forEach((row) => {
@@ -252,16 +281,27 @@ function buildSheetEventData(eventsCsv, locationsCsv) {
 
   const seenIds = new Set();
   const nextEvents = csvObjects(eventsCsv)
-    .filter((row) => String(row.Published || "").toLowerCase() === "yes")
-    .map((row) => ({
-      id: row["Event ID"],
-      date: normalizeSheetDate(row["Event Date"]),
-      title: row["Event Name"],
-      time: normalizeSheetTime(row["Start Time"]),
-      locationId: locationIdFor(row.Location),
-      room: row.Room ? `Room ${row.Room.replace(/^room\s+/i, "")}` : "Room details in event post",
-      description: row["Event Description"] || "See the FQC event announcement for details."
-    }))
+    .filter((row) => !Object.hasOwn(row, "Published") || String(row.Published || "").toLowerCase() === "yes")
+    .map((row) => {
+      const logistics = Object.hasOwn(row, "Date") && Object.hasOwn(row, "Type");
+      const date = normalizeSheetDate(logistics ? row.Date : row["Event Date"]);
+      const title = logistics ? row.Type : row["Event Name"];
+      const place = logistics ? logisticsLocation(row.Location) : {
+        location: row.Location,
+        room: row.Room ? `Room ${row.Room.replace(/^room\s+/i, "")}` : "Room details in event post"
+      };
+      return {
+        id: logistics ? eventIdFor(date, title) : row["Event ID"],
+        date,
+        title,
+        time: normalizeSheetTime(logistics ? row.Time : row["Start Time"]),
+        locationId: locationIdFor(place.location),
+        room: place.room,
+        description: logistics
+          ? `${title} for the Florida Quantum Computing Society. Check the club announcement for the latest agenda and room updates.`
+          : row["Event Description"] || "See the FQC event announcement for details."
+      };
+    })
     .filter((event) => {
       const valid = Boolean(
         event.id &&
@@ -342,7 +382,8 @@ function applyEventData(nextData, options = {}) {
   eventDataUpdatedAt = options.updatedAt || new Date().toISOString();
 
   if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
-  if (!localStorage.getItem("fqc:calendar-month") || !/^\d{4}-\d{2}$/.test(state.calendarMonth)) {
+  if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
+  if (!events.some((event) => event.date.startsWith(`${state.calendarMonth}-`))) {
     state.calendarMonth = events[0].date.slice(0, 7);
   }
 

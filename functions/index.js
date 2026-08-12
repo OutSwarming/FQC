@@ -19,7 +19,7 @@ const auth = getAuth();
 const region = "us-central1";
 const rpName = "Florida Quantum Computing";
 const challengeLifetimeMs = 5 * 60 * 1000;
-const officerRosterSpreadsheetId = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
+const officerRosterSpreadsheetId = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const officerRosterSheetName = "Officer Access";
 const officerRosterCacheMs = 5 * 60 * 1000;
 const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
@@ -115,7 +115,7 @@ async function loadOfficerRoster() {
   const headerIndex = Object.fromEntries(headers.map((header, index) => [header.trim().toLowerCase(), index]));
   const entries = rows.map((row) => ({
     name: cleanText(row[headerIndex["officer name"]], 80),
-    role: cleanText(row[headerIndex.role], 80),
+    role: cleanText(row[headerIndex.title] ?? row[headerIndex.role], 80),
     fingerprint: cleanText(row[headerIndex["ufid fingerprint"]], 64).toLowerCase(),
     active: /^(yes|true|1|active)$/i.test(cleanText(row[headerIndex.active], 12))
   })).filter((entry) => entry.active && entry.role && /^[a-f0-9]{64}$/.test(entry.fingerprint));

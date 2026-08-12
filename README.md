@@ -19,11 +19,11 @@ A responsive Firebase web app for Florida Quantum Computing with a unified event
 
 ## Event Data Workflow
 
-The public event explorer reads from the organization-owned native Google Sheet [FQC Events – Website Schedule](https://docs.google.com/spreadsheets/d/1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50/edit). The `Events` table contains the event name, date, start time, venue, room, description, publish status, and a stable event ID. The `UF Locations` table contains map coordinates and ranks venue choices by historical FQC usage.
+The public event explorer reads from the organization-owned native Google Sheet [2026 Event Logistics](https://docs.google.com/spreadsheets/d/1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0/edit). The `Events` tab is the club's live logistics schedule (`Date`, `Time`, `Type`, and `Location` are the website-facing fields). The `UF Locations` tab maps common room abbreviations such as Reitz, Larsen, and Marston to verified UF campus coordinates.
 
-- Set `Published` to `Yes` to include a valid row in the app; `No` rows stay private to the planning sheet.
-- Choose a venue from the Location dropdown so the event can be placed on the map.
-- Keep each Event ID unique and unchanged after publication so member RSVPs remain attached to the right event.
+- Every populated logistics row with a valid date, time, and event type appears in the app. Blank or campus-wide locations remain visible as “Location to be announced” on the UF campus map.
+- Use `Reitz`, `Larsen`, or `Marston` followed by the room number; the app maps the abbreviation to the correct UF building automatically.
+- Event IDs are generated consistently from the meeting date and type so RSVPs stay attached to the right event.
 - The app refreshes the Sheet when it opens, when the tab becomes active, and every five minutes while online.
 - A last-good local copy and a bundled copy of the verified Spring 2026 schedule keep the UI usable if Google Sheets is unavailable.
 
