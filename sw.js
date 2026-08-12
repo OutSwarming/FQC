@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v7";
+const CACHE_NAME = "fqc-app-v8";
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,11 +23,17 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-    ))
+    caches.keys()
+      .then(async (keys) => {
+        const isUpgrade = keys.some((key) => key.startsWith("fqc-app-") && key !== CACHE_NAME);
+        await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+        await self.clients.claim();
+        if (!isUpgrade) return;
+
+        const windowClients = await self.clients.matchAll({ type: "window" });
+        await Promise.all(windowClients.map((client) => client.navigate(client.url)));
+      })
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
