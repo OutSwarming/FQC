@@ -177,6 +177,11 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   const intro = page.locator("#event-intro");
   await expect(handle).toBeVisible();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect(page.locator("body")).toHaveCSS("position", "fixed");
+  expect(await page.evaluate(() => {
+    window.scrollTo(0, 120);
+    return window.scrollY;
+  })).toBe(0);
 
   const initialTop = await planner.evaluate((element) => element.getBoundingClientRect().top);
   await planner.dispatchEvent("wheel", { deltaY: 160 });
@@ -188,6 +193,20 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await intro.dispatchEvent("pointerdown", { button: 0, pointerId: 7, pointerType: "touch", clientY: 260 });
   await intro.dispatchEvent("pointermove", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
   await intro.dispatchEvent("pointerup", { button: 0, pointerId: 7, pointerType: "touch", clientY: 540 });
+  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+
+  const headerTop = await page.locator(".topbar").evaluate((element) => Math.round(element.getBoundingClientRect().top));
+  const visibleEvent = page.locator(".event-card-select").first();
+  await visibleEvent.dispatchEvent("pointerdown", { button: 0, pointerId: 8, pointerType: "touch", clientY: 730 });
+  await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 8, pointerType: "touch", clientY: 500 });
+  await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 8, pointerType: "touch", clientY: 500 });
+  await expect(planner).toHaveAttribute("data-sheet-mode", "high");
+  await expect.poll(() => page.locator(".topbar").evaluate((element) => Math.round(element.getBoundingClientRect().top))).toBe(headerTop);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+  await intro.dispatchEvent("pointerdown", { button: 0, pointerId: 9, pointerType: "touch", clientY: 260 });
+  await intro.dispatchEvent("pointermove", { button: 0, pointerId: 9, pointerType: "touch", clientY: 520 });
+  await intro.dispatchEvent("pointerup", { button: 0, pointerId: 9, pointerType: "touch", clientY: 520 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
 
   await handle.press("ArrowDown");

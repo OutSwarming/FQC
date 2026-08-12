@@ -494,6 +494,11 @@ function render() {
     pendingMapPan = null;
   }
 
+  const eventsScreenActive = state.view === "home";
+  document.documentElement.classList.toggle("events-screen-active", eventsScreenActive);
+  document.body.classList.toggle("events-screen-active", eventsScreenActive);
+  if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
+
   title.textContent = titles[state.view] || "Events";
   profileInitial.textContent = state.memberName.trim().charAt(0).toUpperCase() || "F";
   navItems.forEach((item) => {
@@ -828,6 +833,7 @@ function bindMobileEventSheet() {
   setMobileEventSheetMode(mobileEventSheetMode, { immediate: true });
   let drag = null;
   let suppressHandleClick = false;
+  let suppressSheetClick = false;
   let dragFrame = null;
   let pendingDragHeight = null;
 
@@ -839,6 +845,9 @@ function bindMobileEventSheet() {
 
   const startDrag = (event) => {
     if (event.button !== undefined && event.button !== 0) return;
+    const resizeFromHigh = event.target.closest("#event-sheet-handle, #event-intro");
+    const canResize = mobileEventSheetMode !== "high" || Boolean(resizeFromHigh);
+    if (!canResize) return;
     const metrics = getMobileEventSheetMetrics();
     const startHeight = planner.getBoundingClientRect().height;
     drag = {
@@ -849,11 +858,9 @@ function bindMobileEventSheet() {
       currentHeight: startHeight,
       lastTime: performance.now(),
       velocity: 0,
-      metrics
+      metrics,
+      moved: false
     };
-    planner.classList.add("event-sheet-dragging");
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
-    if (event.cancelable) event.preventDefault();
   };
 
   const moveDrag = (event) => {
@@ -865,6 +872,12 @@ function bindMobileEventSheet() {
     drag.lastY = event.clientY;
     drag.lastTime = now;
     const delta = drag.startY - event.clientY;
+    if (!drag.moved && Math.abs(delta) < 5) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      planner.classList.add("event-sheet-dragging");
+      try { planner.setPointerCapture(event.pointerId); } catch {}
+    }
     const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + delta));
     drag.currentHeight = nextHeight;
     pendingDragHeight = nextHeight;
@@ -902,17 +915,22 @@ function bindMobileEventSheet() {
 
     if (Math.abs(distance) > 7) {
       suppressHandleClick = true;
+      suppressSheetClick = true;
       window.setTimeout(() => { suppressHandleClick = false; }, 280);
+      window.setTimeout(() => { suppressSheetClick = false; }, 280);
     }
     setMobileEventSheetMode(nextMode);
   };
 
-  [handle, intro].forEach((surface) => {
-    surface.addEventListener("pointerdown", startDrag);
-    surface.addEventListener("pointermove", moveDrag, { passive: false });
-    surface.addEventListener("pointerup", finishDrag);
-    surface.addEventListener("pointercancel", finishDrag);
-  });
+  planner.addEventListener("pointerdown", startDrag);
+  planner.addEventListener("pointermove", moveDrag, { passive: false });
+  planner.addEventListener("pointerup", finishDrag);
+  planner.addEventListener("pointercancel", finishDrag);
+  planner.addEventListener("click", (event) => {
+    if (!suppressSheetClick) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
 
   handle.addEventListener("click", (event) => {
     if (suppressHandleClick) {
