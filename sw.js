@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v17-firebase-auth";
+const CACHE_NAME = "fqc-app-v18-email-password-auth";
 const ASSETS = [
   "./",
   "./index.html",

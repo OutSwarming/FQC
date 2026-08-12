@@ -8,9 +8,9 @@ A responsive Firebase web app for Florida Quantum Computing with a unified event
 
 ## Authentication and access
 
-- Google and Apple use Firebase Authentication.
+- Email/password, Google, and Apple use Firebase Authentication. The login screen has separate Log In and Create Account tabs plus password reset.
 - Members can register a device passkey and later sign in with Face ID, Touch ID, Windows Hello, or another WebAuthn authenticator.
-- After social sign-in, a new account enters an eight-digit UFID once. The raw UFID is HMAC-hashed inside a Cloud Function and is never stored in the browser, Firestore, logs, or the website-readable spreadsheet.
+- Email accounts enter an eight-digit UFID during account creation; new social accounts enter it immediately afterward. The raw UFID is HMAC-hashed inside a Cloud Function and is never stored in the browser, Firestore, logs, or the website-readable spreadsheet.
 - The `Officer Access` tab in the events workbook contains only HMAC fingerprints, active flags, and officer titles. Firebase refreshes it on a five-minute cache cycle. A match receives the listed title; no match becomes a Member.
 - Any officer can recommend a member. Only the President and Treasurer can complete promotions or remove ordinary officers, and their own leadership roles are protected.
 - Role claims and attendance writes are enforced server-side and are never trusted from the browser.

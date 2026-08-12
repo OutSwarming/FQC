@@ -4,7 +4,7 @@ const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button"
 const finishMemberSetup = async (page, ufid = "00000000") => {
   await expect(page.getByRole("heading", { name: "Enter your UFID" })).toBeVisible();
   await page.getByLabel("Eight-digit UFID").fill(ufid);
-  await page.getByRole("button", { name: "Create Member Account" }).click();
+  await page.getByRole("button", { name: "Finish Account Setup" }).click();
 };
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
@@ -340,6 +340,37 @@ test("member login enables event check-in and shows a member profile", async ({ 
 
   await expect(page.getByRole("heading", { name: "Alex Q", level: 2 })).toBeVisible();
   await expect(page.locator("#profile-initial")).toHaveText("A");
+});
+
+test("login and account creation are separate and creation includes UFID", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await expect(page.getByRole("tab", { name: "Log In" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Email")).toBeVisible();
+  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByText(/officer code/i)).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Create Account" }).click();
+  await expect(page.getByRole("tab", { name: "Create Account" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Name")).toBeVisible();
+  await expect(page.getByLabel("UFID", { exact: true })).toBeVisible();
+  await page.getByLabel("Name").fill("New Gator");
+  await page.getByLabel("Email").fill("new.gator@ufl.edu");
+  await page.getByLabel("Password").fill("quantum-safe-password");
+  await page.getByLabel("UFID", { exact: true }).fill("00000000");
+  await page.getByRole("button", { name: "Create Account", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "New Gator" })).toBeVisible();
+  await expect(page.getByText("Member", { exact: true })).toBeVisible();
+});
+
+test("forgot password requires an email then sends a reset", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByText("Enter your email first, then choose Forgot password.")).toBeVisible();
+  await page.getByLabel("Email").fill("member@ufl.edu");
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByText("Password reset email sent to member@ufl.edu.")).toBeVisible();
 });
 
 test("a current officer can recommend a member but cannot directly change roles", async ({ page }) => {

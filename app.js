@@ -2,15 +2,18 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   changeMemberRole,
+  createEmailAccount,
   loadMembers,
   logOut,
   observeCheckIn,
   observeSession,
   readableAuthError,
   recommendOfficer,
+  requestPasswordReset,
   recordCheckIn,
   registerPasskey,
   signInWithApple,
+  signInWithEmail,
   signInWithGoogle,
   signInWithPasskey,
   supportsPasskeys,
@@ -67,6 +70,7 @@ const state = {
   authBusy: false,
   authError: "",
   authMessage: "",
+  authMode: "login",
   authUser: null,
   memberRole: "member",
   leadership: "",
@@ -1424,9 +1428,9 @@ function renderUfidForm(onboarding = false) {
       </div>
       <div class="form-row">
         <label for="member-ufid">Eight-digit UFID</label>
-        <input id="member-ufid" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="••••••••" />
+        <input id="member-ufid" type="text" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="off" placeholder="8-digit UFID" />
       </div>
-      <button class="primary-button" id="verify-ufid" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>${onboarding ? "Create Member Account" : "Check UFID Role"}</span></button>
+      <button class="primary-button" id="verify-ufid" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>${onboarding ? "Finish Account Setup" : "Check UFID Role"}</span></button>
       ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Checking the secure officer roster…</p>' : ""}
       ${onboarding ? renderAuthFeedback() : ""}
       <p class="auth-privacy">A matching active roster entry receives its listed role, including President, Treasurer, Vice President, or another officer title. No match creates a normal Member account.</p>
@@ -1437,6 +1441,7 @@ function renderUfidForm(onboarding = false) {
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
+    const creating = state.authMode === "create";
     return `
       <section class="view" data-screen="profile">
         <section class="section profile-login">
@@ -1444,10 +1449,42 @@ function renderProfile() {
             <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
             <div>
               <p class="section-kicker">One secure FQC account</p>
-              <h2>Sign in to FQC</h2>
-              <p>Sign in normally with Google, Apple, or a device passkey. New accounts begin as members.</p>
+              <h2>${creating ? "Create your FQC account" : "Welcome back"}</h2>
+              <p>${creating ? "Create a normal account with your UFID, or continue with Google." : "Log in with your email and password, Google, Apple, or a passkey."}</p>
             </div>
           </div>
+          <div class="auth-mode-tabs" role="tablist" aria-label="Account access">
+            <button id="auth-mode-login" role="tab" aria-selected="${creating ? "false" : "true"}" type="button">Log In</button>
+            <button id="auth-mode-create" role="tab" aria-selected="${creating ? "true" : "false"}" type="button">Create Account</button>
+          </div>
+          <form class="email-auth-form" id="email-auth-form">
+            ${creating ? `
+              <div class="form-row">
+                <label for="auth-name">Name</label>
+                <input id="auth-name" name="name" autocomplete="name" maxlength="80" placeholder="Your name" required />
+              </div>
+            ` : ""}
+            <div class="form-row">
+              <label for="auth-email">Email</label>
+              <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@ufl.edu" required />
+            </div>
+            <div class="form-row">
+              <label for="auth-password">Password</label>
+              <input id="auth-password" name="password" type="password" autocomplete="${creating ? "new-password" : "current-password"}" minlength="8" placeholder="At least 8 characters" required />
+            </div>
+            ${creating ? `
+              <div class="form-row ufid-create-field">
+                <label for="auth-ufid">UFID</label>
+                <input id="auth-ufid" name="ufid" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{8}" maxlength="8" placeholder="8-digit UFID" required />
+                <small>Used once to assign your current FQC role. Your raw UFID is never stored.</small>
+              </div>
+            ` : ""}
+            <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}>
+              <svg><use href="#icon-lock"></use></svg><span>${creating ? "Create Account" : "Log In"}</span>
+            </button>
+            ${creating ? "" : '<button class="text-button" id="forgot-password" type="button">Forgot password?</button>'}
+          </form>
+          <div class="auth-divider"><span>or</span></div>
           <div class="auth-provider-list">
             <button class="auth-provider-button google" id="sign-in-google" type="button" ${state.authBusy ? "disabled" : ""}>
               <span class="provider-mark" aria-hidden="true">G</span><span>Continue with Google</span>
@@ -1461,7 +1498,7 @@ function renderProfile() {
           </div>
           ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
           ${renderAuthFeedback()}
-          <p class="auth-privacy">Firebase securely keeps your account signed in. FQC never receives your Google, Apple, Face ID, or Touch ID password.</p>
+          <p class="auth-privacy">Firebase Authentication protects passwords and sign-in sessions. FQC never stores your password or raw UFID.</p>
         </section>
       </section>
     `;
@@ -1522,6 +1559,54 @@ function bindViewEvents() {
   bindMobileEventSheet();
 
   document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
+
+  document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
+    state.authMode = "login";
+    state.authError = "";
+    state.authMessage = "";
+    render();
+  });
+  document.querySelector("#auth-mode-create")?.addEventListener("click", () => {
+    state.authMode = "create";
+    state.authError = "";
+    state.authMessage = "";
+    render();
+  });
+  document.querySelector("#email-auth-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = document.querySelector("#auth-email")?.value.trim() || "";
+    const password = document.querySelector("#auth-password")?.value || "";
+    if (state.authMode === "create") {
+      const displayName = document.querySelector("#auth-name")?.value.trim() || "";
+      const ufid = document.querySelector("#auth-ufid")?.value.trim() || "";
+      if (displayName.length < 2) {
+        state.authError = "Enter your name.";
+        render();
+        return;
+      }
+      if (!/^\d{8}$/.test(ufid)) {
+        state.authError = "Enter an eight-digit UFID.";
+        render();
+        return;
+      }
+      const profile = await runAuthAction(
+        () => createEmailAccount({ displayName, email, password, ufid }),
+        "Account created securely."
+      );
+      if (profile) applyMemberProfile(profile);
+      return;
+    }
+    await runAuthAction(() => signInWithEmail(email, password));
+  });
+  document.querySelector("#forgot-password")?.addEventListener("click", async () => {
+    const email = document.querySelector("#auth-email")?.value.trim() || "";
+    if (!email) {
+      state.authError = "Enter your email first, then choose Forgot password.";
+      render();
+      return;
+    }
+    await runAuthAction(() => requestPasswordReset(email), `Password reset email sent to ${email}.`);
+  });
 
   document.querySelector("#sign-in-google")?.addEventListener("click", () => runAuthAction(signInWithGoogle));
   document.querySelector("#sign-in-apple")?.addEventListener("click", () => runAuthAction(signInWithApple));

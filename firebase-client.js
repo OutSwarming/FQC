@@ -3,14 +3,18 @@ import {
   GoogleAuthProvider,
   OAuthProvider,
   browserLocalPersistence,
+  createUserWithEmailAndPassword,
   getAuth,
   getRedirectResult,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   setPersistence,
   signInWithCustomToken,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
-  signOut
+  signOut,
+  updateProfile
 } from "firebase/auth";
 import { doc, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -177,6 +181,31 @@ export function signInWithApple() {
   return socialSignIn(provider);
 }
 
+export async function signInWithEmail(email, password) {
+  if (testMode) {
+    mockSignIn({ uid: "email-user", displayName: "Email Member", email, ufidStatus: "member" });
+    return;
+  }
+  await signInWithEmailAndPassword(auth, email, password);
+}
+
+export async function createEmailAccount({ displayName, email, password, ufid }) {
+  if (testMode) {
+    mockSignIn({ uid: "new-email-user", displayName, email, ufidStatus: "required" });
+    return verifyUfid(ufid);
+  }
+  const credential = await createUserWithEmailAndPassword(auth, email, password);
+  await updateProfile(credential.user, { displayName });
+  await callable("ensureUserProfile")();
+  return verifyUfid(ufid);
+}
+
+export async function requestPasswordReset(email) {
+  if (testMode) return { email };
+  await sendPasswordResetEmail(auth, email);
+  return { email };
+}
+
 export async function signInWithPasskey() {
   if (!supportsPasskeys()) throw new Error("Passkeys are not supported on this device.");
   if (testMode) {
@@ -304,6 +333,11 @@ export function readableAuthError(error) {
   if (code.includes("popup-blocked")) return "Your browser blocked the sign-in window. Allow popups and try again.";
   if (code.includes("operation-not-allowed")) return "This sign-in method is still being configured.";
   if (code.includes("account-exists-with-different-credential")) return "That email already uses another sign-in method. Sign in with the original method first.";
+  if (code.includes("email-already-in-use")) return "An account already exists for that email. Use Log In or Forgot Password.";
+  if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) return "The email or password is incorrect.";
+  if (code.includes("weak-password")) return "Use a password with at least eight characters.";
+  if (code.includes("invalid-email")) return "Enter a valid email address.";
+  if (code.includes("too-many-requests")) return "Too many attempts. Wait a moment and try again.";
   if (code.includes("unauthenticated")) return "Your session expired. Sign in again.";
   if (code.includes("permission-denied")) return "Your account does not have permission for that action.";
   if (error?.name === "NotAllowedError") return "Face ID, Touch ID, or the passkey prompt was cancelled.";
