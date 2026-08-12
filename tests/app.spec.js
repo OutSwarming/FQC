@@ -26,6 +26,34 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(navButton(page, "Map")).toHaveCount(0);
 });
 
+test("keeps fixed navigation clear of event details in a short desktop window", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "compact-desktop", "Compact desktop regression check");
+
+  await page.locator('.event-list [data-select-event="workshop"]').click();
+  const layout = await page.evaluate(() => {
+    const nav = document.querySelector(".bottom-nav").getBoundingClientRect();
+    const details = document.querySelector(".event-detail-card").getBoundingClientRect();
+    const header = document.querySelector(".topbar").getBoundingClientRect();
+    const explorer = document.querySelector(".event-explorer").getBoundingClientRect();
+    const overlaps = !(
+      nav.right <= details.left ||
+      nav.left >= details.right ||
+      nav.bottom <= details.top ||
+      nav.top >= details.bottom
+    );
+    return {
+      overlaps,
+      pageScroll: window.scrollY,
+      headerBottom: Math.round(header.bottom),
+      explorerTop: Math.round(explorer.top)
+    };
+  });
+
+  expect(layout.overlaps).toBe(false);
+  expect(layout.pageScroll).toBe(0);
+  expect(layout.headerBottom).toBeLessThanOrEqual(layout.explorerTop);
+});
+
 test("selecting a list event synchronizes the detail card and map marker", async ({ page }) => {
   await page.locator('.event-list [data-select-event="workshop"]').click();
 
