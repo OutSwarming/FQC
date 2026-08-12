@@ -559,10 +559,6 @@ function renderHome() {
 
         <div class="event-map-shell">
           <div class="map-status"><span></span>${events.length} published ${events.length === 1 ? "event" : "events"}</div>
-          <a class="event-map-campus" href="https://campusmap.ufl.edu/" target="_blank" rel="noreferrer" aria-label="Open the official University of Florida campus map">
-            <strong>UF CAMPUS</strong>
-            <span>Gainesville, Florida</span>
-          </a>
           <div id="event-map" aria-label="Map of FQC event locations"></div>
           <div class="event-map-message" id="event-map-message" hidden>Map tiles are unavailable. Event details still work below.</div>
           <div class="event-details" id="event-details" aria-live="polite">
@@ -839,6 +835,37 @@ function bindMobileEventSheet() {
   let suppressSheetClick = false;
   let dragFrame = null;
   let pendingDragHeight = null;
+  let scrollMomentumFrame = null;
+
+  const stopScrollMomentum = () => {
+    if (scrollMomentumFrame) cancelAnimationFrame(scrollMomentumFrame);
+    scrollMomentumFrame = null;
+  };
+
+  const startScrollMomentum = (initialVelocity) => {
+    stopScrollMomentum();
+    let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity));
+    if (Math.abs(velocity) < 0.08) return;
+    let lastTime = performance.now();
+
+    const coast = (now) => {
+      const elapsed = Math.min(32, Math.max(1, now - lastTime));
+      lastTime = now;
+      const maxScrollTop = Math.max(0, planner.scrollHeight - planner.clientHeight);
+      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, planner.scrollTop + velocity * elapsed));
+      const reachedBoundary = (nextScrollTop <= 0 && velocity < 0) || (nextScrollTop >= maxScrollTop && velocity > 0);
+      planner.scrollTop = nextScrollTop;
+      velocity *= Math.pow(0.95, elapsed / 16.67);
+
+      if (!reachedBoundary && Math.abs(velocity) > 0.025 && mobileEventSheetMode === "high") {
+        scrollMomentumFrame = requestAnimationFrame(coast);
+      } else {
+        scrollMomentumFrame = null;
+      }
+    };
+
+    scrollMomentumFrame = requestAnimationFrame(coast);
+  };
 
   const modeIndex = () => MOBILE_EVENT_SHEET_MODES.indexOf(mobileEventSheetMode);
   const stepMode = (direction) => {
@@ -848,6 +875,7 @@ function bindMobileEventSheet() {
 
   const startDrag = (event) => {
     if (event.button !== undefined && event.button !== 0) return;
+    stopScrollMomentum();
     const metrics = getMobileEventSheetMetrics();
     const startHeight = planner.getBoundingClientRect().height;
     drag = {
@@ -863,7 +891,8 @@ function bindMobileEventSheet() {
       resizing: false,
       modeAtStart: mobileEventSheetMode,
       startScrollTop: planner.scrollTop,
-      resizeSurface: Boolean(event.target.closest("#event-sheet-handle, #event-intro"))
+      resizeSurface: Boolean(event.target.closest("#event-sheet-handle, #event-intro")),
+      scrollHandoff: false
     };
   };
 
@@ -892,6 +921,16 @@ function bindMobileEventSheet() {
       resizeDelta = -downwardPastTop;
     } else {
       drag.resizing = true;
+      if (delta > 0) {
+        const expansionDistance = Math.max(0, drag.metrics.high - drag.startHeight);
+        resizeDelta = Math.min(delta, expansionDistance);
+        const upwardPastHigh = Math.max(0, delta - expansionDistance);
+        if (upwardPastHigh > 0) {
+          drag.scrollHandoff = true;
+          const maxScrollTop = Math.max(0, planner.scrollHeight - planner.clientHeight);
+          planner.scrollTop = Math.max(0, Math.min(maxScrollTop, drag.startScrollTop + upwardPastHigh));
+        }
+      }
     }
 
     const nextHeight = Math.max(drag.metrics.low, Math.min(drag.metrics.high, drag.startHeight + resizeDelta));
@@ -925,7 +964,10 @@ function bindMobileEventSheet() {
     }
 
     if (!finished.resizing) {
-      if (finished.modeAtStart === "high") setMobileEventSheetMode("high", { preserveScroll: true });
+      if (finished.modeAtStart === "high") {
+        setMobileEventSheetMode("high", { preserveScroll: true });
+        startScrollMomentum(finished.velocity);
+      }
       return;
     }
 
@@ -946,7 +988,9 @@ function bindMobileEventSheet() {
       nextMode = MOBILE_EVENT_SHEET_MODES[nextModeIndex];
     }
 
-    setMobileEventSheetMode(nextMode);
+    const preserveScroll = nextMode === "high" && finished.scrollHandoff;
+    setMobileEventSheetMode(nextMode, { preserveScroll });
+    if (preserveScroll) startScrollMomentum(finished.velocity);
   };
 
   planner.addEventListener("pointerdown", startDrag);

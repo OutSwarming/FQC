@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v14-progressive-sheet";
+const CACHE_NAME = "fqc-app-v15-smooth-list";
 const ASSETS = [
   "./",
   "./index.html",
