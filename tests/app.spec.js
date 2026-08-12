@@ -25,6 +25,14 @@ const locationsCsv = `"Location","Address","Lat","Long","Historical Event Count"
 "Little Hall","1400 Stadium Road, Gainesville, FL 32611","29.64885","-82.34073","0","8","https://campusmap.ufl.edu/#/index/0655"
 "Weil Hall","1949 Stadium Road, Gainesville, FL 32611","29.64835","-82.34843","0","9","https://campusmap.ufl.edu/#/index/0024"
 "Smathers Library","1508 Union Road, Gainesville, FL 32611","29.65092","-82.34181","0","10","https://campusmap.ufl.edu/#/index/0005"`;
+const logisticsEventsCsv = `"Date","Time","Type","Location","Backup Room","Attendance","GatorConnect","SGF Request","Permit (y/n)","Permit Number"
+"7/9/2026","6:00:00 PM","Intro Event","Reitz G325","","40","","Pending registration","Confirmed (Reitz G325)","058982-GP"
+"8/27/2026","6:00:00 PM","GBM 1 - LinuxCL Workshop","Reitz G320","","70","","","Pending (Reitz G320)","059100-GP"
+"9/3/2026","5:30:00 PM","GBM 2 - Siddharth Speaker","Reitz 2350 (Capacity: 16)","Larsen 234","","","","Confirmed (Reitz 2350)","059118-GP"
+"9/17/2026","6:00:00 PM","GBM 3 - CUDAQ Workshop","Campus"
+"10/1/2026","5:30:00 PM","GBM 4 - Industry Speaker"`;
+const logisticsLocationsCsv = `${locationsCsv}
+"University of Florida","Gainesville, FL 32611","29.643632","-82.35493","0","11","https://campusmap.ufl.edu/"`;
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -61,6 +69,31 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   for (const label of navLabels) await expect(navButton(page, label)).toBeVisible();
   await expect(navButton(page, "Calendar")).toHaveCount(0);
   await expect(navButton(page, "Map")).toHaveCount(0);
+});
+
+test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", async ({ page }) => {
+  await page.unroute("https://docs.google.com/spreadsheets/**");
+  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+    const sheetName = new URL(route.request().url()).searchParams.get("sheet");
+    await route.fulfill({
+      status: 200,
+      contentType: "text/csv; charset=utf-8",
+      body: sheetName === "UF Locations" ? logisticsLocationsCsv : logisticsEventsCsv
+    });
+  });
+  await page.evaluate(() => {
+    localStorage.removeItem("fqc:event-data");
+    localStorage.setItem("fqc:calendar-month", "2026-03");
+  });
+  await page.reload();
+
+  await expect(page.locator("#event-intro")).toContainText("Intro Event");
+  await expect(page.locator("#event-intro")).toContainText("Reitz Student Union");
+  await expect(page.locator("#event-intro")).toContainText("Room G325");
+  await expect(page.locator(".event-map-pin")).toHaveCount(5);
+
+  await page.getByRole("tab", { name: "Calendar", exact: true }).click();
+  await expect(page.locator(".calendar-heading")).toContainText("July 2026");
 });
 
 test("rejects cached locations outside the UF Gainesville campus", async ({ page }) => {
@@ -303,7 +336,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v1.9.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.0.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();

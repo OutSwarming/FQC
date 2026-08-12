@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v19-settings-history";
+const CACHE_NAME = "fqc-app-v20-event-logistics";
 const ASSETS = [
   "./",
   "./index.html",
