@@ -31,6 +31,13 @@ export default defineConfig({
         browserName: "chromium",
         viewport: { width: 900, height: 900 }
       }
+    },
+    {
+      name: "compact-desktop",
+      use: {
+        browserName: "chromium",
+        viewport: { width: 1366, height: 552 }
+      }
     }
   ]
 });

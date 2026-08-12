@@ -1,11 +1,11 @@
 {
   "name": "Florida Quantum Computing",
   "short_name": "FQC",
-  "description": "Member and officer app prototype for Florida Quantum Computing.",
+  "description": "Explore Florida Quantum Computing events, dates, and meeting locations.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#f5f6f2",
-  "theme_color": "#2f7d4d",
+  "background_color": "#f4f7fc",
+  "theme_color": "#5476f2",
   "icons": [
     {
       "src": "./assets/fqc-wordmark.jpg",

@@ -1,8 +1,8 @@
 # Florida Quantum Computing App
 
-A mobile-first web app prototype for Florida Quantum Computing. It is designed for GitHub Pages hosting and focuses on two audiences:
+A responsive web app prototype for Florida Quantum Computing. It is designed for GitHub Pages hosting and focuses on two audiences:
 
-- Members: calendar, event locations, food notes, leaderboard, and profile progress.
+- Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
 - Officers: attendance, budget, permits, rooms, advertising, socials, and quick planning records.
 
 ## Milestone Plan
@@ -13,9 +13,10 @@ A mobile-first web app prototype for Florida Quantum Computing. It is designed f
    - Project roadmap and deployment notes.
 
 2. Member experience
-   - Home dashboard.
-   - Event calendar.
-   - Locations and food view.
+   - Unified Events home with list and calendar tabs.
+   - Leaflet map synchronized with event selection.
+   - Responsive event detail card with directions and RSVP actions.
+   - Persistent light and dark themes.
    - Profile and leaderboard preview.
 
 3. Officer portal
