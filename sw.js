@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v18-email-password-auth";
+const CACHE_NAME = "fqc-app-v19-settings-history";
 const ASSETS = [
   "./",
   "./index.html",

@@ -3,6 +3,7 @@
 A responsive Firebase web app for Florida Quantum Computing with a unified events experience and secure member accounts:
 
 - Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
+- Settings: explicit update checking, an in-app version history, and a destructive device reset hidden under Advanced settings.
 - Officers: live event check-in controls and an officer-specific profile workspace.
 - President and Treasurer: protected ordinary-officer promotion and removal from the Firebase-backed account directory.
 

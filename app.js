@@ -22,7 +22,16 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const allowedViews = new Set(["home", "checkin", "profile"]);
+const APP_VERSION = "1.9.0";
+const APP_RELEASE_DATE = "August 12, 2026";
+const RELEASE_HISTORY = [
+  ["1.9.0", "App settings, update recovery, version history, and safer cache refreshes"],
+  ["1.8.0", "Email/password login, password reset, and UFID account setup"],
+  ["1.7.0", "Firebase Functions, secure officer roles, Google and passkey authentication"],
+  ["1.6.0", "Unified UF event map, list, calendar, and mobile bottom sheet"],
+  ["1.5.0", "Google Sheets event updates and UF campus locations"]
+];
+const allowedViews = new Set(["home", "checkin", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -426,7 +435,8 @@ const leaders = [
 const titles = {
   home: "Events",
   checkin: "Check In",
-  profile: "Profile"
+  profile: "Profile",
+  settings: "Settings"
 };
 
 const app = document.querySelector("#app");
@@ -435,6 +445,7 @@ const navItems = [...document.querySelectorAll(".nav-item")];
 const quickProfile = document.querySelector("#quick-profile");
 const profileInitial = document.querySelector("#profile-initial");
 const themeToggle = document.querySelector("#theme-toggle");
+const settingsToggle = document.querySelector("#settings-toggle");
 let eventMap = null;
 let eventMarkers = new Map();
 let pendingMapPan = null;
@@ -523,6 +534,27 @@ async function nukeAndReload() {
   window.setTimeout(() => window.location.reload(), 80);
 }
 
+async function checkForUpdates() {
+  state.authBusy = true;
+  state.authError = "";
+  state.authMessage = "Checking for the newest release…";
+  render();
+  try {
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.filter((name) => name.startsWith("fqc-app-")).map((name) => caches.delete(name)));
+    }
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.update()));
+    }
+  } finally {
+    const url = new URL(window.location.href);
+    url.searchParams.set("release", APP_VERSION);
+    window.location.replace(url);
+  }
+}
+
 function stopZoomGesture(event) {
   event.preventDefault();
 }
@@ -558,7 +590,8 @@ function render() {
   const views = {
     home: renderHome,
     checkin: renderCheckIn,
-    profile: renderProfile
+    profile: renderProfile,
+    settings: renderSettings
   };
 
   app.innerHTML = views[state.view]?.() || renderHome();
@@ -1438,6 +1471,49 @@ function renderUfidForm(onboarding = false) {
   `;
 }
 
+function renderSettings() {
+  return `
+    <section class="view settings-view" data-screen="settings">
+      <section class="section settings-hero">
+        <div>
+          <p class="section-kicker">App settings</p>
+          <h2>Florida Quantum Computing</h2>
+          <p>Version ${APP_VERSION} · Released ${APP_RELEASE_DATE}</p>
+        </div>
+        <button class="secondary-button" id="close-settings" type="button">Back</button>
+      </section>
+      <section class="section">
+        <div class="section-header">
+          <div><h2>Updates</h2><p>Fetch the newest app shell while keeping your account and saved app data.</p></div>
+        </div>
+        <button class="primary-button" id="check-for-updates" type="button" ${state.authBusy ? "disabled" : ""}>
+          <svg><use href="#icon-check"></use></svg><span>Check for Updates</span>
+        </button>
+        ${renderAuthFeedback()}
+      </section>
+      <section class="section">
+        <div class="section-header"><div><p class="section-kicker">What changed</p><h2>Version History</h2></div></div>
+        <div class="version-history">
+          ${RELEASE_HISTORY.map(([version, summary], index) => `
+            <article class="version-row">
+              <span class="version-number">v${escapeHtml(version)}${index === 0 ? " · Current" : ""}</span>
+              <p>${escapeHtml(summary)}</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+      <details class="section advanced-settings">
+        <summary>Advanced settings</summary>
+        <div class="advanced-settings-content">
+          <h2>Reset this device</h2>
+          <p>Nuke & Reload signs out, removes this device’s FQC preferences and offline cache, then downloads a completely fresh copy. Firebase attendance and account records are not deleted.</p>
+          <button class="danger-button" id="nuke-reload" type="button"><svg><use href="#icon-plus"></use></svg><span>Nuke & Reload</span></button>
+        </div>
+      </details>
+    </section>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
@@ -1539,10 +1615,6 @@ function renderProfile() {
         </section>
       `}
       ${renderRoleWorkspace()}
-      <section class="section">
-        <h2>Fix and Troubleshooting</h2><p>Sign out, reset local app data, clear the offline cache, and reload a fresh copy. Your Firebase account and attendance remain safe.</p>
-        <button class="danger-button" id="nuke-reload" type="button"><svg><use href="#icon-plus"></use></svg><span>Nuke and Reload</span></button>
-      </section>
     </section>
   `;
 }
@@ -1559,6 +1631,8 @@ function bindViewEvents() {
   bindMobileEventSheet();
 
   document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
+  document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
+  document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
 
   document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
     state.authMode = "login";
@@ -1702,10 +1776,11 @@ function bindViewEvents() {
 
 navItems.forEach((item) => item.addEventListener("click", () => setView(item.dataset.view)));
 quickProfile.addEventListener("click", () => setView("profile"));
+settingsToggle.addEventListener("click", () => setView("settings"));
 themeToggle.addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => registration.update()).catch(() => {}));
 }
 
 ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {

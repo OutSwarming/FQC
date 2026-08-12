@@ -300,6 +300,15 @@ test("switches between light and dark themes and remembers the choice", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
+test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
+  await expect(page.getByText("v1.9.0 · Current")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
+  await page.getByText("Advanced settings", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
+});
+
 test("an officer login exposes officer controls in Profile", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
@@ -442,8 +451,10 @@ test("nukes local app data and reloads a fresh events home", async ({ page }) =>
   await finishMemberSetup(page);
   await expect(page.getByRole("heading", { name: "Google Member", level: 2 })).toBeVisible();
 
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByText("Advanced settings", { exact: true }).click();
   const reload = page.waitForEvent("framenavigated");
-  await page.getByRole("button", { name: "Nuke and Reload" }).click();
+  await page.getByRole("button", { name: "Nuke & Reload" }).click();
   await reload;
 
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
