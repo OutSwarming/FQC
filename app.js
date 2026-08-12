@@ -1,5 +1,12 @@
 const allowedViews = new Set(["home", "officers", "profile"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+const EVENT_SHEET_ID = "1z6CAfx2xDEfnIdG3FXm1aLc9s_ane5wnbDBywToQK_Y";
+const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const EVENT_DATA_CACHE_KEY = "fqc:event-data";
+const EVENT_DATA_SOURCE = "FQC Events Google Sheet";
+const MAX_EVENTS = 250;
+const MAX_LOCATIONS = 250;
+const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,80}$/i;
 
 function readJson(key, fallback) {
   try {
@@ -14,83 +21,324 @@ const state = {
   view: allowedViews.has(storedView) ? storedView : "home",
   theme: localStorage.getItem("fqc:theme") || document.documentElement.dataset.theme || systemTheme,
   eventMode: localStorage.getItem("fqc:event-mode") || "list",
-  calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-08",
-  selectedEventId: localStorage.getItem("fqc:selected-event") || "kickoff",
+  calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-03",
+  selectedEventId: localStorage.getItem("fqc:selected-event") || "fqc-2026-03-03-ionq",
   memberName: localStorage.getItem("fqc:name") || "Future Member",
   officerMode: localStorage.getItem("fqc:officer") === "true",
   rsvps: readJson("fqc:rsvps", []),
   notes: readJson("fqc:notes", [])
 };
 
-const locations = {
-  innovation: {
-    id: "innovation",
-    name: "Innovation Lab 204",
-    lat: 28.60088,
-    lng: -81.1989,
-    room: "Projector, 36 seats, whiteboards"
-  },
-  library: {
-    id: "library",
-    name: "Library Makerspace",
-    lat: 28.60066,
-    lng: -81.20161,
-    room: "Laptops, worktables, 24 seats"
-  },
-  union: {
-    id: "union",
-    name: "Student Union Room B",
-    lat: 28.60155,
-    lng: -81.20028,
-    room: "Open floor, 70 seats, permit needed"
-  },
-  research: {
-    id: "research",
-    name: "Research Center Lobby",
-    lat: 28.5975,
-    lng: -81.1978,
-    room: "Meet at the main lobby check-in desk"
-  }
+const fallbackLocations = {
+  "malachowsky-hall": { id: "malachowsky-hall", name: "Malachowsky Hall", address: "1889 Museum Road, Gainesville, FL 32611", lat: 29.644482, lng: -82.34805 },
+  "larsen-hall": { id: "larsen-hall", name: "Larsen Hall", address: "968 Center Drive, Gainesville, FL 32611", lat: 29.64311, lng: -82.34738 },
+  "reitz-student-union": { id: "reitz-student-union", name: "Reitz Student Union", address: "655 Reitz Union Drive, Gainesville, FL 32611", lat: 29.64631, lng: -82.34788 },
+  "marston-science-library": { id: "marston-science-library", name: "Marston Science Library", address: "444 Newell Drive, Gainesville, FL 32611", lat: 29.64794, lng: -82.34394 },
+  "newell-hall": { id: "newell-hall", name: "Newell Hall", address: "1700 Stadium Road, Gainesville, FL 32611", lat: 29.64909, lng: -82.34508 },
+  "pugh-hall": { id: "pugh-hall", name: "Pugh Hall", address: "296 Buckman Drive, Gainesville, FL 32611", lat: 29.64941, lng: -82.34553 },
+  "turlington-hall": { id: "turlington-hall", name: "Turlington Hall", address: "330 Newell Drive, Gainesville, FL 32611", lat: 29.64921, lng: -82.34407 },
+  "little-hall": { id: "little-hall", name: "Little Hall", address: "1400 Stadium Road, Gainesville, FL 32611", lat: 29.64885, lng: -82.34073 },
+  "weil-hall": { id: "weil-hall", name: "Weil Hall", address: "1949 Stadium Road, Gainesville, FL 32611", lat: 29.64835, lng: -82.34843 },
+  "smathers-library": { id: "smathers-library", name: "Smathers Library", address: "1508 Union Road, Gainesville, FL 32611", lat: 29.65092, lng: -82.34181 }
 };
 
-const events = [
+const fallbackEvents = [
   {
-    id: "kickoff",
-    date: "2026-08-29",
-    title: "Fall Quantum Kickoff",
-    time: "2:00 PM",
-    locationId: "innovation",
-    food: "Pizza and sparkling water",
-    focus: "Qubits, club roadmap, and team signups"
-  },
-  {
-    id: "workshop",
-    date: "2026-09-05",
-    title: "Beginner Circuit Workshop",
-    time: "11:00 AM",
-    locationId: "library",
-    food: "Bagels, fruit, and coffee",
-    focus: "Hands-on circuit building for new members"
-  },
-  {
-    id: "social",
-    date: "2026-09-12",
-    title: "Quantum Games Social",
-    time: "5:30 PM",
-    locationId: "union",
-    food: "Tacos and vegetarian bowls",
-    focus: "Member mixer, games, and leaderboard points"
-  },
-  {
-    id: "tour",
-    date: "2026-10-07",
-    title: "Lab Visit and Demo Day",
+    id: "fqc-2026-03-03-ionq",
+    date: "2026-03-03",
+    title: "IonQ Quantum Networking Speaker Session",
     time: "3:30 PM",
-    locationId: "research",
-    food: "Snacks after the tour",
-    focus: "Research demos; attendance is capped"
+    locationId: "reitz-student-union",
+    room: "Room 2340",
+    description: "Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided."
+  },
+  {
+    id: "fqc-2026-03-10-gbm-2",
+    date: "2026-03-10",
+    title: "GBM 2",
+    time: "6:00 PM",
+    locationId: "malachowsky-hall",
+    room: "Room 1142",
+    description: "A community meeting to connect students interested in quantum computing, share semester progress, and explain ways to get involved. Pizza was served."
+  },
+  {
+    id: "fqc-2026-03-24-quirk",
+    date: "2026-03-24",
+    title: "Workshop 3: Quirk Circuit Simulator",
+    time: "6:00 PM",
+    locationId: "larsen-hall",
+    room: "Room 234",
+    description: "A hands-on introduction to Quirk, an interactive quantum circuit simulator. Pizza was provided."
+  },
+  {
+    id: "fqc-2026-03-31-bomb-testing",
+    date: "2026-03-31",
+    title: "Workshop 4: Quantum Bomb Testing",
+    time: "6:00 PM",
+    locationId: "malachowsky-hall",
+    room: "Room 1142",
+    description: "A workshop exploring the Quantum Bomb Testing algorithm. Sandwiches were provided."
+  },
+  {
+    id: "fqc-2026-04-07-laura-kim",
+    date: "2026-04-07",
+    title: "Speaker Session: Dr. Laura Kim",
+    time: "5:30 PM",
+    locationId: "malachowsky-hall",
+    room: "Room G168",
+    description: "FQC speaker session featuring UF Assistant Professor Dr. Laura Kim. Food began at 5:30 PM and the presentation began at 6:00 PM."
+  },
+  {
+    id: "fqc-2026-04-14-gbm-3",
+    date: "2026-04-14",
+    title: "GBM 3: Quantum Technology Today",
+    time: "6:00 PM",
+    locationId: "larsen-hall",
+    room: "Room 234",
+    description: "A general body meeting on the present-day impact of quantum technology. Piesanos was provided."
+  },
+  {
+    id: "fqc-2026-04-21-social",
+    date: "2026-04-21",
+    title: "End of Year Social",
+    time: "6:00 PM",
+    locationId: "malachowsky-hall",
+    room: "Room G186",
+    description: "A semester-closing social for the FQC community, open to all majors. Huey Magoo's was served."
   }
 ];
+
+let locations = { ...fallbackLocations };
+let events = fallbackEvents.map((event) => ({ ...event }));
+let eventDataSource = "Bundled schedule copy";
+let eventDataUpdatedAt = null;
+let eventRefreshInFlight = null;
+
+function locationIdFor(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function parseCsv(csvText) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const char = csvText[index];
+    const next = csvText[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      value += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+
+  row.push(value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
+  return rows;
+}
+
+function csvObjects(csvText) {
+  const [headers = [], ...rows] = parseCsv(csvText);
+  return rows.map((row) => Object.fromEntries(headers.map((header, index) => [header.trim(), String(row[index] || "").trim()])));
+}
+
+function normalizeSheetDate(value) {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return "";
+  return `${match[3]}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
+}
+
+function normalizeSheetTime(value) {
+  return String(value || "").trim().replace(/^(\d{1,2}:\d{2}):\d{2}\s/i, "$1 ");
+}
+
+function buildSheetEventData(eventsCsv, locationsCsv) {
+  const nextLocations = {};
+  csvObjects(locationsCsv).forEach((row) => {
+    const name = row.Location;
+    const id = locationIdFor(name);
+    const lat = Number(row.Lat || row.Latitude);
+    const lng = Number(row.Long || row.Longitude);
+    if (!id || !name || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    nextLocations[id] = { id, name, address: row.Address || "University of Florida", lat, lng };
+  });
+
+  const seenIds = new Set();
+  const nextEvents = csvObjects(eventsCsv)
+    .filter((row) => String(row.Published || "").toLowerCase() === "yes")
+    .map((row) => ({
+      id: row["Event ID"],
+      date: normalizeSheetDate(row["Event Date"]),
+      title: row["Event Name"],
+      time: normalizeSheetTime(row["Start Time"]),
+      locationId: locationIdFor(row.Location),
+      room: row.Room ? `Room ${row.Room.replace(/^room\s+/i, "")}` : "Room details in event post",
+      description: row["Event Description"] || "See the FQC event announcement for details."
+    }))
+    .filter((event) => {
+      const valid = Boolean(
+        event.id &&
+        SAFE_ID_PATTERN.test(event.id) &&
+        !seenIds.has(event.id) &&
+        event.date &&
+        event.title &&
+        event.time &&
+        nextLocations[event.locationId]
+      );
+      if (valid) seenIds.add(event.id);
+      return valid;
+    })
+    .sort((left, right) => left.date.localeCompare(right.date) || left.time.localeCompare(right.time));
+
+  if (
+    !nextEvents.length ||
+    nextEvents.length > MAX_EVENTS ||
+    !Object.keys(nextLocations).length ||
+    Object.keys(nextLocations).length > MAX_LOCATIONS
+  ) throw new Error("The published sheet did not contain a complete event schedule.");
+  return { events: nextEvents, locations: nextLocations };
+}
+
+function isValidEventData(nextData) {
+  const nextEvents = nextData?.events;
+  const nextLocations = nextData?.locations;
+  if (
+    !Array.isArray(nextEvents) ||
+    !nextEvents.length ||
+    nextEvents.length > MAX_EVENTS ||
+    !nextLocations ||
+    Array.isArray(nextLocations) ||
+    !Object.keys(nextLocations).length ||
+    Object.keys(nextLocations).length > MAX_LOCATIONS
+  ) return false;
+
+  const validLocations = Object.entries(nextLocations).every(([id, location]) => (
+    SAFE_ID_PATTERN.test(id) &&
+    location?.id === id &&
+    typeof location.name === "string" &&
+    location.name.trim().length > 0 &&
+    typeof location.address === "string" &&
+    Number.isFinite(location.lat) &&
+    Number.isFinite(location.lng) &&
+    location.lat >= -90 &&
+    location.lat <= 90 &&
+    location.lng >= -180 &&
+    location.lng <= 180
+  ));
+  if (!validLocations) return false;
+
+  const seenIds = new Set();
+  return nextEvents.every((event) => {
+    const valid = Boolean(
+      event &&
+      SAFE_ID_PATTERN.test(event.id) &&
+      !seenIds.has(event.id) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(event.date) &&
+      typeof event.title === "string" &&
+      event.title.trim().length > 0 &&
+      typeof event.time === "string" &&
+      event.time.trim().length > 0 &&
+      typeof event.room === "string" &&
+      typeof event.description === "string" &&
+      nextLocations[event.locationId]
+    );
+    if (valid) seenIds.add(event.id);
+    return valid;
+  });
+}
+
+function eventDataSignature(nextEvents, nextLocations) {
+  return JSON.stringify({ events: nextEvents, locations: nextLocations });
+}
+
+function applyEventData(nextData, options = {}) {
+  if (!isValidEventData(nextData)) return false;
+  const changed = eventDataSignature(events, locations) !== eventDataSignature(nextData.events, nextData.locations);
+  events = nextData.events.map((event) => ({ ...event }));
+  locations = Object.fromEntries(Object.entries(nextData.locations).map(([id, location]) => [id, { ...location }]));
+  eventDataSource = options.source || EVENT_DATA_SOURCE;
+  eventDataUpdatedAt = options.updatedAt || new Date().toISOString();
+
+  if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
+  if (!localStorage.getItem("fqc:calendar-month") || !/^\d{4}-\d{2}$/.test(state.calendarMonth)) {
+    state.calendarMonth = events[0].date.slice(0, 7);
+  }
+
+  if (options.persist !== false) {
+    try {
+      localStorage.setItem(EVENT_DATA_CACHE_KEY, JSON.stringify({
+        events,
+        locations,
+        updatedAt: eventDataUpdatedAt
+      }));
+    } catch {}
+  }
+
+  return changed;
+}
+
+function loadCachedEventData() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(EVENT_DATA_CACHE_KEY) || "null");
+    if (!cached?.events?.length || !cached?.locations) return false;
+    return applyEventData(cached, { source: "Saved Google Sheet copy", updatedAt: cached.updatedAt, persist: false });
+  } catch {
+    return false;
+  }
+}
+
+function sheetCsvUrl(sheetName) {
+  const query = new URLSearchParams({ tqx: "out:csv", sheet: sheetName, cache_bypass: String(Date.now()) });
+  return `https://docs.google.com/spreadsheets/d/${EVENT_SHEET_ID}/gviz/tq?${query}`;
+}
+
+async function refreshEventData(reason = "scheduled refresh") {
+  if (window.location.protocol === "file:" || !navigator.onLine) return false;
+  if (eventRefreshInFlight) return eventRefreshInFlight;
+
+  eventRefreshInFlight = Promise.all([
+    fetch(sheetCsvUrl("Events"), { cache: "no-store" }),
+    fetch(sheetCsvUrl("UF Locations"), { cache: "no-store" })
+  ])
+    .then(async ([eventsResponse, locationsResponse]) => {
+      if (!eventsResponse.ok || !locationsResponse.ok) throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}).`);
+      const nextData = buildSheetEventData(await eventsResponse.text(), await locationsResponse.text());
+      const changed = applyEventData(nextData, { source: EVENT_DATA_SOURCE });
+      if (changed && state.view === "home") render();
+      return true;
+    })
+    .catch((error) => {
+      console.warn(`[events] ${reason} unavailable; keeping the current schedule.`, error);
+      return false;
+    })
+    .finally(() => {
+      eventRefreshInFlight = null;
+    });
+
+  return eventRefreshInFlight;
+}
+
+loadCachedEventData();
 
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
 if (!/^(list|calendar)$/.test(state.eventMode)) state.eventMode = "list";
@@ -161,6 +409,12 @@ function eventDate(event) {
 
 function formatEventDate(event, options = {}) {
   return new Intl.DateTimeFormat("en-US", options).format(eventDate(event));
+}
+
+function formatEventDataStatus() {
+  if (!eventDataUpdatedAt) return eventDataSource;
+  const refreshed = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(eventDataUpdatedAt));
+  return `${eventDataSource} · ${refreshed}`;
 }
 
 function escapeHtml(value) {
@@ -256,6 +510,10 @@ function renderHome() {
             <p class="section-kicker">Explore together</p>
             <h2>What’s happening</h2>
             <p>Choose an event to see exactly where it meets.</p>
+            <div class="event-data-status" title="${escapeHtml(formatEventDataStatus())}">
+              <span aria-hidden="true"></span>
+              <strong>${eventDataSource === EVENT_DATA_SOURCE ? "Google Sheet connected" : "Schedule ready offline"}</strong>
+            </div>
           </div>
 
           <div class="event-tabs" role="tablist" aria-label="Event view">
@@ -270,7 +528,7 @@ function renderHome() {
           </div>
 
           <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
-            <div class="event-list" aria-label="Upcoming events">
+            <div class="event-list" aria-label="Published events">
               ${events.map(renderEventCard).join("")}
             </div>
           </div>
@@ -281,7 +539,7 @@ function renderHome() {
         </div>
 
         <div class="event-map-shell">
-          <div class="map-status"><span></span>${events.length} upcoming locations</div>
+          <div class="map-status"><span></span>${events.length} published ${events.length === 1 ? "event" : "events"}</div>
           <div id="event-map" aria-label="Map of FQC event locations"></div>
           <div class="event-map-message" id="event-map-message" hidden>Map tiles are unavailable. Event details still work below.</div>
           <div class="event-details" id="event-details" aria-live="polite">
@@ -323,16 +581,21 @@ function renderCalendarMonth() {
   const daysInMonth = new Date(year, month, 0).getDate();
   const leadingDays = firstDay.getDay();
   const monthEvents = events.filter((event) => event.date.startsWith(state.calendarMonth));
-  const eventByDay = new Map(monthEvents.map((event) => [Number(event.date.slice(8, 10)), event]));
+  const eventsByDay = new Map();
+  monthEvents.forEach((event) => {
+    const day = Number(event.date.slice(8, 10));
+    eventsByDay.set(day, [...(eventsByDay.get(day) || []), event]);
+  });
   const cells = [];
 
   for (let index = 0; index < leadingDays; index += 1) cells.push('<span class="calendar-day outside" aria-hidden="true"></span>');
   for (let day = 1; day <= daysInMonth; day += 1) {
-    const event = eventByDay.get(day);
-    if (event) {
-      const selected = event.id === state.selectedEventId;
+    const dayEvents = eventsByDay.get(day) || [];
+    if (dayEvents.length) {
+      const selectedEvent = dayEvents.find((event) => event.id === state.selectedEventId) || dayEvents[0];
+      const selected = dayEvents.some((event) => event.id === state.selectedEventId);
       cells.push(`
-        <button class="calendar-day has-event${selected ? " selected" : ""}" type="button" data-select-event="${event.id}" aria-pressed="${selected}" aria-label="${escapeHtml(event.title)}, ${escapeHtml(formatEventDate(event, { month: "long", day: "numeric" }))}">
+        <button class="calendar-day has-event${selected ? " selected" : ""}" type="button" data-select-event="${escapeHtml(selectedEvent.id)}" aria-pressed="${selected}" aria-label="${escapeHtml(dayEvents.map((event) => event.title).join(", "))}, ${escapeHtml(formatEventDate(selectedEvent, { month: "long", day: "numeric" }))}">
           <span>${day}</span><i></i>
         </button>
       `);
@@ -380,10 +643,10 @@ function renderSelectedEventDetails() {
           <span>${escapeHtml(location.name)}</span>
         </div>
         <div class="event-detail-meta">
-          <span>${escapeHtml(event.food)}</span>
-          <span>${escapeHtml(location.room)}</span>
+          <span>${escapeHtml(event.room)}</span>
+          <span>${escapeHtml(location.address)}</span>
         </div>
-        <p class="event-detail-focus">${escapeHtml(event.focus)}</p>
+        <p class="event-detail-focus">${escapeHtml(event.description)}</p>
       </div>
       <div class="event-detail-actions">
         <a class="secondary-button" href="https://www.google.com/maps/dir/?api=1&destination=${directionsDestination}" target="_blank" rel="noopener noreferrer">Directions</a>
@@ -690,5 +953,14 @@ if ("serviceWorker" in navigator) {
   document.addEventListener(eventName, stopZoomGesture, { passive: false });
 });
 
+window.addEventListener("online", () => refreshEventData("network reconnect"));
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshEventData("tab became active");
+});
+window.setInterval(() => {
+  if (!document.hidden && navigator.onLine) refreshEventData("five-minute refresh");
+}, EVENT_REFRESH_INTERVAL_MS);
+
 applyTheme(state.theme, false);
 render();
+refreshEventData("initial Google Sheet load");

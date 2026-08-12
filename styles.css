@@ -242,7 +242,27 @@ p {
 
 .event-intro .section-kicker { margin-bottom: 5px; }
 .event-intro h2 { margin-bottom: 8px; }
-.event-intro > p:last-child { margin-bottom: 18px; font-size: 0.92rem; }
+.event-intro > p:not(.section-kicker) { margin-bottom: 10px; font-size: 0.92rem; }
+
+.event-data-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 0.69rem;
+}
+
+.event-data-status span {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 13%, transparent);
+}
+
+.event-data-status strong { color: var(--ink); font-weight: 800; }
 
 .section-kicker {
   margin: 0 0 6px;
@@ -525,6 +545,7 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
 .map-status {
   position: absolute;
   z-index: 500;
+  pointer-events: none;
   top: 16px;
   left: 16px;
   display: flex;
