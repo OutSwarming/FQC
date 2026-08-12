@@ -7,7 +7,7 @@ A responsive web app prototype for Florida Quantum Computing. It is designed for
 
 ## Event Data Workflow
 
-The public event explorer reads from the native Google Sheet [FQC Events](https://docs.google.com/spreadsheets/d/1z6CAfx2xDEfnIdG3FXm1aLc9s_ane5wnbDBywToQK_Y/edit). The `Events` table contains the event name, date, start time, venue, room, description, publish status, and a stable event ID. The `UF Locations` table contains map coordinates and ranks venue choices by historical FQC usage.
+The public event explorer reads from the organization-owned native Google Sheet [FQC Events – Website Schedule](https://docs.google.com/spreadsheets/d/1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50/edit). The `Events` table contains the event name, date, start time, venue, room, description, publish status, and a stable event ID. The `UF Locations` table contains map coordinates and ranks venue choices by historical FQC usage.
 
 - Set `Published` to `Yes` to include a valid row in the app; `No` rows stay private to the planning sheet.
 - Choose a venue from the Location dropdown so the event can be placed on the map.

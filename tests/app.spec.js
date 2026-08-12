@@ -3,16 +3,23 @@ import { expect, test } from "@playwright/test";
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
-"GBM 2","2026-03-10","6:00 PM","Malachowsky Hall","1142","A community meeting for students interested in quantum computing.","Yes","fqc-2026-03-10-gbm-2","https://www.linkedin.com/company/florida-quantum-computing-society"
-"Workshop 3: Quirk Circuit Simulator","2026-03-24","6:00 PM","Larsen Hall","234","A hands-on introduction to Quirk.","Yes","fqc-2026-03-24-quirk","https://www.linkedin.com/company/florida-quantum-computing-society"
-"Workshop 4: Quantum Bomb Testing","2026-03-31","6:00 PM","Malachowsky Hall","1142","A workshop exploring the Quantum Bomb Testing algorithm.","Yes","fqc-2026-03-31-bomb-testing","https://www.linkedin.com/company/florida-quantum-computing-society"
-"Speaker Session: Dr. Laura Kim","2026-04-07","5:30 PM","Malachowsky Hall","G168","A speaker session featuring UF Assistant Professor Dr. Laura Kim.","Yes","fqc-2026-04-07-laura-kim","https://www.linkedin.com/company/florida-quantum-computing-society"
-"GBM 3: Quantum Technology Today","2026-04-14","6:00 PM","Larsen Hall","234","A general body meeting on quantum technology today.","Yes","fqc-2026-04-14-gbm-3","https://www.linkedin.com/company/florida-quantum-computing-society"
-"End of Year Social","2026-04-21","6:00 PM","Malachowsky Hall","G186","A semester-closing social for the FQC community.","Yes","fqc-2026-04-21-social","https://www.linkedin.com/company/florida-quantum-computing-society"`;
+"GBM 2","2026-03-10","6:00 PM","Malachowsky Hall","1142","A community meeting to connect students interested in quantum computing, share semester progress, and explain ways to get involved. Pizza was served.","Yes","fqc-2026-03-10-gbm-2","https://www.linkedin.com/company/florida-quantum-computing-society"
+"Workshop 3: Quirk Circuit Simulator","2026-03-24","6:00 PM","Larsen Hall","234","A hands-on introduction to Quirk, an interactive quantum circuit simulator. Pizza was provided.","Yes","fqc-2026-03-24-quirk","https://www.linkedin.com/company/florida-quantum-computing-society"
+"Workshop 4: Quantum Bomb Testing","2026-03-31","6:00 PM","Malachowsky Hall","1142","A workshop exploring the Quantum Bomb Testing algorithm. Sandwiches were provided.","Yes","fqc-2026-03-31-bomb-testing","https://www.linkedin.com/company/florida-quantum-computing-society"
+"Speaker Session: Dr. Laura Kim","2026-04-07","5:30 PM","Malachowsky Hall","G168","FQC speaker session featuring UF Assistant Professor Dr. Laura Kim. Food began at 5:30 PM and the presentation began at 6:00 PM.","Yes","fqc-2026-04-07-laura-kim","https://www.linkedin.com/company/florida-quantum-computing-society"
+"GBM 3: Quantum Technology Today","2026-04-14","6:00 PM","Larsen Hall","234","A general body meeting on the present-day impact of quantum technology. Piesanos was provided.","Yes","fqc-2026-04-14-gbm-3","https://www.linkedin.com/company/florida-quantum-computing-society"
+"End of Year Social","2026-04-21","6:00 PM","Malachowsky Hall","G186","A semester-closing social for the FQC community, open to all majors. Huey Magoo's was served.","Yes","fqc-2026-04-21-social","https://www.linkedin.com/company/florida-quantum-computing-society"`;
 const locationsCsv = `"Location","Address","Lat","Long","Historical Event Count","Priority Rank","Source URL"
 "Malachowsky Hall","1889 Museum Road, Gainesville, FL 32611","29.644482","-82.34805","4","1","https://campusmap.ufl.edu/#/index/1024"
 "Larsen Hall","968 Center Drive, Gainesville, FL 32611","29.64311","-82.34738","2","2","https://campusmap.ufl.edu/#/index/0722"
-"Reitz Student Union","655 Reitz Union Drive, Gainesville, FL 32611","29.64631","-82.34788","1","3","https://campusmap.ufl.edu/#/index/0686"`;
+"Reitz Student Union","655 Reitz Union Drive, Gainesville, FL 32611","29.64631","-82.34788","1","3","https://campusmap.ufl.edu/#/index/0686"
+"Marston Science Library","444 Newell Drive, Gainesville, FL 32611","29.64794","-82.34394","0","4","https://campusmap.ufl.edu/#/index/0043"
+"Newell Hall","1700 Stadium Road, Gainesville, FL 32611","29.64909","-82.34508","0","5","https://campusmap.ufl.edu/#/index/0013"
+"Pugh Hall","296 Buckman Drive, Gainesville, FL 32611","29.64941","-82.34553","0","6","https://campusmap.ufl.edu/#/index/0072"
+"Turlington Hall","330 Newell Drive, Gainesville, FL 32611","29.64921","-82.34407","0","7","https://campusmap.ufl.edu/#/index/0267"
+"Little Hall","1400 Stadium Road, Gainesville, FL 32611","29.64885","-82.34073","0","8","https://campusmap.ufl.edu/#/index/0655"
+"Weil Hall","1949 Stadium Road, Gainesville, FL 32611","29.64835","-82.34843","0","9","https://campusmap.ufl.edu/#/index/0024"
+"Smathers Library","1508 Union Road, Gainesville, FL 32611","29.65092","-82.34181","0","10","https://campusmap.ufl.edu/#/index/0005"`;
 
 test.beforeEach(async ({ page }) => {
   await page.route("https://*.tile.openstreetmap.org/**", async (route) => {

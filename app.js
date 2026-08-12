@@ -1,6 +1,6 @@
 const allowedViews = new Set(["home", "officers", "profile"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-const EVENT_SHEET_ID = "1z6CAfx2xDEfnIdG3FXm1aLc9s_ane5wnbDBywToQK_Y";
+const EVENT_SHEET_ID = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EVENT_DATA_CACHE_KEY = "fqc:event-data";
 const EVENT_DATA_SOURCE = "FQC Events Google Sheet";
@@ -323,8 +323,9 @@ async function refreshEventData(reason = "scheduled refresh") {
     .then(async ([eventsResponse, locationsResponse]) => {
       if (!eventsResponse.ok || !locationsResponse.ok) throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}).`);
       const nextData = buildSheetEventData(await eventsResponse.text(), await locationsResponse.text());
+      const previousSource = eventDataSource;
       const changed = applyEventData(nextData, { source: EVENT_DATA_SOURCE });
-      if (changed && state.view === "home") render();
+      if ((changed || previousSource !== eventDataSource) && state.view === "home") render();
       return true;
     })
     .catch((error) => {
