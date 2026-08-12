@@ -1,3 +1,22 @@
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import {
+  changeMemberRole,
+  loadMembers,
+  logOut,
+  observeCheckIn,
+  observeSession,
+  readableAuthError,
+  recordCheckIn,
+  registerPasskey,
+  signInWithApple,
+  signInWithGoogle,
+  signInWithPasskey,
+  supportsPasskeys,
+  updateActiveCheckIn,
+  updateProfileName
+} from "./firebase-client.js";
+
 const allowedViews = new Set(["home", "checkin", "profile"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
@@ -32,7 +51,6 @@ function readJson(key, fallback) {
 }
 
 const storedView = localStorage.getItem("fqc:view") || "home";
-const migratedOfficerLogin = localStorage.getItem("fqc:officer") === "true";
 const state = {
   view: allowedViews.has(storedView) ? storedView : "home",
   theme: localStorage.getItem("fqc:theme") || document.documentElement.dataset.theme || systemTheme,
@@ -40,11 +58,22 @@ const state = {
   calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-03",
   selectedEventId: localStorage.getItem("fqc:selected-event") || "fqc-2026-03-03-ionq",
   memberName: localStorage.getItem("fqc:name") || "Future Member",
-  loggedIn: localStorage.getItem("fqc:logged-in") === "true" || migratedOfficerLogin,
-  memberRole: migratedOfficerLogin ? "officer" : (localStorage.getItem("fqc:role") || "member"),
-  activeCheckInEventId: localStorage.getItem("fqc:active-checkin-event") || "fqc-2026-03-03-ionq",
-  checkInOpen: localStorage.getItem("fqc:checkin-open") !== "false",
-  checkedInEvents: readJson("fqc:checked-in-events", []),
+  memberEmail: "",
+  memberPhotoURL: "",
+  loggedIn: false,
+  authReady: false,
+  authBusy: false,
+  authError: "",
+  authMessage: "",
+  authUser: null,
+  memberRole: "member",
+  isAdmin: false,
+  passkeyCount: 0,
+  members: [],
+  membersLoading: false,
+  activeCheckInEventId: "fqc-2026-03-03-ionq",
+  checkInOpen: false,
+  checkedInEvents: [],
   rsvps: readJson("fqc:rsvps", []),
   notes: readJson("fqc:notes", [])
 };
@@ -410,12 +439,6 @@ function saveState() {
   localStorage.setItem("fqc:calendar-month", state.calendarMonth);
   localStorage.setItem("fqc:selected-event", state.selectedEventId);
   localStorage.setItem("fqc:name", state.memberName);
-  localStorage.setItem("fqc:logged-in", String(state.loggedIn));
-  localStorage.setItem("fqc:role", state.memberRole);
-  localStorage.setItem("fqc:officer", String(state.loggedIn && state.memberRole === "officer"));
-  localStorage.setItem("fqc:active-checkin-event", state.activeCheckInEventId);
-  localStorage.setItem("fqc:checkin-open", String(state.checkInOpen));
-  localStorage.setItem("fqc:checked-in-events", JSON.stringify(state.checkedInEvents));
   localStorage.setItem("fqc:rsvps", JSON.stringify(state.rsvps));
   localStorage.setItem("fqc:notes", JSON.stringify(state.notes));
 }
@@ -465,6 +488,10 @@ function applyTheme(theme, persist = true) {
 }
 
 async function nukeAndReload() {
+  try {
+    await logOut();
+  } catch {}
+
   try {
     localStorage.clear();
     sessionStorage.clear();
@@ -1154,7 +1181,77 @@ function renderMetrics(metrics) {
   `).join("");
 }
 
+function roleLabel() {
+  return state.memberRole === "officer" ? "Officer" : "Member";
+}
+
+function applyMemberProfile(profile) {
+  state.memberName = profile.displayName || "FQC Member";
+  state.memberEmail = profile.email || "";
+  state.memberPhotoURL = profile.photoURL || "";
+  state.memberRole = profile.role === "officer" ? "officer" : "member";
+  state.isAdmin = profile.isAdmin === true;
+  state.passkeyCount = Number(profile.passkeyCount) || 0;
+  state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
+  localStorage.setItem("fqc:name", state.memberName);
+}
+
+async function runAuthAction(action, successMessage = "") {
+  state.authBusy = true;
+  state.authError = "";
+  state.authMessage = "";
+  render();
+  try {
+    const result = await action();
+    if (successMessage) state.authMessage = successMessage;
+    return result;
+  } catch (error) {
+    state.authError = readableAuthError(error);
+    return null;
+  } finally {
+    state.authBusy = false;
+    render();
+  }
+}
+
+async function refreshMemberDirectory() {
+  if (!state.isAdmin) return;
+  state.membersLoading = true;
+  render();
+  try {
+    state.members = await loadMembers();
+    state.authError = "";
+  } catch (error) {
+    state.authError = readableAuthError(error);
+  } finally {
+    state.membersLoading = false;
+    render();
+  }
+}
+
+function renderAuthFeedback() {
+  return `
+    <div class="auth-feedback" aria-live="polite">
+      ${state.authError ? `<p class="form-error">${escapeHtml(state.authError)}</p>` : ""}
+      ${state.authMessage ? `<p class="form-success">${escapeHtml(state.authMessage)}</p>` : ""}
+    </div>
+  `;
+}
+
+function renderAuthLoading(screen) {
+  return `
+    <section class="view" data-screen="${screen}">
+      <section class="section auth-loading" aria-live="polite">
+        <span class="auth-spinner" aria-hidden="true"></span>
+        <h2>Checking your FQC account</h2>
+        <p>Securely restoring your Firebase session.</p>
+      </section>
+    </section>
+  `;
+}
+
 function renderCheckIn() {
+  if (!state.authReady) return renderAuthLoading("checkin");
   if (!state.loggedIn) {
     return `
       <section class="view" data-screen="checkin">
@@ -1195,8 +1292,8 @@ function renderCheckIn() {
         `}
       </section>
       <section class="section identity-card">
-        <span class="role-badge ${state.memberRole}">${state.memberRole === "officer" ? "Officer" : "Member"}</span>
-        <div><strong>${escapeHtml(state.memberName)}</strong><p>Signed in and ready for attendance.</p></div>
+        <span class="role-badge ${state.memberRole}">${roleLabel()}</span>
+        <div><strong>${escapeHtml(state.memberName)}</strong><p>${state.isAdmin ? "Administrator · " : ""}Signed in and ready for attendance.</p></div>
       </section>
     </section>
   `;
@@ -1234,6 +1331,36 @@ function renderOfficerWorkspace() {
   `;
 }
 
+function renderAdminWorkspace() {
+  if (!state.isAdmin) return "";
+  return `
+    <section class="section admin-roster">
+      <div class="section-header">
+        <div><p class="section-kicker">Administrator</p><h2>Member Roles</h2><p>Choose whether each signed-in FQC account is a Member or Officer.</p></div>
+        <button class="secondary-button" id="refresh-members" type="button" ${state.membersLoading ? "disabled" : ""}>${state.membersLoading ? "Loading…" : "Refresh"}</button>
+      </div>
+      <div class="member-roster" aria-live="polite">
+        ${state.membersLoading && !state.members.length ? '<p class="empty-state">Loading FQC accounts…</p>' : state.members.length ? state.members.map((member) => `
+          <article class="member-role-row" data-member-id="${escapeHtml(member.uid)}">
+            <div class="member-identity">
+              <strong>${escapeHtml(member.displayName)}</strong>
+              <span>${escapeHtml(member.email || "No shared email")}${member.isAdmin ? " · Administrator" : ""}</span>
+            </div>
+            <label>
+              <span class="sr-only">Role for ${escapeHtml(member.displayName)}</span>
+              <select data-member-role="${escapeHtml(member.uid)}" ${member.isAdmin ? "disabled" : ""}>
+                <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
+                <option value="officer" ${member.role === "officer" ? "selected" : ""}>Officer</option>
+              </select>
+            </label>
+            <button class="secondary-button" data-save-member-role="${escapeHtml(member.uid)}" type="button" ${member.isAdmin ? "disabled" : ""}>Save role</button>
+          </article>
+        `).join("") : '<p class="empty-state">No FQC accounts have signed in yet.</p>'}
+      </div>
+    </section>
+  `;
+}
+
 function renderNotes() {
   if (!state.notes.length) return '<p class="empty-state">No officer notes yet.</p>';
   return state.notes.map((note) => `
@@ -1245,19 +1372,33 @@ function renderNotes() {
 }
 
 function renderProfile() {
+  if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
     return `
       <section class="view" data-screen="profile">
         <section class="section profile-login">
-          <div>
-            <p class="section-kicker">One FQC account</p>
-            <h2>Sign in to FQC</h2>
-            <p>Your admin-issued access code determines whether your account opens as a Member or Officer.</p>
+          <div class="auth-brand">
+            <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
+            <div>
+              <p class="section-kicker">One secure FQC account</p>
+              <h2>Sign in to FQC</h2>
+              <p>Use Google, Apple, or your device passkey. Officers are assigned by an FQC administrator after sign-in.</p>
+            </div>
           </div>
-          <div class="form-row"><label for="login-name">Display name</label><input id="login-name" autocomplete="name" placeholder="Your name" /></div>
-          <div class="form-row"><label for="access-code">Access code</label><input id="access-code" type="password" autocomplete="current-password" placeholder="Admin-issued code" /></div>
-          <p class="form-error" id="login-error" hidden>Enter your name and a valid access code.</p>
-          <button class="primary-button" id="profile-login" type="button"><svg><use href="#icon-user"></use></svg><span>Sign In</span></button>
+          <div class="auth-provider-list">
+            <button class="auth-provider-button google" id="sign-in-google" type="button" ${state.authBusy ? "disabled" : ""}>
+              <span class="provider-mark" aria-hidden="true">G</span><span>Continue with Google</span>
+            </button>
+            <button class="auth-provider-button apple" id="sign-in-apple" type="button" ${state.authBusy ? "disabled" : ""}>
+              <span class="provider-mark apple-mark" aria-hidden="true"></span><span>Continue with Apple</span>
+            </button>
+            <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
+              <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
+            </button>
+          </div>
+          ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
+          ${renderAuthFeedback()}
+          <p class="auth-privacy">Firebase securely keeps your account signed in. FQC never receives your Google, Apple, Face ID, or Touch ID password.</p>
         </section>
       </section>
     `;
@@ -1269,13 +1410,18 @@ function renderProfile() {
       <section class="section">
         <div class="profile-summary">
           <div class="avatar">${profileInitial.textContent}</div>
-          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${state.memberRole === "officer" ? "Officer" : "Member"}</span></div><p>${state.memberRole === "officer" ? "FQC officer workspace" : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
+          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${state.isAdmin ? "Administrator · " : ""}${state.memberRole === "officer" ? "FQC officer workspace" : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
         </div>
       </section>
       <section class="section">
-        <div class="section-header"><div><h2>Profile</h2><p>One login controls your Check In and role-specific workspace.</p></div><button class="secondary-button" id="profile-logout" type="button">Sign Out</button></div>
+        <div class="section-header"><div><h2>Profile</h2><p>${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${roleLabel()}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
         <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
-        <button class="primary-button" id="save-profile" type="button"><svg><use href="#icon-check"></use></svg><span>Save</span></button>
+        <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
+        ${renderAuthFeedback()}
+      </section>
+      <section class="section passkey-card">
+        <div class="section-header"><div><p class="section-kicker">Passwordless security</p><h2>Passkeys</h2><p>Use Face ID, Touch ID, your screen lock, or a hardware security key next time.</p></div><span class="passkey-count">${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</span></div>
+        <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
       </section>
       ${state.memberRole === "officer" ? renderOfficerWorkspace() : `
         <section class="section">
@@ -1287,8 +1433,9 @@ function renderProfile() {
           <div class="leaderboard">${leaders.map(([name, badge, score], index) => `<article class="leader-card"><span class="leader-rank">${index + 1}</span><div><h3>${name}</h3><p>${badge}</p></div><strong>${score}</strong></article>`).join("")}</div>
         </section>
       `}
+      ${renderAdminWorkspace()}
       <section class="section">
-        <h2>Fix and Troubleshooting</h2><p>Reset local app data, clear the offline cache, and reload a fresh copy.</p>
+        <h2>Fix and Troubleshooting</h2><p>Sign out, reset local app data, clear the offline cache, and reload a fresh copy. Your Firebase account and attendance remain safe.</p>
         <button class="danger-button" id="nuke-reload" type="button"><svg><use href="#icon-plus"></use></svg><span>Nuke and Reload</span></button>
       </section>
     </section>
@@ -1308,53 +1455,36 @@ function bindViewEvents() {
 
   document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
 
-  document.querySelector("#profile-login")?.addEventListener("click", () => {
-    const nameInput = document.querySelector("#login-name");
-    const codeInput = document.querySelector("#access-code");
-    const name = nameInput.value.trim();
-    const code = codeInput.value.trim().toLowerCase();
-    if (!name || code.length < 4) {
-      nameInput.setAttribute("aria-invalid", String(!name));
-      codeInput.setAttribute("aria-invalid", String(code.length < 4));
-      document.querySelector("#login-error")?.removeAttribute("hidden");
-      return;
-    }
-    state.memberName = name;
-    state.memberRole = code === "officer" || code === "fqc" ? "officer" : "member";
-    state.loggedIn = true;
-    saveState();
-    render();
-  });
-
-  document.querySelector("#profile-logout")?.addEventListener("click", () => {
-    state.loggedIn = false;
-    state.memberRole = "member";
-    saveState();
-    render();
-  });
-
-  document.querySelector("#check-in-now")?.addEventListener("click", () => {
-    if (!state.loggedIn || !state.checkInOpen) return;
-    if (!state.checkedInEvents.includes(state.activeCheckInEventId)) {
-      state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
-      saveState();
+  document.querySelector("#sign-in-google")?.addEventListener("click", () => runAuthAction(signInWithGoogle));
+  document.querySelector("#sign-in-apple")?.addEventListener("click", () => runAuthAction(signInWithApple));
+  document.querySelector("#sign-in-passkey")?.addEventListener("click", () => runAuthAction(signInWithPasskey));
+  document.querySelector("#profile-logout")?.addEventListener("click", () => runAuthAction(logOut));
+  document.querySelector("#register-passkey")?.addEventListener("click", async () => {
+    const profile = await runAuthAction(registerPasskey, "Passkey added. You can now use Face ID, Touch ID, or your device lock to sign in.");
+    if (profile) {
+      applyMemberProfile(profile);
       render();
     }
   });
 
-  document.querySelector("#open-checkin")?.addEventListener("click", () => {
-    if (state.memberRole !== "officer") return;
-    state.activeCheckInEventId = document.querySelector("#active-checkin-event").value;
-    state.checkInOpen = true;
-    saveState();
-    render();
+  document.querySelector("#check-in-now")?.addEventListener("click", async () => {
+    if (!state.loggedIn || !state.checkInOpen) return;
+    const result = await runAuthAction(recordCheckIn);
+    if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
+      state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
+      render();
+    }
   });
 
-  document.querySelector("#close-checkin")?.addEventListener("click", () => {
+  document.querySelector("#open-checkin")?.addEventListener("click", async () => {
     if (state.memberRole !== "officer") return;
-    state.checkInOpen = false;
-    saveState();
-    render();
+    const eventId = document.querySelector("#active-checkin-event").value;
+    await runAuthAction(() => updateActiveCheckIn(eventId, true), "Check-in is open.");
+  });
+
+  document.querySelector("#close-checkin")?.addEventListener("click", async () => {
+    if (state.memberRole !== "officer") return;
+    await runAuthAction(() => updateActiveCheckIn(state.activeCheckInEventId, false), "Check-in is closed.");
   });
 
   document.querySelector("#add-note")?.addEventListener("click", () => {
@@ -1366,11 +1496,28 @@ function bindViewEvents() {
     render();
   });
 
-  document.querySelector("#save-profile")?.addEventListener("click", () => {
+  document.querySelector("#save-profile")?.addEventListener("click", async () => {
     const name = document.querySelector("#member-name").value.trim();
-    state.memberName = name || "Future Member";
-    saveState();
-    render();
+    if (name.length < 2) {
+      state.authError = "Enter a display name.";
+      render();
+      return;
+    }
+    const profile = await runAuthAction(() => updateProfileName(name), "Profile saved.");
+    if (profile) {
+      applyMemberProfile(profile);
+      render();
+    }
+  });
+
+  document.querySelector("#refresh-members")?.addEventListener("click", refreshMemberDirectory);
+  document.querySelectorAll("[data-save-member-role]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const uid = button.dataset.saveMemberRole;
+      const role = document.querySelector(`[data-member-role="${CSS.escape(uid)}"]`)?.value || "member";
+      const updated = await runAuthAction(() => changeMemberRole(uid, role), "Member role updated.");
+      if (updated) await refreshMemberDirectory();
+    });
   });
 
   document.querySelector("#nuke-reload")?.addEventListener("click", nukeAndReload);
@@ -1395,6 +1542,40 @@ document.addEventListener("visibilitychange", () => {
 window.setInterval(() => {
   if (!document.hidden && navigator.onLine) refreshEventData("five-minute refresh");
 }, EVENT_REFRESH_INTERVAL_MS);
+
+observeSession((session) => {
+  state.authReady = true;
+  state.authUser = session?.user || null;
+  state.loggedIn = Boolean(session?.user);
+  if (session?.profile) {
+    applyMemberProfile(session.profile);
+  } else {
+    state.memberName = "Future Member";
+    state.memberEmail = "";
+    state.memberPhotoURL = "";
+    state.memberRole = "member";
+    state.isAdmin = false;
+    state.passkeyCount = 0;
+    state.checkedInEvents = [];
+    state.members = [];
+    localStorage.removeItem("fqc:name");
+  }
+  render();
+  if (state.isAdmin && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
+}, (error) => {
+  state.authReady = true;
+  state.authError = readableAuthError(error);
+  render();
+});
+
+observeCheckIn((checkIn) => {
+  state.activeCheckInEventId = events.some((event) => event.id === checkIn.eventId) ? checkIn.eventId : events[0].id;
+  state.checkInOpen = checkIn.open === true;
+  if (state.authReady) render();
+}, (error) => {
+  state.authError = readableAuthError(error);
+  if (state.authReady) render();
+});
 
 applyTheme(state.theme, false);
 render();

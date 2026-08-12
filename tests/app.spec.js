@@ -22,6 +22,9 @@ const locationsCsv = `"Location","Address","Lat","Long","Historical Event Count"
 "Smathers Library","1508 Union Road, Gainesville, FL 32611","29.65092","-82.34181","0","10","https://campusmap.ufl.edu/#/index/0005"`;
 
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__FQC_AUTH_TEST__ = true;
+  });
   await page.route("https://*.tile.openstreetmap.org/**", async (route) => {
     const transparentPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
     await route.fulfill({ status: 200, contentType: "image/png", body: transparentPixel });
@@ -294,9 +297,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 
 test("one login assigns an officer role and exposes admin controls in Profile", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.getByLabel("Display name").fill("Morgan");
-  await page.getByLabel("Access code").fill("officer");
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
   await expect(page.getByText("Officer", { exact: true })).toBeVisible();
@@ -317,16 +318,14 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
   await page.getByRole("button", { name: "Open Profile Login" }).click();
-  await page.getByLabel("Display name").fill("Alex");
-  await page.getByLabel("Access code").fill("member-2026");
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.getByRole("button", { name: "Continue with Google" }).click();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
 
   await navButton(page, "Check In").click();
   await page.getByRole("button", { name: "Check In Now" }).click();
   await expect(page.getByRole("button", { name: "Checked In" })).toBeDisabled();
-  await expect(page.getByText("Attendance recorded for Alex.")).toBeVisible();
+  await expect(page.getByText("Attendance recorded for Google Member.")).toBeVisible();
 
   await navButton(page, "Profile").click();
   await page.getByLabel("Display name").fill("Alex Q");
@@ -336,12 +335,36 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await expect(page.locator("#profile-initial")).toHaveText("A");
 });
 
+test("an administrator can assign member and officer roles", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "admin-1", displayName: "Carter", email: "admin@ufl.edu", role: "officer", isAdmin: true },
+      { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "admin-1", displayName: "Carter", email: "admin@ufl.edu", role: "officer", isAdmin: true });
+  });
+
+  await expect(page.getByRole("heading", { name: "Member Roles" })).toBeVisible();
+  const row = page.locator('[data-member-id="member-1"]');
+  await row.locator("select").selectOption("officer");
+  await row.getByRole("button", { name: "Save role" }).click();
+  await expect(row.locator("select")).toHaveValue("officer");
+});
+
+test("a signed-in member can add a device passkey", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.getByRole("button", { name: "Continue with Google" }).click();
+  await expect(page.getByText("0 passkeys")).toBeVisible();
+  await page.getByRole("button", { name: "Set Up Face ID / Touch ID" }).click();
+  await expect(page.getByText("1 passkey", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Passkey added/)).toBeVisible();
+});
+
 test("nukes local app data and reloads a fresh events home", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.getByLabel("Display name").fill("Alex");
-  await page.getByLabel("Access code").fill("member-2026");
-  await page.getByRole("button", { name: "Sign In" }).click();
-  await expect(page.getByRole("heading", { name: "Alex", level: 2 })).toBeVisible();
+  await page.getByRole("button", { name: "Continue with Google" }).click();
+  await expect(page.getByRole("heading", { name: "Google Member", level: 2 })).toBeVisible();
 
   const reload = page.waitForEvent("framenavigated");
   await page.getByRole("button", { name: "Nuke and Reload" }).click();

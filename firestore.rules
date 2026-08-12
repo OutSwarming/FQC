@@ -1,0 +1,52 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isOfficer() {
+      return signedIn() && (request.auth.token.role == 'officer' || request.auth.token.admin == true);
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    match /users/{uid} {
+      allow read: if isSelf(uid) || isAdmin();
+      allow create, update, delete: if false;
+
+      match /passkeys/{passkeyId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /events/{eventId}/checkins/{uid} {
+      allow read: if isSelf(uid) || isOfficer();
+      allow write: if false;
+    }
+
+    match /passkeyCredentials/{credentialId} {
+      allow read, write: if false;
+    }
+
+    match /passkeyChallenges/{challengeId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
