@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v9";
+const CACHE_NAME = "fqc-app-v10-uf-map";
 const ASSETS = [
   "./",
   "./index.html",

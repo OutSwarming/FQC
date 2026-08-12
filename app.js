@@ -7,6 +7,21 @@ const EVENT_DATA_SOURCE = "FQC Events Google Sheet";
 const MAX_EVENTS = 250;
 const MAX_LOCATIONS = 250;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,80}$/i;
+const UF_CAMPUS_BOUNDS = Object.freeze({
+  south: 29.62,
+  west: -82.39,
+  north: 29.67,
+  east: -82.31
+});
+
+function isUfCampusCoordinate(lat, lng) {
+  return Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= UF_CAMPUS_BOUNDS.south &&
+    lat <= UF_CAMPUS_BOUNDS.north &&
+    lng >= UF_CAMPUS_BOUNDS.west &&
+    lng <= UF_CAMPUS_BOUNDS.east;
+}
 
 function readJson(key, fallback) {
   try {
@@ -179,7 +194,7 @@ function buildSheetEventData(eventsCsv, locationsCsv) {
     const id = locationIdFor(name);
     const lat = Number(row.Lat || row.Latitude);
     const lng = Number(row.Long || row.Longitude);
-    if (!id || !name || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (!id || !name || !isUfCampusCoordinate(lat, lng)) return;
     nextLocations[id] = { id, name, address: row.Address || "University of Florida", lat, lng };
   });
 
@@ -238,12 +253,7 @@ function isValidEventData(nextData) {
     typeof location.name === "string" &&
     location.name.trim().length > 0 &&
     typeof location.address === "string" &&
-    Number.isFinite(location.lat) &&
-    Number.isFinite(location.lng) &&
-    location.lat >= -90 &&
-    location.lat <= 90 &&
-    location.lng >= -180 &&
-    location.lng <= 180
+    isUfCampusCoordinate(location.lat, location.lng)
   ));
   if (!validLocations) return false;
 
@@ -541,6 +551,10 @@ function renderHome() {
 
         <div class="event-map-shell">
           <div class="map-status"><span></span>${events.length} published ${events.length === 1 ? "event" : "events"}</div>
+          <a class="event-map-campus" href="https://campusmap.ufl.edu/" target="_blank" rel="noreferrer" aria-label="Open the official University of Florida campus map">
+            <strong>UF CAMPUS</strong>
+            <span>Gainesville, Florida</span>
+          </a>
           <div id="event-map" aria-label="Map of FQC event locations"></div>
           <div class="event-map-message" id="event-map-message" hidden>Map tiles are unavailable. Event details still work below.</div>
           <div class="event-details" id="event-details" aria-live="polite">
@@ -745,7 +759,12 @@ function initEventMap() {
   eventMap = window.L.map(mapElement, {
     zoomControl: false,
     attributionControl: true,
-    scrollWheelZoom: false
+    scrollWheelZoom: false,
+    maxBounds: [
+      [UF_CAMPUS_BOUNDS.south, UF_CAMPUS_BOUNDS.west],
+      [UF_CAMPUS_BOUNDS.north, UF_CAMPUS_BOUNDS.east]
+    ],
+    maxBoundsViscosity: 1
   });
 
   window.L.control.zoom({ position: "topright" }).addTo(eventMap);

@@ -47,11 +47,46 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.locator("#event-map")).toBeVisible();
   await expect(page.locator(".event-map-pin")).toHaveCount(7);
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the official University of Florida campus map" })).toContainText("UF CAMPUS");
 
   const navLabels = ["Home", "Officers", "Profile"];
   for (const label of navLabels) await expect(navButton(page, label)).toBeVisible();
   await expect(navButton(page, "Calendar")).toHaveCount(0);
   await expect(navButton(page, "Map")).toHaveCount(0);
+});
+
+test("rejects cached locations outside the UF Gainesville campus", async ({ page }) => {
+  await page.unroute("https://docs.google.com/spreadsheets/**");
+  await page.route("https://docs.google.com/spreadsheets/**", (route) => route.abort());
+  await page.evaluate(() => {
+    localStorage.setItem("fqc:event-data", JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      events: [{
+        id: "ucf-event",
+        date: "2026-03-03",
+        title: "Wrong campus event",
+        time: "6:00 PM",
+        locationId: "ucf-student-union",
+        room: "Room 101",
+        description: "This must never appear."
+      }],
+      locations: {
+        "ucf-student-union": {
+          id: "ucf-student-union",
+          name: "UCF Student Union",
+          address: "Orlando, Florida",
+          lat: 28.6024,
+          lng: -81.2001
+        }
+      }
+    }));
+  });
+
+  await page.reload();
+  await expect(page.getByText("Wrong campus event")).toHaveCount(0);
+  await expect(page.getByText("UCF Student Union")).toHaveCount(0);
+  await expect(page.getByText("Reitz Student Union", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the official University of Florida campus map" })).toContainText("Gainesville, Florida");
 });
 
 test("rejects an unsafe saved schedule and replaces it with live Sheet data", async ({ page }) => {
