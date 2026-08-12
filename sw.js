@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v15-smooth-list";
+const CACHE_NAME = "fqc-app-v16-identity-checkin";
 const ASSETS = [
   "./",
   "./index.html",

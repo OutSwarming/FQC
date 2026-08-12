@@ -49,7 +49,7 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
   await expect(page.locator(".event-map-campus")).toHaveCount(0);
 
-  const navLabels = ["Home", "Officers", "Profile"];
+  const navLabels = ["Home", "Check In", "Profile"];
   for (const label of navLabels) await expect(navButton(page, label)).toBeVisible();
   await expect(navButton(page, "Calendar")).toHaveCount(0);
   await expect(navButton(page, "Map")).toHaveCount(0);
@@ -292,33 +292,55 @@ test("switches between light and dark themes and remembers the choice", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
-test("unlocks officer portal and adds a note", async ({ page }) => {
-  await navButton(page, "Officers").click();
-  await page.getByLabel("Officer code").fill("officer");
-  await page.getByRole("button", { name: "Unlock Portal" }).click();
+test("one login assigns an officer role and exposes admin controls in Profile", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.getByLabel("Display name").fill("Morgan");
+  await page.getByLabel("Access code").fill("officer");
+  await page.getByRole("button", { name: "Sign In" }).click();
 
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
+  await expect(page.getByText("Officer", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Officer metrics").getByText("$1,840")).toBeVisible();
 
   await page.getByLabel("Area").selectOption("Permits");
   await page.getByLabel("Note").fill("Confirm room permit owner");
   await page.getByRole("button", { name: "Add Note" }).click();
   await expect(page.getByText("Confirm room permit owner")).toBeVisible();
+
+  await page.getByLabel("Active event").selectOption("fqc-2026-04-14-gbm-3");
+  await page.getByRole("button", { name: "Update Active Event" }).click();
+  await navButton(page, "Check In").click();
+  await expect(page.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
 });
 
-test("updates the member profile name", async ({ page }) => {
-  await navButton(page, "Profile").click();
+test("member login enables event check-in and shows a member profile", async ({ page }) => {
+  await navButton(page, "Check In").click();
+  await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
+  await page.getByRole("button", { name: "Open Profile Login" }).click();
   await page.getByLabel("Display name").fill("Alex");
+  await page.getByLabel("Access code").fill("member-2026");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page.getByText("Member", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
+
+  await navButton(page, "Check In").click();
+  await page.getByRole("button", { name: "Check In Now" }).click();
+  await expect(page.getByRole("button", { name: "Checked In" })).toBeDisabled();
+  await expect(page.getByText("Attendance recorded for Alex.")).toBeVisible();
+
+  await navButton(page, "Profile").click();
+  await page.getByLabel("Display name").fill("Alex Q");
   await page.getByRole("button", { name: "Save" }).click();
 
-  await expect(page.getByRole("heading", { name: "Alex", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Alex Q", level: 2 })).toBeVisible();
   await expect(page.locator("#profile-initial")).toHaveText("A");
 });
 
 test("nukes local app data and reloads a fresh events home", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByLabel("Display name").fill("Alex");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByLabel("Access code").fill("member-2026");
+  await page.getByRole("button", { name: "Sign In" }).click();
   await expect(page.getByRole("heading", { name: "Alex", level: 2 })).toBeVisible();
 
   const reload = page.waitForEvent("framenavigated");

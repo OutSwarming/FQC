@@ -1,4 +1,4 @@
-const allowedViews = new Set(["home", "officers", "profile"]);
+const allowedViews = new Set(["home", "checkin", "profile"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -32,6 +32,7 @@ function readJson(key, fallback) {
 }
 
 const storedView = localStorage.getItem("fqc:view") || "home";
+const migratedOfficerLogin = localStorage.getItem("fqc:officer") === "true";
 const state = {
   view: allowedViews.has(storedView) ? storedView : "home",
   theme: localStorage.getItem("fqc:theme") || document.documentElement.dataset.theme || systemTheme,
@@ -39,7 +40,11 @@ const state = {
   calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-03",
   selectedEventId: localStorage.getItem("fqc:selected-event") || "fqc-2026-03-03-ionq",
   memberName: localStorage.getItem("fqc:name") || "Future Member",
-  officerMode: localStorage.getItem("fqc:officer") === "true",
+  loggedIn: localStorage.getItem("fqc:logged-in") === "true" || migratedOfficerLogin,
+  memberRole: migratedOfficerLogin ? "officer" : (localStorage.getItem("fqc:role") || "member"),
+  activeCheckInEventId: localStorage.getItem("fqc:active-checkin-event") || "fqc-2026-03-03-ionq",
+  checkInOpen: localStorage.getItem("fqc:checkin-open") !== "false",
+  checkedInEvents: readJson("fqc:checked-in-events", []),
   rsvps: readJson("fqc:rsvps", []),
   notes: readJson("fqc:notes", [])
 };
@@ -352,6 +357,8 @@ async function refreshEventData(reason = "scheduled refresh") {
 loadCachedEventData();
 
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
+if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
+if (!/^(member|officer)$/.test(state.memberRole)) state.memberRole = "member";
 if (!/^(list|calendar)$/.test(state.eventMode)) state.eventMode = "list";
 if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].date.slice(0, 7);
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
@@ -380,7 +387,7 @@ const leaders = [
 
 const titles = {
   home: "Events",
-  officers: "Officers",
+  checkin: "Check In",
   profile: "Profile"
 };
 
@@ -403,7 +410,12 @@ function saveState() {
   localStorage.setItem("fqc:calendar-month", state.calendarMonth);
   localStorage.setItem("fqc:selected-event", state.selectedEventId);
   localStorage.setItem("fqc:name", state.memberName);
-  localStorage.setItem("fqc:officer", String(state.officerMode));
+  localStorage.setItem("fqc:logged-in", String(state.loggedIn));
+  localStorage.setItem("fqc:role", state.memberRole);
+  localStorage.setItem("fqc:officer", String(state.loggedIn && state.memberRole === "officer"));
+  localStorage.setItem("fqc:active-checkin-event", state.activeCheckInEventId);
+  localStorage.setItem("fqc:checkin-open", String(state.checkInOpen));
+  localStorage.setItem("fqc:checked-in-events", JSON.stringify(state.checkedInEvents));
   localStorage.setItem("fqc:rsvps", JSON.stringify(state.rsvps));
   localStorage.setItem("fqc:notes", JSON.stringify(state.notes));
 }
@@ -509,7 +521,7 @@ function render() {
 
   const views = {
     home: renderHome,
-    officers: renderOfficers,
+    checkin: renderCheckIn,
     profile: renderProfile
   };
 
@@ -1142,56 +1154,82 @@ function renderMetrics(metrics) {
   `).join("");
 }
 
-function renderOfficers() {
-  if (!state.officerMode) {
+function renderCheckIn() {
+  if (!state.loggedIn) {
     return `
-      <section class="view" data-screen="officers">
-        <section class="section officer-gate">
-          <div>
-            <p class="section-kicker">Private workspace</p>
-            <h2>Officer Portal</h2>
-            <p>Sign in for budget, permits, rooms, advertising, socials, and attendance tracking.</p>
-          </div>
-          <div class="form-row">
-            <label for="officer-code">Officer code</label>
-            <input id="officer-code" type="password" autocomplete="off" placeholder="Try officer" />
-          </div>
-          <button class="primary-button" id="officer-login" type="button">
-            <svg><use href="#icon-lock"></use></svg><span>Unlock Portal</span>
-          </button>
+      <section class="view" data-screen="checkin">
+        <section class="section checkin-gate">
+          <div class="checkin-icon"><svg><use href="#icon-check"></use></svg></div>
+          <p class="section-kicker">Attendance</p>
+          <h2>Sign in to check in</h2>
+          <p>Use your FQC profile for tabling, GBMs, workshops, speaker sessions, and socials.</p>
+          <button class="primary-button" id="go-to-login" type="button">Open Profile Login</button>
         </section>
       </section>
     `;
   }
 
+  const event = getEvent(state.activeCheckInEventId);
+  const location = getEventLocation(event);
+  const checkedIn = state.checkedInEvents.includes(event.id);
   return `
-    <section class="view" data-screen="officers">
-      <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(officerStats)}</section>
-      <section class="section">
-        <div class="section-header">
-          <div><p class="section-kicker">Operations</p><h2>Officer Command Center</h2><p>Budget, attendance, permits, rooms, advertising, and socials.</p></div>
-          <button class="danger-button" id="officer-logout" type="button">Lock</button>
-        </div>
-        <div class="portal-grid">
-          ${officerStats.map(([value, label]) => `<article class="officer-card"><strong>${value}</strong><p>${label}</p></article>`).join("")}
-        </div>
+    <section class="view" data-screen="checkin">
+      <section class="section checkin-hero">
+        <div class="checkin-status ${state.checkInOpen ? "live" : "closed"}"><span></span>${state.checkInOpen ? "Check-in open" : "No check-in open"}</div>
+        ${state.checkInOpen ? `
+          <p class="section-kicker">Current FQC event</p>
+          <h2>${escapeHtml(event.title)}</h2>
+          <div class="checkin-meta">
+            <span>${escapeHtml(event.time)}</span>
+            <span>${escapeHtml(location.name)}</span>
+            <span>${escapeHtml(event.room)}</span>
+          </div>
+          <p>${escapeHtml(event.description)}</p>
+          <button class="primary-button checkin-button${checkedIn ? " going" : ""}" id="check-in-now" type="button" ${checkedIn ? "disabled" : ""}>
+            <svg><use href="#icon-check"></use></svg><span>${checkedIn ? "Checked In" : "Check In Now"}</span>
+          </button>
+          ${checkedIn ? `<p class="checkin-confirmation">Attendance recorded for ${escapeHtml(state.memberName)}.</p>` : ""}
+        ` : `
+          <h2>Nothing active right now</h2>
+          <p>An officer will open this screen when tabling or an FQC event begins.</p>
+        `}
       </section>
-      <section class="section">
-        <h2>Planning Tasks</h2>
-        <div class="task-list">
-          ${tasks.map(([area, task, status]) => `<article class="task-item"><div><h3>${area}</h3><p>${task}</p></div><span class="task-status">${status}</span></article>`).join("")}
-        </div>
+      <section class="section identity-card">
+        <span class="role-badge ${state.memberRole}">${state.memberRole === "officer" ? "Officer" : "Member"}</span>
+        <div><strong>${escapeHtml(state.memberName)}</strong><p>Signed in and ready for attendance.</p></div>
       </section>
-      <section class="section">
-        <div class="section-header"><div><h2>Officer Notes</h2><p>Saved locally for the prototype.</p></div></div>
+    </section>
+  `;
+}
+
+function renderOfficerWorkspace() {
+  return `
+    <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(officerStats)}</section>
+    <section class="section">
+      <div class="section-header"><div><p class="section-kicker">Admin controls</p><h2>Event Check-In</h2><p>Choose the event members can check into from the middle tab.</p></div></div>
+      <div class="checkin-admin-grid">
         <div class="form-row">
-          <label for="note-area">Area</label>
-          <select id="note-area"><option>Budget</option><option>Attendance</option><option>Permits</option><option>Rooms</option><option>Advertising</option><option>Socials</option></select>
+          <label for="active-checkin-event">Active event</label>
+          <select id="active-checkin-event">${events.map((event) => `<option value="${event.id}" ${event.id === state.activeCheckInEventId ? "selected" : ""}>${escapeHtml(event.title)}</option>`).join("")}</select>
         </div>
-        <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" placeholder="Add the next action or decision"></textarea></div>
-        <button class="primary-button" id="add-note" type="button"><svg><use href="#icon-plus"></use></svg><span>Add Note</span></button>
-        <div class="task-list" id="notes-list">${renderNotes()}</div>
-      </section>
+        <button class="primary-button" id="open-checkin" type="button">${state.checkInOpen ? "Update Active Event" : "Open Check-In"}</button>
+        <button class="secondary-button" id="close-checkin" type="button" ${state.checkInOpen ? "" : "disabled"}>Close Check-In</button>
+      </div>
+    </section>
+    <section class="section">
+      <div class="section-header"><div><p class="section-kicker">Operations</p><h2>Officer Command Center</h2><p>Budget, attendance, permits, rooms, advertising, and socials.</p></div></div>
+      <div class="portal-grid">${officerStats.map(([value, label]) => `<article class="officer-card"><strong>${value}</strong><p>${label}</p></article>`).join("")}</div>
+    </section>
+    <section class="section">
+      <h2>Planning Tasks</h2>
+      <div class="task-list">${tasks.map(([area, task, status]) => `<article class="task-item"><div><h3>${area}</h3><p>${task}</p></div><span class="task-status">${status}</span></article>`).join("")}</div>
+    </section>
+    <section class="section">
+      <div class="section-header"><div><h2>Officer Notes</h2><p>Saved locally for this prototype.</p></div></div>
+      <div class="form-row"><label for="note-area">Area</label><select id="note-area"><option>Budget</option><option>Attendance</option><option>Permits</option><option>Rooms</option><option>Advertising</option><option>Socials</option></select></div>
+      <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" placeholder="Add the next action or decision"></textarea></div>
+      <button class="primary-button" id="add-note" type="button"><svg><use href="#icon-plus"></use></svg><span>Add Note</span></button>
+      <div class="task-list" id="notes-list">${renderNotes()}</div>
     </section>
   `;
 }
@@ -1207,29 +1245,51 @@ function renderNotes() {
 }
 
 function renderProfile() {
+  if (!state.loggedIn) {
+    return `
+      <section class="view" data-screen="profile">
+        <section class="section profile-login">
+          <div>
+            <p class="section-kicker">One FQC account</p>
+            <h2>Sign in to FQC</h2>
+            <p>Your admin-issued access code determines whether your account opens as a Member or Officer.</p>
+          </div>
+          <div class="form-row"><label for="login-name">Display name</label><input id="login-name" autocomplete="name" placeholder="Your name" /></div>
+          <div class="form-row"><label for="access-code">Access code</label><input id="access-code" type="password" autocomplete="current-password" placeholder="Admin-issued code" /></div>
+          <p class="form-error" id="login-error" hidden>Enter your name and a valid access code.</p>
+          <button class="primary-button" id="profile-login" type="button"><svg><use href="#icon-user"></use></svg><span>Sign In</span></button>
+        </section>
+      </section>
+    `;
+  }
+
   const points = 730 + state.rsvps.length * 50;
   return `
     <section class="view" data-screen="profile">
       <section class="section">
         <div class="profile-summary">
           <div class="avatar">${profileInitial.textContent}</div>
-          <div><h2>${escapeHtml(state.memberName)}</h2><p>${points} points earned</p><div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div></div>
+          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${state.memberRole === "officer" ? "Officer" : "Member"}</span></div><p>${state.memberRole === "officer" ? "FQC officer workspace" : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
         </div>
       </section>
       <section class="section">
-        <h2>Profile</h2>
+        <div class="section-header"><div><h2>Profile</h2><p>One login controls your Check In and role-specific workspace.</p></div><button class="secondary-button" id="profile-logout" type="button">Sign Out</button></div>
         <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
         <button class="primary-button" id="save-profile" type="button"><svg><use href="#icon-check"></use></svg><span>Save</span></button>
       </section>
+      ${state.memberRole === "officer" ? renderOfficerWorkspace() : `
+        <section class="section">
+          <h2>Member Activity</h2>
+          <p>${state.checkedInEvents.length} event ${state.checkedInEvents.length === 1 ? "check-in" : "check-ins"} and ${state.rsvps.length} active ${state.rsvps.length === 1 ? "RSVP" : "RSVPs"}.</p>
+        </section>
+        <section class="section">
+          <h2>Leaderboard</h2>
+          <div class="leaderboard">${leaders.map(([name, badge, score], index) => `<article class="leader-card"><span class="leader-rank">${index + 1}</span><div><h3>${name}</h3><p>${badge}</p></div><strong>${score}</strong></article>`).join("")}</div>
+        </section>
+      `}
       <section class="section">
         <h2>Fix and Troubleshooting</h2><p>Reset local app data, clear the offline cache, and reload a fresh copy.</p>
         <button class="danger-button" id="nuke-reload" type="button"><svg><use href="#icon-plus"></use></svg><span>Nuke and Reload</span></button>
-      </section>
-      <section class="section">
-        <h2>Leaderboard</h2>
-        <div class="leaderboard">
-          ${leaders.map(([name, badge, score], index) => `<article class="leader-card"><span class="leader-rank">${index + 1}</span><div><h3>${name}</h3><p>${badge}</p></div><strong>${score}</strong></article>`).join("")}
-        </div>
       </section>
     </section>
   `;
@@ -1246,20 +1306,53 @@ function bindViewEvents() {
   bindRsvpEvents();
   bindMobileEventSheet();
 
-  document.querySelector("#officer-login")?.addEventListener("click", () => {
-    const input = document.querySelector("#officer-code");
-    const code = input.value.trim().toLowerCase();
-    if (code === "officer" || code === "fqc") {
-      state.officerMode = true;
-      saveState();
-      render();
+  document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
+
+  document.querySelector("#profile-login")?.addEventListener("click", () => {
+    const nameInput = document.querySelector("#login-name");
+    const codeInput = document.querySelector("#access-code");
+    const name = nameInput.value.trim();
+    const code = codeInput.value.trim().toLowerCase();
+    if (!name || code.length < 4) {
+      nameInput.setAttribute("aria-invalid", String(!name));
+      codeInput.setAttribute("aria-invalid", String(code.length < 4));
+      document.querySelector("#login-error")?.removeAttribute("hidden");
       return;
     }
-    input.setAttribute("aria-invalid", "true");
+    state.memberName = name;
+    state.memberRole = code === "officer" || code === "fqc" ? "officer" : "member";
+    state.loggedIn = true;
+    saveState();
+    render();
   });
 
-  document.querySelector("#officer-logout")?.addEventListener("click", () => {
-    state.officerMode = false;
+  document.querySelector("#profile-logout")?.addEventListener("click", () => {
+    state.loggedIn = false;
+    state.memberRole = "member";
+    saveState();
+    render();
+  });
+
+  document.querySelector("#check-in-now")?.addEventListener("click", () => {
+    if (!state.loggedIn || !state.checkInOpen) return;
+    if (!state.checkedInEvents.includes(state.activeCheckInEventId)) {
+      state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
+      saveState();
+      render();
+    }
+  });
+
+  document.querySelector("#open-checkin")?.addEventListener("click", () => {
+    if (state.memberRole !== "officer") return;
+    state.activeCheckInEventId = document.querySelector("#active-checkin-event").value;
+    state.checkInOpen = true;
+    saveState();
+    render();
+  });
+
+  document.querySelector("#close-checkin")?.addEventListener("click", () => {
+    if (state.memberRole !== "officer") return;
+    state.checkInOpen = false;
     saveState();
     render();
   });

@@ -883,6 +883,115 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
 
 .officer-gate { max-width: 620px; margin: 60px auto 0; gap: 14px; }
 
+.profile-login,
+.checkin-gate,
+.checkin-hero {
+  width: min(100%, 680px);
+  margin: 28px auto 0;
+}
+
+.profile-login { display: grid; gap: 4px; }
+
+.checkin-gate {
+  display: grid;
+  justify-items: center;
+  padding-block: 44px;
+  text-align: center;
+}
+
+.checkin-gate p { max-width: 480px; }
+
+.checkin-icon {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 18px;
+  border-radius: 20px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.checkin-icon svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 2.2; }
+
+.checkin-status {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 22px;
+  padding: 8px 11px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.checkin-status span { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.checkin-status.live { color: var(--success); background: var(--success-soft); }
+
+.checkin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.checkin-meta span {
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.checkin-button { min-width: 190px; margin-top: 8px; }
+.checkin-button:disabled { cursor: default; opacity: 1; }
+.checkin-confirmation { margin: 12px 0 0; color: var(--success); font-size: 0.78rem; font-weight: 800; }
+
+.identity-card {
+  width: min(100%, 680px);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.identity-card p { margin: 3px 0 0; font-size: 0.78rem; }
+
+.role-badge {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 0.65rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.role-badge.officer { color: #8a4b00; background: #fff0d5; }
+:root[data-theme="dark"] .role-badge.officer { color: #ffc978; background: #402b10; }
+
+.profile-role-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.profile-role-line h2 { margin-bottom: 0; }
+
+.checkin-admin-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.checkin-admin-grid .form-row { margin-bottom: 0; }
+.form-error { margin: -4px 0 12px; color: var(--danger); font-size: 0.78rem; font-weight: 800; }
+
 .form-row { display: grid; gap: 8px; margin-bottom: 14px; }
 
 label { color: var(--ink); font-size: 0.86rem; font-weight: 850; }
@@ -1054,6 +1163,13 @@ textarea { min-height: 96px; resize: vertical; }
   h1 { font-size: 1.3rem; }
   .theme-toggle,
   .profile-chip { width: 39px; height: 39px; }
+
+  .profile-login,
+  .checkin-gate,
+  .checkin-hero { margin-top: 10px; }
+
+  .checkin-gate { padding-block: 34px; }
+  .checkin-admin-grid { grid-template-columns: 1fr; }
 
   .event-explorer {
     position: relative;
@@ -1250,6 +1366,7 @@ textarea { min-height: 96px; resize: vertical; }
 
 @media (min-width: 681px) {
   .app-shell { padding-bottom: 18px; }
+  .view[data-screen="profile"] { padding-bottom: calc(80px + var(--safe-bottom)); }
   .topbar { position: relative; }
   .bottom-nav {
     left: max(18px, calc(50% - 572px));
