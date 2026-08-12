@@ -5,6 +5,16 @@ A responsive web app prototype for Florida Quantum Computing. It is designed for
 - Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
 - Officers: attendance, budget, permits, rooms, advertising, socials, and quick planning records.
 
+## Event Data Workflow
+
+The public event explorer reads from the organization-owned native Google Sheet [FQC Events – Website Schedule](https://docs.google.com/spreadsheets/d/1USQju8bWHgXu6X95-NVh6PAGp6GyjCNPqecfTPBTx50/edit). The `Events` table contains the event name, date, start time, venue, room, description, publish status, and a stable event ID. The `UF Locations` table contains map coordinates and ranks venue choices by historical FQC usage.
+
+- Set `Published` to `Yes` to include a valid row in the app; `No` rows stay private to the planning sheet.
+- Choose a venue from the Location dropdown so the event can be placed on the map.
+- Keep each Event ID unique and unchanged after publication so member RSVPs remain attached to the right event.
+- The app refreshes the Sheet when it opens, when the tab becomes active, and every five minutes while online.
+- A last-good local copy and a bundled copy of the verified Spring 2026 schedule keep the UI usable if Google Sheets is unavailable.
+
 ## Milestone Plan
 
 1. Static app foundation
