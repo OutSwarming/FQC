@@ -60,6 +60,12 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
   await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toHaveAttribute("src", "/assets/fqc-badge.png");
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", /fqc-badge\.png/);
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", /fqc-badge\.png/);
+  const manifest = await page.evaluate(() => fetch(document.querySelector('link[rel="manifest"]').href).then((response) => response.json()));
+  expect(manifest.icons).toEqual([
+    expect.objectContaining({ src: "/assets/fqc-badge.png?v=23", sizes: "900x900", type: "image/png" })
+  ]);
   await expect(page.locator("#event-intro").getByRole("heading", { name: "IonQ Quantum Networking Speaker Session", level: 2 })).toBeVisible();
   await expect(page.getByRole("region", { name: "FQC events and locations" })).toBeVisible();
   await expect(page.locator("#event-map")).toBeVisible();
@@ -338,7 +344,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.0.2 · Current")).toBeVisible();
+  await expect(page.getByText("v2.0.3 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
