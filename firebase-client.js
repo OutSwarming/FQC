@@ -46,6 +46,29 @@ let mockOfficerResources = [
   { id: "event-logistics", title: "2026 Event Logistics", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["all"], summary: "Live event and budget workbook.", url: "https://drive.google.com/open?id=mock-events" },
   { id: "president-guide", title: "President Guide", kind: "Google Doc", category: "Role Guides", roles: ["president"], featured: ["president"], summary: "President responsibilities and workflow.", url: "https://drive.google.com/open?id=mock-president" }
 ];
+let mockOfficerEventOperations = {
+  events: [
+    {
+      id: "fqc-2026-03-03-ionq", row: 2, date: "2026-03-03", time: "3:30 PM", title: "IonQ Quantum Networking Speaker Session",
+      location: "Reitz Student Union 2340", backupRoom: "Larsen 234", attendance: "40", permitStatus: "Confirmed", permitNumber: "058982-GP",
+      roomStatus: "Confirmed", backupRoomStatus: "Submitted", notes: "Confirm the catering pickup owner.", plannedBudget: 80, actualSpend: 0,
+      remainingBudget: 80, fundingSource: "Operational Funding", budgetStatus: "Planned", eventStatus: "Confirmed",
+      rsvps: [{ uid: "member-2", displayName: "Jordan", role: "member" }], officerRsvps: []
+    },
+    {
+      id: "fqc-2026-04-14-gbm-3", row: 3, date: "2026-04-14", time: "6:00 PM", title: "GBM 3: Quantum Technology Today",
+      location: "Larsen Hall 234", backupRoom: "", attendance: "70", permitStatus: "Pending", permitNumber: "",
+      roomStatus: "Submitted", backupRoomStatus: "Not submitted", notes: "", plannedBudget: 140, actualSpend: 40,
+      remainingBudget: 100, fundingSource: "Operational Funding", budgetStatus: "In progress", eventStatus: "Planned", rsvps: [], officerRsvps: []
+    }
+  ],
+  budgetItems: [
+    { row: 2, eventId: "fqc-2026-03-03-ionq", event: "IonQ Quantum Networking Speaker Session", date: "2026-03-03", item: "Speaker catering", quantity: 1, unit: "order", unitCost: 80, plannedCost: 80, actualCost: 0, fundingSource: "Operational Funding", status: "Estimate", notes: "Confirm final receipt." }
+  ],
+  totals: { baseFunding: 1050, operationalFunding: 2490, totalApproved: 3540, plannedSpend: 220, actualSpend: 40, availableAfterActual: 3500, uncommittedAfterPlan: 3320 },
+  locations: ["Malachowsky Hall", "Larsen Hall", "Reitz Student Union", "Marston Science Library"],
+  updatedAt: new Date().toISOString()
+};
 let mockUfidDirectory = new Map();
 let redirectResultChecked = false;
 
@@ -137,6 +160,7 @@ if (testMode) {
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
     setLeaderboard: (snapshot) => { mockLeaderboard = normalizedLeaderboard(snapshot); },
     setOfficerResources: (resources) => { mockOfficerResources = resources; },
+    setOfficerEventOperations: (operations) => { mockOfficerEventOperations = structuredClone(operations); },
     getLeaderboardReads: () => mockLeaderboardReads,
     resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
     setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); }
@@ -369,6 +393,68 @@ export async function loadOfficerResources() {
   if (testMode) return mockOfficerResources.map((resource) => ({ ...resource }));
   const result = await callable("getOfficerResources")();
   return Array.isArray(result.data?.resources) ? result.data.resources : [];
+}
+
+export async function loadOfficerEventOperations() {
+  if (testMode) return structuredClone(mockOfficerEventOperations);
+  const result = await callable("getOfficerEventOperations")();
+  return result.data;
+}
+
+export async function saveOfficerEvent(event) {
+  if (testMode) {
+    const existingIndex = mockOfficerEventOperations.events.findIndex((entry) => entry.id === event.id);
+    const normalized = {
+      ...event,
+      id: event.id || `fqc-${event.date}-${String(event.title || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 52)}`,
+      row: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].row : mockOfficerEventOperations.events.length + 2,
+      plannedBudget: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].plannedBudget : 0,
+      actualSpend: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].actualSpend : 0,
+      remainingBudget: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].remainingBudget : 0,
+      rsvps: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].rsvps : [],
+      officerRsvps: existingIndex >= 0 ? mockOfficerEventOperations.events[existingIndex].officerRsvps : []
+    };
+    if (existingIndex >= 0) mockOfficerEventOperations.events[existingIndex] = normalized;
+    else mockOfficerEventOperations.events.push(normalized);
+    mockOfficerEventOperations.updatedAt = new Date().toISOString();
+    return { saved: true, row: normalized.row };
+  }
+  const result = await callable("saveOfficerEvent")({ event });
+  return result.data;
+}
+
+export async function saveOfficerBudgetItem(item) {
+  if (testMode) {
+    const existingIndex = mockOfficerEventOperations.budgetItems.findIndex((entry) => entry.row === Number(item.row));
+    const row = existingIndex >= 0 ? Number(item.row) : Math.max(1, ...mockOfficerEventOperations.budgetItems.map((entry) => entry.row)) + 1;
+    const saved = { ...item, row, plannedCost: (Number(item.quantity) || 0) * (Number(item.unitCost) || 0), actualCost: Number(item.actualCost) || 0 };
+    if (existingIndex >= 0) mockOfficerEventOperations.budgetItems[existingIndex] = saved;
+    else mockOfficerEventOperations.budgetItems.push(saved);
+    const event = mockOfficerEventOperations.events.find((entry) => entry.id === item.eventId);
+    if (event) {
+      const items = mockOfficerEventOperations.budgetItems.filter((entry) => entry.eventId === item.eventId);
+      event.plannedBudget = items.reduce((sum, entry) => sum + entry.plannedCost, 0);
+      event.actualSpend = items.reduce((sum, entry) => sum + entry.actualCost, 0);
+      event.remainingBudget = event.plannedBudget - event.actualSpend;
+    }
+    return { saved: true, row };
+  }
+  const result = await callable("saveOfficerBudgetItem")({ item });
+  return result.data;
+}
+
+export async function updateEventRsvp(eventId, going) {
+  if (testMode) {
+    const event = mockOfficerEventOperations.events.find((entry) => entry.id === eventId);
+    if (event && mockProfile) {
+      event.rsvps = event.rsvps.filter((entry) => entry.uid !== mockProfile.uid);
+      if (going) event.rsvps.push({ uid: mockProfile.uid, displayName: mockProfile.displayName, role: mockProfile.role });
+      event.officerRsvps = event.rsvps.filter((entry) => entry.role === "officer").map((entry) => entry.displayName);
+    }
+    return { eventId, going, entries: event?.rsvps || [] };
+  }
+  const result = await callable("setEventRsvp")({ eventId, going });
+  return result.data;
 }
 
 export async function changeMemberRole(uid, role) {

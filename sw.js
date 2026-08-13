@@ -1,6 +1,6 @@
-const CACHE_NAME = "fqc-app-v23-circular-brand-icon";
+const CACHE_NAME = "fqc-app-v24-event-operations";
 const ASSETS = [
-  "/assets/fqc-badge.png?v=23"
+  "/assets/fqc-badge.png?v=24"
 ];
 
 self.addEventListener("install", (event) => {

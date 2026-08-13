@@ -5,6 +5,7 @@ import {
   createEmailAccount,
   loadLeaderboard,
   loadMembers,
+  loadOfficerEventOperations,
   loadOfficerResources,
   logOut,
   observeCheckIn,
@@ -14,19 +15,23 @@ import {
   requestPasswordReset,
   recordCheckIn,
   registerPasskey,
+  saveOfficerBudgetItem,
+  saveOfficerEvent,
   signInWithApple,
   signInWithEmail,
   signInWithGoogle,
   signInWithPasskey,
   supportsPasskeys,
   updateActiveCheckIn,
+  updateEventRsvp,
   updateProfileName,
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.3.0";
-const APP_RELEASE_DATE = "August 12, 2026";
+const APP_VERSION = "2.4.0";
+const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.4.0", "Cleaned up Profile and added one Sheet-synced event operations workspace for officers"],
   ["2.3.0", "Added secure, role-prioritized FQC Drive resources for officers on phones and computers"],
   ["2.2.1", "Consolidated events, treasury, UF locations, and current leadership into one canonical workbook"],
   ["2.2.0", "Added live officer event budgets, itemized purchase plans, and verified FQC funding totals"],
@@ -110,6 +115,11 @@ const state = {
   officerResourcesLoaded: false,
   officerResourcesLoading: false,
   officerResourcesError: "",
+  officerOperations: null,
+  officerOperationsLoaded: false,
+  officerOperationsLoading: false,
+  officerOperationsError: "",
+  selectedOfficerEventId: "",
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
   checkedInEvents: [],
@@ -119,8 +129,7 @@ const state = {
   leaderboardLoaded: false,
   leaderboardLoading: false,
   leaderboardError: "",
-  rsvps: readJson("fqc:rsvps", []),
-  notes: readJson("fqc:notes", [])
+  rsvps: readJson("fqc:rsvps", [])
 };
 
 const fallbackLocations = {
@@ -427,7 +436,20 @@ function buildSheetEventData(eventsCsv, locationsCsv) {
         room: place.room,
         description: logistics
           ? `${title} for the Florida Quantum Computing Society. Check the club announcement for the latest agenda and room updates.`
-          : row["Event Description"] || "See the FQC event announcement for details."
+          : row["Event Description"] || "See the FQC event announcement for details.",
+        backupRoom: row["Backup Room"] || "",
+        attendance: row.Attendance || "",
+        permitStatus: row["Permit (y/n)"] || "",
+        permitNumber: row["Permit Number"] || "",
+        roomStatus: row["Room Request"] || "",
+        backupRoomStatus: row["Backup Room Request"] || "",
+        officerNotes: row.Notes || "",
+        plannedBudget: sheetMoney(row["Event Budget"]),
+        actualSpend: sheetMoney(row["Actual Spend"]),
+        remainingBudget: sheetMoney(row["Remaining Budget"]),
+        fundingSource: row["Funding Source"] || "",
+        budgetStatus: row["Budget Status"] || "",
+        eventStatus: row["Event Status"] || "Planned"
       };
     })
     .filter((event) => {
@@ -585,14 +607,6 @@ if (!/^(list|calendar)$/.test(state.eventMode)) state.eventMode = "list";
 if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].date.slice(0, 7);
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
 
-const tasks = [
-  ["Budget", "Confirm food spend for kickoff", "Ready"],
-  ["Permits", "Submit Student Union room request", "Due"],
-  ["Rooms", "Reserve Makerspace for September workshop", "Ready"],
-  ["Advertising", "Post kickoff flyer and reminder", "Draft"],
-  ["Socials", "Choose October mixer format", "Vote"]
-];
-
 const titles = {
   home: "Events",
   checkin: "Check In",
@@ -621,7 +635,6 @@ function saveState() {
   localStorage.setItem("fqc:selected-event", state.selectedEventId);
   localStorage.setItem("fqc:name", state.memberName);
   localStorage.setItem("fqc:rsvps", JSON.stringify(state.rsvps));
-  localStorage.setItem("fqc:notes", JSON.stringify(state.notes));
 }
 
 function getEvent(eventId) {
@@ -735,6 +748,11 @@ function setView(view) {
   saveState();
   render();
   if (state.view === "profile" && state.loggedIn) queueMicrotask(() => refreshLeaderboard());
+  if (state.view === "profile" && state.memberRole === "officer") {
+    queueMicrotask(refreshOfficerResources);
+    queueMicrotask(refreshOfficerOperations);
+  }
+  if (state.view === "settings" && state.memberRole === "officer" && !state.members.length) queueMicrotask(refreshMemberDirectory);
 }
 
 function render() {
@@ -1289,18 +1307,27 @@ function bindMobileEventSheet() {
   window.addEventListener("resize", resizeSheet, { once: true });
 }
 
-function toggleRsvp(eventId) {
-  state.rsvps = state.rsvps.includes(eventId)
-    ? state.rsvps.filter((id) => id !== eventId)
-    : [...state.rsvps, eventId];
+async function toggleRsvp(eventId) {
+  const wasGoing = state.rsvps.includes(eventId);
+  const going = !wasGoing;
+  state.rsvps = going ? [...state.rsvps, eventId] : state.rsvps.filter((id) => id !== eventId);
   saveState();
 
   document.querySelectorAll(`[data-rsvp="${eventId}"]`).forEach((button) => {
-    const going = state.rsvps.includes(eventId);
     button.classList.toggle("going", going);
     button.textContent = going ? "Going" : "RSVP";
     button.setAttribute("aria-label", `${going ? "Cancel RSVP for" : "RSVP for"} ${getEvent(eventId).title}`);
   });
+  if (!state.loggedIn) return;
+  try {
+    await updateEventRsvp(eventId, going);
+    if (state.memberRole === "officer") state.officerOperationsLoaded = false;
+  } catch (error) {
+    state.rsvps = wasGoing ? [...new Set([...state.rsvps, eventId])] : state.rsvps.filter((id) => id !== eventId);
+    state.authError = readableAuthError(error);
+    saveState();
+    render();
+  }
 }
 
 function bindRsvpEvents(root = document) {
@@ -1424,6 +1451,10 @@ function applyMemberProfile(profile) {
     state.officerResourcesLoaded = false;
     state.officerResourcesLoading = false;
     state.officerResourcesError = "";
+    state.officerOperations = null;
+    state.officerOperationsLoaded = false;
+    state.officerOperationsLoading = false;
+    state.officerOperationsError = "";
   }
   localStorage.setItem("fqc:name", state.memberName);
 }
@@ -1493,6 +1524,27 @@ async function refreshOfficerResources(force = false) {
     state.officerResourcesError = readableAuthError(error);
   } finally {
     state.officerResourcesLoading = false;
+    if (state.view === "profile") render();
+  }
+}
+
+async function refreshOfficerOperations(force = false) {
+  if (state.memberRole !== "officer" || state.officerOperationsLoading) return;
+  if (state.officerOperationsLoaded && !force) return;
+  state.officerOperationsLoading = true;
+  state.officerOperationsError = "";
+  if (state.view === "profile") render();
+  try {
+    state.officerOperations = await loadOfficerEventOperations();
+    state.officerOperationsLoaded = true;
+    const operationEvents = state.officerOperations?.events || [];
+    if (!operationEvents.some((event) => event.id === state.selectedOfficerEventId)) {
+      state.selectedOfficerEventId = operationEvents.find((event) => event.id === state.selectedEventId)?.id || operationEvents[0]?.id || "";
+    }
+  } catch (error) {
+    state.officerOperationsError = readableAuthError(error);
+  } finally {
+    state.officerOperationsLoading = false;
     if (state.view === "profile") render();
   }
 }
@@ -1582,74 +1634,140 @@ function renderCheckIn() {
 }
 
 function renderOfficerWorkspace() {
+  const operations = state.officerOperations;
+  if (state.officerOperationsLoading && !operations) {
+    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>Loading events, budgets, notes, rooms, and RSVPs…</p></div><span class="auth-spinner" aria-hidden="true"></span></div></section>${renderOfficerResources()}`;
+  }
+  if (state.officerOperationsError && !operations) {
+    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>${escapeHtml(state.officerOperationsError)}</p></div><button class="secondary-button" id="retry-officer-operations" type="button">Try Again</button></div></section>${renderOfficerResources()}`;
+  }
+
+  const totals = operations?.totals || eventBudget;
+  const operationEvents = operations?.events || [];
   const budgetMetrics = [
-    [formatMoney(eventBudget.totalApproved), "Total approved"],
-    [formatMoney(eventBudget.plannedSpend), "Planned spend"],
-    [formatMoney(eventBudget.actualSpend), "Actual spend"],
-    [formatMoney(eventBudget.availableAfterActual), "Available after actuals"]
+    [formatMoney(totals.totalApproved), "Total approved"],
+    [formatMoney(totals.plannedSpend), "Planned spend"],
+    [formatMoney(totals.actualSpend), "Actual spend"],
+    [formatMoney(totals.availableAfterActual), "Available now"]
   ];
-  const budgetCards = events.map((event) => {
-    const items = eventBudget.items.filter((item) => item.eventId === event.id);
-    const planned = items.reduce((sum, item) => sum + item.plannedCost, 0);
-    const actual = items.reduce((sum, item) => sum + item.actualCost, 0);
-    const remaining = planned - actual;
-    const sources = [...new Set(items.map((item) => item.fundingSource).filter(Boolean))];
-    return `
-      <details class="budget-event-card" ${items.length ? "open" : ""}>
-        <summary>
-          <span><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(formatEventDate(event, { month: "short", day: "numeric" }))}</small></span>
-          <span class="budget-event-total">${items.length ? formatMoney(planned) : "No plan"}</span>
-        </summary>
-        <div class="budget-event-breakdown">
-          <span><small>Planned</small><strong>${formatMoney(planned)}</strong></span>
-          <span><small>Actual</small><strong>${formatMoney(actual)}</strong></span>
-          <span><small>Remaining</small><strong class="${remaining < 0 ? "over-budget" : ""}">${formatMoney(remaining)}</strong></span>
-        </div>
-        ${sources.length ? `<p class="budget-funding-source">${escapeHtml(sources.join(" · "))}</p>` : ""}
-        ${items.length ? `<div class="budget-purchase-list">${items.map((item) => `
-          <article>
-            <div><strong>${escapeHtml(item.item)}</strong><p>${item.quantity ? `${escapeHtml(item.quantity)} ${escapeHtml(item.unit || "")}`.trim() : "Quantity pending"}${item.unitCost ? ` · ${formatMoney(item.unitCost)} each` : ""}</p></div>
-            <div class="budget-purchase-cost"><strong>${item.plannedCost ? formatMoney(item.plannedCost) : "Needs quote"}</strong><span>${escapeHtml(item.status || "Planned")}</span></div>
-          </article>
-        `).join("")}</div>` : '<p class="empty-state budget-empty">No purchase plan has been added for this event.</p>'}
-      </details>
-    `;
-  }).join("");
   return `
+    <section class="section officer-operations">
+      <div class="section-header officer-operations-header">
+        <div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>Rooms, status, money, RSVPs, notes, and check-in are together under each event.</p></div>
+        <button class="secondary-button" id="refresh-officer-operations" type="button" ${state.officerOperationsLoading ? "disabled" : ""}>${state.officerOperationsLoading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      <div class="budget-sync-line"><span></span><strong>2026 Event Logistics connected</strong><p>App edits save to Google Sheets; Sheet edits return on refresh and every 5 minutes.</p></div>
+      <section class="metric-grid officer-budget-overview" aria-label="Team budget overview">${renderMetrics(budgetMetrics)}</section>
+      <div class="budget-summary-line"><strong>${formatMoney(totals.baseFunding)} base + ${formatMoney(totals.operationalFunding)} operational</strong><span>${formatMoney(totals.uncommittedAfterPlan)} uncommitted after plans</span></div>
+
+      <details class="officer-add-event">
+        <summary><span><svg><use href="#icon-plus"></use></svg>Add Event</span><small>Creates a new Events row</small></summary>
+        ${renderOfficerEventForm({ eventStatus: "Planning" }, true)}
+      </details>
+      <datalist id="uf-location-options">${(operations?.locations || []).map((location) => `<option value="${escapeHtml(location)}"></option>`).join("")}</datalist>
+
+      <div class="officer-event-list" aria-label="Officer event operations">
+        ${operationEvents.map((event) => renderOfficerEventCard(event, operations.budgetItems || [])).join("") || '<p class="empty-state">No events are available yet.</p>'}
+      </div>
+      <a class="secondary-button budget-sheet-link" href="${EVENT_BUDGET_SHEET_URL}" target="_blank" rel="noopener noreferrer">Open Full Google Sheet</a>
+      ${renderAuthFeedback()}
+    </section>
     ${renderOfficerResources()}
-    <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(budgetMetrics)}</section>
-    <section class="section">
-      <div class="section-header"><div><p class="section-kicker">Admin controls</p><h2>Event Check-In</h2><p>Choose the event members can check into from the middle tab.</p></div></div>
-      <div class="checkin-admin-grid">
-        <div class="form-row">
-          <label for="active-checkin-event">Active event</label>
-          <select id="active-checkin-event">${events.map((event) => `<option value="${event.id}" ${event.id === state.activeCheckInEventId ? "selected" : ""}>${escapeHtml(event.title)}</option>`).join("")}</select>
+  `;
+}
+
+function eventStatusOptions(current = "Planned") {
+  return ["Planning", "Planned", "Room pending", "Confirmed", "In progress", "Completed", "Cancelled"]
+    .map((status) => `<option value="${status}" ${status === current ? "selected" : ""}>${status}</option>`).join("");
+}
+
+function renderOfficerEventForm(event = {}, creating = false) {
+  const formId = creating ? "new-officer-event" : `officer-event-${event.id}`;
+  return `
+    <form class="officer-event-form" id="${escapeHtml(formId)}" data-officer-event-form="${escapeHtml(event.id || "new")}">
+      <div class="officer-form-grid">
+        <div class="form-row"><label>Event name</label><input name="title" aria-label="Event name" value="${escapeHtml(event.title || "")}" maxlength="120" required /></div>
+        <div class="form-row"><label>Status</label><select name="eventStatus" aria-label="Status">${eventStatusOptions(event.eventStatus)}</select></div>
+        <div class="form-row"><label>Date</label><input name="date" aria-label="Date" type="date" value="${escapeHtml(event.date || "")}" required /></div>
+        <div class="form-row"><label>Time</label><input name="time" aria-label="Time" value="${escapeHtml(event.time || "")}" placeholder="6:00 PM" required /></div>
+        <div class="form-row officer-form-wide"><label>Location / room</label><input name="location" aria-label="Location / room" list="uf-location-options" value="${escapeHtml(event.location || "")}" placeholder="Reitz G320" required /></div>
+        <div class="form-row"><label>Backup room</label><input name="backupRoom" aria-label="Backup room" value="${escapeHtml(event.backupRoom || "")}" placeholder="Larsen 234" /></div>
+        <div class="form-row"><label>Expected attendance</label><input name="attendance" aria-label="Expected attendance" inputmode="numeric" value="${escapeHtml(event.attendance || "")}" /></div>
+        <div class="form-row"><label>Room status</label><input name="roomStatus" aria-label="Room status" value="${escapeHtml(event.roomStatus || "")}" placeholder="Submitted / Confirmed" /></div>
+        <div class="form-row"><label>Backup status</label><input name="backupRoomStatus" aria-label="Backup status" value="${escapeHtml(event.backupRoomStatus || "")}" placeholder="Not submitted" /></div>
+        <div class="form-row officer-form-wide"><label>Officer notes for this event</label><textarea name="notes" aria-label="Officer notes for this event" maxlength="1200" placeholder="Decisions, next steps, room details, catering owner…">${escapeHtml(event.notes || "")}</textarea></div>
+      </div>
+      <button class="primary-button" type="submit"><svg><use href="#icon-check"></use></svg><span>${creating ? "Create Event" : "Save Event Details"}</span></button>
+    </form>
+  `;
+}
+
+function renderBudgetItemForm(item, event, creating = false) {
+  const row = creating ? "new" : item.row;
+  return `
+    <form class="event-budget-item-form" data-budget-item-form="${escapeHtml(String(row))}" data-budget-event="${escapeHtml(event.id)}">
+      <div class="budget-item-heading"><strong>${creating ? "New purchase" : escapeHtml(item.item)}</strong>${creating ? "" : `<span>${formatMoney(item.plannedCost)} planned</span>`}</div>
+      <div class="budget-edit-grid">
+        <div class="form-row budget-item-name"><label>Item</label><input name="item" aria-label="Item" value="${escapeHtml(item.item || "")}" required /></div>
+        <div class="form-row"><label>Quantity</label><input name="quantity" aria-label="Quantity" type="number" min="0" step="0.01" value="${escapeHtml(item.quantity || "")}" /></div>
+        <div class="form-row"><label>Unit</label><input name="unit" aria-label="Unit" value="${escapeHtml(item.unit || "")}" placeholder="each / order" /></div>
+        <div class="form-row"><label>Unit cost</label><input name="unitCost" aria-label="Unit cost" type="number" min="0" step="0.01" value="${escapeHtml(item.unitCost || "")}" /></div>
+        <div class="form-row"><label>Actual cost</label><input name="actualCost" aria-label="Actual cost" type="number" min="0" step="0.01" value="${escapeHtml(item.actualCost || "")}" /></div>
+        <div class="form-row"><label>Funding source</label><input name="fundingSource" aria-label="Funding source" value="${escapeHtml(item.fundingSource || "")}" /></div>
+        <div class="form-row"><label>Budget status</label><input name="status" aria-label="Budget status" value="${escapeHtml(item.status || "Estimate")}" /></div>
+        <div class="form-row budget-item-notes"><label>Budget notes</label><textarea name="notes" aria-label="Budget notes" maxlength="800">${escapeHtml(item.notes || "")}</textarea></div>
+      </div>
+      <button class="secondary-button" type="submit">${creating ? "Add Budget Item" : "Save Money Changes"}</button>
+    </form>
+  `;
+}
+
+function renderOfficerEventCard(event, allBudgetItems) {
+  const items = allBudgetItems.filter((item) => item.eventId === event.id);
+  const open = event.id === state.selectedOfficerEventId;
+  const rsvps = event.rsvps || [];
+  return `
+    <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" ${open ? "open" : ""}>
+      <summary>
+        <span class="officer-event-date"><small>${escapeHtml(formatEventDate(event, { month: "short" }))}</small><strong>${escapeHtml(formatEventDate(event, { day: "2-digit" }))}</strong></span>
+        <span class="officer-event-summary"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || "Location pending")} · ${escapeHtml(event.time)}</small></span>
+        <span class="event-status-pill status-${escapeHtml(String(event.eventStatus || "planned").toLowerCase().replace(/[^a-z]+/g, "-"))}">${escapeHtml(event.eventStatus || "Planned")}</span>
+        <span class="officer-event-money">${formatMoney(event.plannedBudget)}</span>
+      </summary>
+      <div class="officer-event-body">
+        <div class="officer-event-stats">
+          <span><small>Planned</small><strong>${formatMoney(event.plannedBudget)}</strong></span>
+          <span><small>Actual</small><strong>${formatMoney(event.actualSpend)}</strong></span>
+          <span><small>Remaining</small><strong class="${event.remainingBudget < 0 ? "over-budget" : ""}">${formatMoney(event.remainingBudget)}</strong></span>
+          <span><small>RSVPs</small><strong>${rsvps.length}</strong></span>
         </div>
-        <button class="primary-button" id="open-checkin" type="button">${state.checkInOpen ? "Update Active Event" : "Open Check-In"}</button>
-        <button class="secondary-button" id="close-checkin" type="button" ${state.checkInOpen ? "" : "disabled"}>Close Check-In</button>
+        <div class="officer-event-quick-facts">
+          <span><strong>Room</strong>${escapeHtml(event.roomStatus || "Not set")}</span>
+          <span><strong>Backup</strong>${escapeHtml(event.backupRoom || "None")} · ${escapeHtml(event.backupRoomStatus || "Not set")}</span>
+          <span><strong>Permit</strong>${escapeHtml(event.permitStatus || "Not set")}${event.permitNumber ? ` · ${escapeHtml(event.permitNumber)}` : ""}</span>
+          <span><strong>Funding</strong>${escapeHtml(event.fundingSource || "Not assigned")}</span>
+        </div>
+        <div class="officer-event-actions">
+          <button class="primary-button" type="button" data-start-event="${escapeHtml(event.id)}">${state.checkInOpen && state.activeCheckInEventId === event.id ? "Check-In Is Live" : "Start Event Check-In"}</button>
+          ${state.checkInOpen && state.activeCheckInEventId === event.id ? `<button class="secondary-button" id="close-checkin-${escapeHtml(event.id)}" data-close-event="${escapeHtml(event.id)}" type="button">Close Check-In</button>` : ""}
+        </div>
+        <details class="officer-event-subsection">
+          <summary>Event details & notes</summary>
+          ${renderOfficerEventForm(event)}
+        </details>
+        <details class="officer-event-subsection">
+          <summary><span>RSVPs</span><small>${rsvps.length} going · ${event.officerRsvps?.length || 0} officers</small></summary>
+          <div class="event-rsvp-roster">${rsvps.length ? rsvps.map((entry) => `<span><strong>${escapeHtml(entry.displayName)}</strong><small>${entry.role === "officer" ? "Officer" : "Member"}</small></span>`).join("") : '<p class="empty-state">No RSVPs yet.</p>'}</div>
+        </details>
+        <details class="officer-event-subsection">
+          <summary><span>Budget & purchases</span><small>${items.length} ${items.length === 1 ? "item" : "items"} · ${escapeHtml(event.budgetStatus || "No plan")}</small></summary>
+          <div class="event-budget-editor">
+            ${items.map((item) => renderBudgetItemForm(item, event)).join("") || '<p class="empty-state">No budget items yet.</p>'}
+            ${renderBudgetItemForm({}, event, true)}
+          </div>
+        </details>
       </div>
-    </section>
-    <section class="section">
-      <div class="section-header budget-section-header">
-        <div><p class="section-kicker">Operations</p><h2>Officer Command Center</h2><p>Live budget totals and purchase plans for every FQC event.</p></div>
-        <a class="secondary-button budget-sheet-link" href="${EVENT_BUDGET_SHEET_URL}" target="_blank" rel="noopener">Open Budget Sheet</a>
-      </div>
-      <div class="budget-sync-line"><span></span><strong>Google Sheet connected</strong><p>${escapeHtml(formatBudgetDataStatus())} · updates every 5 minutes</p></div>
-      <div class="budget-summary-line"><strong>${formatMoney(eventBudget.baseFunding)} base + ${formatMoney(eventBudget.operationalFunding)} operational</strong><span>${formatMoney(eventBudget.uncommittedAfterPlan)} uncommitted after current plans</span></div>
-      <h3 class="budget-list-title">Budget by Event</h3>
-      <div class="budget-event-list">${budgetCards}</div>
-    </section>
-    <section class="section">
-      <h2>Planning Tasks</h2>
-      <div class="task-list">${tasks.map(([area, task, status]) => `<article class="task-item"><div><h3>${area}</h3><p>${task}</p></div><span class="task-status">${status}</span></article>`).join("")}</div>
-    </section>
-    <section class="section">
-      <div class="section-header"><div><h2>Officer Notes</h2><p>Saved on this device.</p></div></div>
-      <div class="form-row"><label for="note-area">Area</label><select id="note-area"><option>Budget</option><option>Attendance</option><option>Permits</option><option>Rooms</option><option>Advertising</option><option>Socials</option></select></div>
-      <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" placeholder="Add the next action or decision"></textarea></div>
-      <button class="primary-button" id="add-note" type="button"><svg><use href="#icon-plus"></use></svg><span>Add Note</span></button>
-      <div class="task-list" id="notes-list">${renderNotes()}</div>
-    </section>
+    </details>
   `;
 }
 
@@ -1776,16 +1894,6 @@ function renderRoleWorkspace() {
   `;
 }
 
-function renderNotes() {
-  if (!state.notes.length) return '<p class="empty-state">No officer notes yet.</p>';
-  return state.notes.map((note) => `
-    <article class="task-item">
-      <div><h3>${escapeHtml(note.area)}</h3><p>${escapeHtml(note.text)}</p></div>
-      <span class="task-status">${escapeHtml(note.date)}</span>
-    </article>
-  `).join("");
-}
-
 function renderUfidForm(onboarding = false) {
   return `
     <section class="section ufid-card${onboarding ? " ufid-onboarding" : ""}">
@@ -1809,6 +1917,30 @@ function renderUfidForm(onboarding = false) {
   `;
 }
 
+function renderAccountSettings() {
+  if (!state.authReady) return renderAuthLoading("settings");
+  if (!state.loggedIn) {
+    return `<section class="section settings-account-summary"><div class="section-header"><div><p class="section-kicker">Account management</p><h2>No account signed in</h2><p>Open Profile to log in or create an account.</p></div><button class="secondary-button" id="settings-go-to-login" type="button">Open Login</button></div></section>`;
+  }
+  return `
+    <section class="section settings-account-summary">
+      <div class="section-header"><div><p class="section-kicker">Account management</p><h2>${escapeHtml(state.memberName)}</h2><p>${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${escapeHtml(roleLabel())}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
+      <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
+      <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
+      ${renderAuthFeedback()}
+    </section>
+    <details class="section settings-group passkey-card">
+      <summary><span><p class="section-kicker">Security</p><strong>Passkeys & Face ID</strong></span><small>${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</small></summary>
+      <div class="settings-group-content"><p>Use Face ID, Touch ID, your screen lock, or a hardware security key next time.</p><button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button></div>
+    </details>
+    <details class="section settings-group">
+      <summary><span><p class="section-kicker">Identity</p><strong>UFID & role verification</strong></span><small>${escapeHtml(roleLabel())}</small></summary>
+      <div class="settings-group-content">${renderUfidForm(false)}</div>
+    </details>
+    ${state.memberRole === "officer" ? renderRoleWorkspace() : ""}
+  `;
+}
+
 function renderSettings() {
   return `
     <section class="view settings-view" data-screen="settings">
@@ -1820,6 +1952,7 @@ function renderSettings() {
         </div>
         <button class="secondary-button" id="close-settings" type="button">Back</button>
       </section>
+      ${renderAccountSettings()}
       <section class="section">
         <div class="section-header">
           <div><h2>Updates</h2><p>Fetch the newest app shell while keeping your account and saved app data.</p></div>
@@ -1827,11 +1960,10 @@ function renderSettings() {
         <button class="primary-button" id="check-for-updates" type="button" ${state.authBusy ? "disabled" : ""}>
           <svg><use href="#icon-check"></use></svg><span>Check for Updates</span>
         </button>
-        ${renderAuthFeedback()}
       </section>
-      <section class="section">
-        <div class="section-header"><div><p class="section-kicker">What changed</p><h2>Version History</h2></div></div>
-        <div class="version-history">
+      <details class="section settings-group version-history-settings">
+        <summary><span><p class="section-kicker">What changed</p><h2>Version History</h2></span><small>v${APP_VERSION}</small></summary>
+        <div class="settings-group-content version-history">
           ${RELEASE_HISTORY.map(([version, summary], index) => `
             <article class="version-row">
               <span class="version-number">v${escapeHtml(version)}${index === 0 ? " · Current" : ""}</span>
@@ -1839,7 +1971,7 @@ function renderSettings() {
             </article>
           `).join("")}
         </div>
-      </section>
+      </details>
       <details class="section advanced-settings">
         <summary>Advanced settings</summary>
         <div class="advanced-settings-content">
@@ -1973,30 +2105,14 @@ function renderProfile() {
   const points = state.memberPoints;
   return `
     <section class="view" data-screen="profile">
-      <section class="section">
+      <section class="section profile-overview">
         <div class="profile-summary">
           <div class="avatar">${profileInitial.textContent}</div>
-          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${points} ${points === 1 ? "point" : "points"} earned · ${escapeHtml(roleLabel())}</p><div class="progress" aria-label="Event attendance progress"><span style="width: ${Math.min(100, points * 20)}%"></span></div></div>
+          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${points} ${points === 1 ? "point" : "points"} from verified event check-ins</p><div class="progress" aria-label="Event attendance progress"><span style="width: ${Math.min(100, points * 20)}%"></span></div></div>
         </div>
-      </section>
-      <section class="section">
-        <div class="section-header"><div><h2>Profile</h2><p>${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${roleLabel()}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
-        <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
-        <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
-        ${renderAuthFeedback()}
-      </section>
-      <section class="section passkey-card">
-        <div class="section-header"><div><p class="section-kicker">Passwordless security</p><h2>Passkeys</h2><p>Use Face ID, Touch ID, your screen lock, or a hardware security key next time.</p></div><span class="passkey-count">${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</span></div>
-        <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
-      </section>
-      ${renderUfidForm(false)}
-      <section class="section">
-        <h2>Member Activity</h2>
-        <p>${state.checkedInEvents.length} event ${state.checkedInEvents.length === 1 ? "check-in" : "check-ins"}, ${points} ${points === 1 ? "point" : "points"}, and ${state.rsvps.length} active ${state.rsvps.length === 1 ? "RSVP" : "RSVPs"}. Each unique event check-in earns exactly one point.</p>
       </section>
       ${renderLeaderboard()}
       ${state.memberRole === "officer" ? renderOfficerWorkspace() : ""}
-      ${renderRoleWorkspace()}
     </section>
   `;
 }
@@ -2009,11 +2125,14 @@ function bindViewEvents() {
     button.addEventListener("click", () => selectEvent(button.dataset.selectEvent));
   });
   document.querySelector("#retry-officer-resources")?.addEventListener("click", () => refreshOfficerResources(true));
+  document.querySelector("#retry-officer-operations")?.addEventListener("click", () => refreshOfficerOperations(true));
+  document.querySelector("#refresh-officer-operations")?.addEventListener("click", () => refreshOfficerOperations(true));
   bindCalendarEvents();
   bindRsvpEvents();
   bindMobileEventSheet();
 
   document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
+  document.querySelector("#settings-go-to-login")?.addEventListener("click", () => setView("profile"));
   document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
   document.querySelector("#refresh-leaderboard")?.addEventListener("click", () => refreshLeaderboard(true));
@@ -2114,24 +2233,53 @@ function bindViewEvents() {
     }
   });
 
-  document.querySelector("#open-checkin")?.addEventListener("click", async () => {
-    if (state.memberRole !== "officer") return;
-    const eventId = document.querySelector("#active-checkin-event").value;
-    await runAuthAction(() => updateActiveCheckIn(eventId, true), "Check-in is open.");
+  document.querySelectorAll("[data-officer-event]").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (details.open) state.selectedOfficerEventId = details.dataset.officerEvent;
+    });
   });
 
-  document.querySelector("#close-checkin")?.addEventListener("click", async () => {
-    if (state.memberRole !== "officer") return;
-    await runAuthAction(() => updateActiveCheckIn(state.activeCheckInEventId, false), "Check-in is closed.");
+  document.querySelectorAll("[data-officer-event-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(form));
+      const eventId = form.dataset.officerEventForm === "new" ? "" : form.dataset.officerEventForm;
+      const saved = await runAuthAction(() => saveOfficerEvent({ id: eventId, ...values }), eventId ? "Event details saved to Google Sheets." : "Event created in Google Sheets.");
+      if (!saved) return;
+      state.officerOperationsLoaded = false;
+      await refreshOfficerOperations(true);
+      await refreshEventData("officer event save");
+    });
   });
 
-  document.querySelector("#add-note")?.addEventListener("click", () => {
-    const area = document.querySelector("#note-area").value;
-    const text = document.querySelector("#note-text").value.trim();
-    if (!text) return;
-    state.notes = [{ area, text, date: new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date()) }, ...state.notes].slice(0, 8);
-    saveState();
-    render();
+  document.querySelectorAll("[data-budget-item-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const eventId = form.dataset.budgetEvent;
+      const eventRecord = state.officerOperations?.events?.find((entry) => entry.id === eventId);
+      if (!eventRecord) return;
+      const values = Object.fromEntries(new FormData(form));
+      const row = form.dataset.budgetItemForm === "new" ? 0 : Number(form.dataset.budgetItemForm);
+      const saved = await runAuthAction(() => saveOfficerBudgetItem({ row, eventId, event: eventRecord.title, date: eventRecord.date, ...values }), "Money changes saved to Google Sheets.");
+      if (!saved) return;
+      state.officerOperationsLoaded = false;
+      await refreshOfficerOperations(true);
+      await refreshEventData("officer budget save");
+    });
+  });
+
+  document.querySelectorAll("[data-start-event]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (state.memberRole !== "officer") return;
+      const eventId = button.dataset.startEvent;
+      await runAuthAction(() => updateActiveCheckIn(eventId, true), "Event check-in is open from the middle tab.");
+    });
+  });
+  document.querySelectorAll("[data-close-event]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (state.memberRole !== "officer") return;
+      await runAuthAction(() => updateActiveCheckIn(button.dataset.closeEvent, false), "Event check-in is closed.");
+    });
   });
 
   document.querySelector("#save-profile")?.addEventListener("click", async () => {
@@ -2183,12 +2331,21 @@ if ("serviceWorker" in navigator) {
   document.addEventListener(eventName, stopZoomGesture, { passive: false });
 });
 
-window.addEventListener("online", () => refreshEventData("network reconnect"));
+window.addEventListener("online", () => {
+  refreshEventData("network reconnect");
+  if (state.memberRole === "officer") refreshOfficerOperations(true);
+});
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refreshEventData("tab became active");
+  if (!document.hidden) {
+    refreshEventData("tab became active");
+    if (state.memberRole === "officer") refreshOfficerOperations(true);
+  }
 });
 window.setInterval(() => {
-  if (!document.hidden && navigator.onLine) refreshEventData("five-minute refresh");
+  if (!document.hidden && navigator.onLine) {
+    refreshEventData("five-minute refresh");
+    if (state.memberRole === "officer") refreshOfficerOperations(true);
+  }
 }, EVENT_REFRESH_INTERVAL_MS);
 
 observeSession((session) => {
@@ -2225,6 +2382,7 @@ observeSession((session) => {
   if (state.view === "profile" && state.loggedIn && state.ufidStatus !== "required") queueMicrotask(() => refreshLeaderboard());
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
   if (state.memberRole === "officer" && !state.officerResourcesLoaded && !state.officerResourcesLoading) queueMicrotask(refreshOfficerResources);
+  if (state.memberRole === "officer" && !state.officerOperationsLoaded && !state.officerOperationsLoading) queueMicrotask(refreshOfficerOperations);
 }, (error) => {
   state.authReady = true;
   state.authError = readableAuthError(error);
