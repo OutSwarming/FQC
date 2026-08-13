@@ -45,6 +45,15 @@ const budgetCsv = `"Event ID","Event","Date","Item","Quantity","Unit","Unit Cost
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.__FQC_AUTH_TEST__ = true;
+    const NativeDate = Date;
+    const fixedNow = new NativeDate("2026-03-01T12:00:00-05:00").getTime();
+    class FixedDate extends NativeDate {
+      constructor(...args) {
+        super(...(args.length ? args : [fixedNow]));
+      }
+      static now() { return fixedNow; }
+    }
+    window.Date = FixedDate;
   });
   await page.route("https://*.tile.openstreetmap.org/**", async (route) => {
     const transparentPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -78,6 +87,7 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.getByRole("region", { name: "FQC events and locations" })).toBeVisible();
   await expect(page.locator("#event-map")).toBeVisible();
   await expect(page.locator(".event-map-pin")).toHaveCount(7);
+  await expect(page.getByRole("tab", { name: /Past 0/ })).toBeVisible();
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
   await expect(page.locator(".event-map-campus")).toHaveCount(0);
 
@@ -85,6 +95,38 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   for (const label of navLabels) await expect(navButton(page, label)).toBeVisible();
   await expect(navButton(page, "Calendar")).toHaveCount(0);
   await expect(navButton(page, "Map")).toHaveCount(0);
+});
+
+test("moves events into Past 24 hours after their scheduled start", async ({ page }) => {
+  const archiveEventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"
+"Archived Workshop","2026-02-27","6:00 PM","Larsen Hall","234","This event is more than 24 hours old.","Yes","fqc-2026-02-27-archived"
+"Grace Period GBM","2026-02-28","6:00 PM","Reitz Student Union","2340","This event remains current until 24 hours pass.","Yes","fqc-2026-02-28-grace"
+"Upcoming Workshop","2026-03-03","6:00 PM","Malachowsky Hall","1142","Future event.","Yes","fqc-2026-03-03-upcoming"`;
+  await page.unroute("https://docs.google.com/spreadsheets/**");
+  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+    const sheetName = new URL(route.request().url()).searchParams.get("sheet");
+    await route.fulfill({
+      status: 200,
+      contentType: "text/csv; charset=utf-8",
+      body: sheetName === "UF Locations" ? locationsCsv : sheetName === "Treasurer Breakdown" ? budgetCsv : archiveEventsCsv
+    });
+  });
+  await page.evaluate(() => {
+    localStorage.removeItem("fqc:event-data");
+    localStorage.setItem("fqc:event-mode", "list");
+    localStorage.setItem("fqc:selected-event", "fqc-2026-03-03-upcoming");
+  });
+  await page.reload();
+
+  await expect(page.locator('[data-event-panel="list"] .event-card')).toHaveCount(2);
+  await expect(page.locator('[data-event-card="fqc-2026-02-27-archived"]')).toBeHidden();
+  await page.getByRole("tab", { name: /Past 1/ }).click();
+  await expect(page.locator('[data-event-panel="past"] .event-card')).toHaveCount(1);
+  await expect(page.locator('[data-event-card="fqc-2026-02-27-archived"]')).toBeVisible();
+  await expect(page.locator('[data-event-card="fqc-2026-02-28-grace"]')).toBeHidden();
+  await page.locator('[data-event-card="fqc-2026-02-27-archived"] [data-select-event]').click();
+  await expect(page.locator("#event-details").getByText("Past event", { exact: true })).toHaveCount(1);
+  await expect(page.locator("#event-details").getByRole("button", { name: "RSVP" })).toHaveCount(0);
 });
 
 test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", async ({ page }) => {
@@ -353,7 +395,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.4.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.4.1 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();

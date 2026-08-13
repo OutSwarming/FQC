@@ -28,9 +28,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.4.0";
+const APP_VERSION = "2.4.1";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.4.1", "Moved events into a Past archive 24 hours after they begin and repaired leadership role matching"],
   ["2.4.0", "Cleaned up Profile and added one Sheet-synced event operations workspace for officers"],
   ["2.3.0", "Added secure, role-prioritized FQC Drive resources for officers on phones and computers"],
   ["2.2.1", "Consolidated events, treasury, UF locations, and current leadership into one canonical workbook"],
@@ -603,7 +604,7 @@ loadCachedBudgetData();
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
 if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
 if (!/^(member|officer)$/.test(state.memberRole)) state.memberRole = "member";
-if (!/^(list|calendar)$/.test(state.eventMode)) state.eventMode = "list";
+if (!/^(list|calendar|past)$/.test(state.eventMode)) state.eventMode = "list";
 if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].date.slice(0, 7);
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
 
@@ -647,6 +648,44 @@ function getEventLocation(event) {
 
 function eventDate(event) {
   return new Date(`${event.date}T12:00:00`);
+}
+
+function eventStartDate(event) {
+  const match = String(event.time || "").trim().match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+  let hours = Number(match?.[1] || 12);
+  const minutes = Number(match?.[2] || 0);
+  const meridiem = String(match?.[3] || "").toUpperCase();
+  if (meridiem === "AM" && hours === 12) hours = 0;
+  if (meridiem === "PM" && hours !== 12) hours += 12;
+  const [year, month, day] = event.date.split("-").map(Number);
+  return new Date(year, month - 1, day, hours, minutes);
+}
+
+function isPastEvent(event, now = new Date()) {
+  return now.getTime() >= eventStartDate(event).getTime() + 24 * 60 * 60 * 1000;
+}
+
+function upcomingEvents(now = new Date()) {
+  return events.filter((event) => !isPastEvent(event, now));
+}
+
+function pastEvents(now = new Date()) {
+  return events.filter((event) => isPastEvent(event, now)).reverse();
+}
+
+function eventsForMode(mode = state.eventMode) {
+  return mode === "past" ? pastEvents() : upcomingEvents();
+}
+
+function ensureSelectedEventForMode() {
+  const visibleEvents = eventsForMode();
+  const available = visibleEvents.length ? visibleEvents : events;
+  if (available.length && !available.some((event) => event.id === state.selectedEventId)) {
+    state.selectedEventId = available[0].id;
+  }
+  if (state.eventMode === "calendar" && visibleEvents.length && !visibleEvents.some((event) => event.date.startsWith(`${state.calendarMonth}-`))) {
+    state.calendarMonth = visibleEvents[0].date.slice(0, 7);
+  }
 }
 
 function formatEventDate(event, options = {}) {
@@ -791,6 +830,9 @@ function render() {
 }
 
 function renderHome() {
+  ensureSelectedEventForMode();
+  const currentEvents = upcomingEvents();
+  const archivedEvents = pastEvents();
   return `
     <section class="view events-home" data-screen="home">
       <section class="event-explorer" data-sheet-mode="${mobileEventSheetMode}" aria-label="FQC events and locations">
@@ -814,22 +856,27 @@ function renderHome() {
                 <svg><use href="#icon-calendar"></use></svg>
                 Calendar
               </button>
+              <button type="button" role="tab" data-event-tab="past" aria-selected="${state.eventMode === "past"}">
+                Past <span class="event-tab-count">${archivedEvents.length}</span>
+              </button>
             </div>
 
             <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
-              <div class="event-list" aria-label="Published events">
-                ${events.map(renderEventCard).join("")}
-              </div>
+              ${currentEvents.length ? `<div class="event-list" aria-label="Upcoming events">${currentEvents.map(renderEventCard).join("")}</div>` : '<p class="calendar-empty">No upcoming events are scheduled yet. Completed events are saved under Past.</p>'}
             </div>
 
             <div class="event-mode-panel" data-event-panel="calendar" ${state.eventMode === "calendar" ? "" : "hidden"}>
               <div id="event-calendar">${renderCalendarMonth()}</div>
             </div>
+
+            <div class="event-mode-panel" data-event-panel="past" ${state.eventMode === "past" ? "" : "hidden"}>
+              ${archivedEvents.length ? `<div class="event-list past-event-list" aria-label="Past events">${archivedEvents.map((event) => renderEventCard(event, { past: true })).join("")}</div>` : '<p class="calendar-empty">Past events will appear here 24 hours after they begin.</p>'}
+            </div>
           </div>
         </div>
 
         <div class="event-map-shell">
-          <div class="map-status"><span></span>${events.length} published ${events.length === 1 ? "event" : "events"}</div>
+          <div class="map-status"><span></span>${currentEvents.length} upcoming · ${archivedEvents.length} past</div>
           <div id="event-map" aria-label="Map of FQC event locations"></div>
           <div class="event-map-message" id="event-map-message" hidden>Map tiles are unavailable. Event details still work below.</div>
           <div class="event-details" id="event-details" aria-live="polite">
@@ -859,12 +906,12 @@ function renderSelectedEventIntro() {
   `;
 }
 
-function renderEventCard(event) {
+function renderEventCard(event, options = {}) {
   const location = getEventLocation(event);
   const selected = event.id === state.selectedEventId;
   const going = state.rsvps.includes(event.id);
   return `
-    <article class="event-card${selected ? " selected" : ""}" data-event-card="${event.id}">
+    <article class="event-card${selected ? " selected" : ""}${options.past ? " past-event-card" : ""}" data-event-card="${event.id}">
       <button class="event-card-select" type="button" data-select-event="${event.id}" aria-pressed="${selected}">
         <span class="date-block">
           <span>${formatEventDate(event, { month: "short" })}</span>
@@ -876,9 +923,9 @@ function renderEventCard(event) {
         </span>
         <svg class="event-chevron"><use href="#icon-chevron-right"></use></svg>
       </button>
-      <button class="event-rsvp-mini${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">
-        ${going ? "Going" : "RSVP"}
-      </button>
+      ${options.past
+        ? '<span class="event-past-label">Past</span>'
+        : `<button class="event-rsvp-mini${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${going ? "Going" : "RSVP"}</button>`}
     </article>
   `;
 }
@@ -889,8 +936,9 @@ function renderCalendarMonth() {
   const daysInMonth = new Date(year, month, 0).getDate();
   const leadingDays = firstDay.getDay();
   const previousMonthDays = new Date(year, month - 1, 0).getDate();
-  const monthEvents = events.filter((event) => event.date.startsWith(state.calendarMonth));
-  const eventMonths = [...new Set(events.map((event) => event.date.slice(0, 7)))].sort();
+  const currentEvents = upcomingEvents();
+  const monthEvents = currentEvents.filter((event) => event.date.startsWith(state.calendarMonth));
+  const eventMonths = [...new Set(currentEvents.map((event) => event.date.slice(0, 7)))].sort();
   const firstEventMonth = eventMonths[0];
   const lastEventMonth = eventMonths[eventMonths.length - 1];
   const eventsByDay = new Map();
@@ -926,12 +974,12 @@ function renderCalendarMonth() {
 
   return `
     <div class="calendar-heading">
-      <button type="button" data-calendar-shift="-1" aria-label="Previous month" ${state.calendarMonth <= firstEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-left"></use></svg></button>
+      <button type="button" data-calendar-shift="-1" aria-label="Previous month" ${!firstEventMonth || state.calendarMonth <= firstEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-left"></use></svg></button>
       <div>
         <strong>${new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(firstDay)}</strong>
-        <span>${monthEvents.length} ${monthEvents.length === 1 ? "event" : "events"} · ${events.length} this semester</span>
+        <span>${monthEvents.length} ${monthEvents.length === 1 ? "event" : "events"} · ${currentEvents.length} upcoming</span>
       </div>
-      <button type="button" data-calendar-shift="1" aria-label="Next month" ${state.calendarMonth >= lastEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-right"></use></svg></button>
+      <button type="button" data-calendar-shift="1" aria-label="Next month" ${!lastEventMonth || state.calendarMonth >= lastEventMonth ? "disabled" : ""}><svg><use href="#icon-chevron-right"></use></svg></button>
     </div>
     <div class="calendar-weekdays" aria-hidden="true">
       ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => `<span>${day}</span>`).join("")}
@@ -966,6 +1014,7 @@ function renderSelectedEventDetails() {
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
   const going = state.rsvps.includes(event.id);
+  const past = isPastEvent(event);
   const directionsDestination = encodeURIComponent(`${location.lat},${location.lng}`);
   return `
     <article class="event-detail-card">
@@ -984,14 +1033,17 @@ function renderSelectedEventDetails() {
       </div>
       <div class="event-detail-actions">
         <a class="secondary-button" href="https://www.google.com/maps/dir/?api=1&destination=${directionsDestination}" target="_blank" rel="noopener noreferrer">Directions</a>
-        <button class="primary-button${going ? " going" : ""}" type="button" data-rsvp="${event.id}">${going ? "Going" : "RSVP"}</button>
+        ${past
+          ? '<span class="event-detail-past-label">Past event</span>'
+          : `<button class="primary-button${going ? " going" : ""}" type="button" data-rsvp="${event.id}">${going ? "Going" : "RSVP"}</button>`}
       </div>
     </article>
   `;
 }
 
 function setEventMode(mode) {
-  state.eventMode = mode === "calendar" ? "calendar" : "list";
+  state.eventMode = ["calendar", "past"].includes(mode) ? mode : "list";
+  ensureSelectedEventForMode();
   saveState();
   document.querySelectorAll("[data-event-tab]").forEach((tab) => {
     tab.setAttribute("aria-selected", String(tab.dataset.eventTab === state.eventMode));
@@ -999,8 +1051,9 @@ function setEventMode(mode) {
   document.querySelectorAll("[data-event-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
+  selectEvent(state.selectedEventId, { focusMap: false });
   if (isMobileEventSheetViewport()) {
-    const nextSheetMode = state.eventMode === "calendar" || mobileEventSheetMode === "high"
+    const nextSheetMode = state.eventMode === "calendar" || state.eventMode === "past" || mobileEventSheetMode === "high"
       ? "high"
       : "medium";
     setMobileEventSheetMode(nextSheetMode);
@@ -1022,6 +1075,8 @@ function shiftCalendarMonth(offset) {
 function selectEvent(eventId, options = {}) {
   const selectedEvent = events.find((event) => event.id === eventId);
   if (!selectedEvent) return;
+  const nextMode = isPastEvent(selectedEvent) ? "past" : state.eventMode === "past" ? "list" : state.eventMode;
+  if (nextMode !== state.eventMode) setEventMode(nextMode);
   state.selectedEventId = eventId;
   if (state.eventMode === "calendar") state.calendarMonth = selectedEvent.date.slice(0, 7);
   saveState();
