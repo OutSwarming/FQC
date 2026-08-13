@@ -1,8 +1,6 @@
-const CACHE_NAME = "fqc-app-v22-webapp-auth-brand";
+const CACHE_NAME = "fqc-app-v23-circular-brand-icon";
 const ASSETS = [
-  "/manifest.webmanifest",
-  "/assets/fqc-badge.png",
-  "/assets/fqc-wordmark.jpg"
+  "/assets/fqc-badge.png?v=23"
 ];
 
 self.addEventListener("install", (event) => {
