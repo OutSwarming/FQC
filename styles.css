@@ -1264,6 +1264,99 @@ textarea { min-height: 96px; resize: vertical; }
 .officer-card strong { display: block; color: var(--accent); font-size: 1.6rem; }
 .officer-card p { margin: 7px 0 0; }
 
+.budget-section-header { align-items: center; }
+.budget-sheet-link { flex: 0 0 auto; text-decoration: none; }
+
+.budget-sync-line {
+  display: grid;
+  grid-template-columns: 10px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--success) 8%, var(--surface-soft));
+}
+
+.budget-sync-line > span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 15%, transparent);
+}
+
+.budget-sync-line strong { color: var(--ink); font-size: 0.84rem; }
+.budget-sync-line p { margin: 0; color: var(--muted); font-size: 0.76rem; text-align: right; }
+
+.budget-summary-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.budget-summary-line span { color: var(--muted); font-size: 0.82rem; font-weight: 800; }
+.budget-list-title { margin: 0 0 10px; }
+.budget-event-list { display: grid; gap: 10px; }
+
+.budget-event-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-raised);
+}
+
+.budget-event-card summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.budget-event-card summary::-webkit-details-marker { display: none; }
+.budget-event-card summary > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.budget-event-card summary strong { color: var(--ink); }
+.budget-event-card summary small { color: var(--muted); font-weight: 750; }
+.budget-event-total { color: var(--accent); font-weight: 900; white-space: nowrap; }
+
+.budget-event-breakdown {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.budget-event-breakdown > span { display: grid; gap: 3px; padding: 10px; border-radius: 10px; background: var(--surface-soft); }
+.budget-event-breakdown small { color: var(--muted); font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+.budget-event-breakdown strong { color: var(--ink); }
+.budget-event-breakdown .over-budget { color: var(--danger); }
+.budget-funding-source { margin: -2px 14px 12px; color: var(--accent); font-size: 0.76rem; font-weight: 850; }
+.budget-purchase-list { display: grid; border-top: 1px solid var(--line); }
+
+.budget-purchase-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.budget-purchase-list article + article { border-top: 1px solid var(--line); }
+.budget-purchase-list p { margin: 3px 0 0; font-size: 0.76rem; }
+.budget-purchase-cost { display: grid; justify-items: end; gap: 3px; }
+.budget-purchase-cost span { color: var(--muted); font-size: 0.72rem; font-weight: 800; }
+.budget-empty { margin: 0; padding: 0 14px 14px; }
+
 .task-item {
   display: flex;
   align-items: start;
@@ -1485,6 +1578,12 @@ textarea { min-height: 96px; resize: vertical; }
   .auth-brand { grid-template-columns: 1fr; justify-items: center; text-align: center; }
   .member-role-row { grid-template-columns: 1fr; }
   .member-role-row .secondary-button { width: 100%; }
+  .budget-section-header { align-items: stretch; }
+  .budget-sheet-link { width: 100%; }
+  .budget-sync-line { grid-template-columns: 10px 1fr; }
+  .budget-sync-line p { grid-column: 1 / -1; text-align: left; }
+  .budget-summary-line { display: grid; }
+  .budget-event-breakdown { grid-template-columns: 1fr; }
 
   .event-explorer {
     position: relative;

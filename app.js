@@ -23,9 +23,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.2.0";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.2.0", "Added live officer event budgets, itemized purchase plans, and verified FQC funding totals"],
   ["2.1.0", "Added a one-read live leaderboard with one point per unique event check-in"],
   ["2.0.4", "Simplified account creation to email, password, and UFID only"],
   ["2.0.3", "Restored the circular FQC seal as the installed app icon and favicon"],
@@ -43,9 +44,12 @@ const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches 
 const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EVENT_DATA_CACHE_KEY = "fqc:event-data";
+const EVENT_BUDGET_CACHE_KEY = "fqc:event-budget";
 const EVENT_DATA_SOURCE = "2026 Event Logistics Google Sheet";
+const EVENT_BUDGET_SHEET_URL = `https://docs.google.com/spreadsheets/d/${EVENT_SHEET_ID}/edit#gid=806240242`;
 const MAX_EVENTS = 250;
 const MAX_LOCATIONS = 250;
+const MAX_BUDGET_ITEMS = 1000;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,80}$/i;
 const UF_CAMPUS_BOUNDS = Object.freeze({
   south: 29.62,
@@ -193,6 +197,18 @@ let events = fallbackEvents.map((event) => ({ ...event }));
 let eventDataSource = "Bundled schedule copy";
 let eventDataUpdatedAt = null;
 let eventRefreshInFlight = null;
+let eventBudget = {
+  baseFunding: 1050,
+  operationalFunding: 2490,
+  totalApproved: 3540,
+  plannedSpend: 0,
+  actualSpend: 0,
+  availableAfterActual: 3540,
+  uncommittedAfterPlan: 3540,
+  items: []
+};
+let eventBudgetSource = "Verified FQC funding copy";
+let eventBudgetUpdatedAt = null;
 
 function locationIdFor(name) {
   return String(name || "")
@@ -255,6 +271,96 @@ function normalizeSheetTime(value) {
 function eventIdFor(date, title) {
   const slug = locationIdFor(title).slice(0, 52) || "meeting";
   return `fqc-${date}-${slug}`;
+}
+
+function sheetMoney(value) {
+  const normalized = String(value ?? "").replace(/[^0-9.-]/g, "");
+  if (!normalized || normalized === "-" || normalized === ".") return 0;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function buildSheetBudgetData(budgetCsv) {
+  const rows = csvObjects(budgetCsv);
+  const summaries = Object.fromEntries(rows
+    .filter((row) => row["Budget Summary"])
+    .map((row) => [row["Budget Summary"], sheetMoney(row.Amount)]));
+  const items = rows
+    .filter((row) => row["Event ID"] && row.Item)
+    .slice(0, MAX_BUDGET_ITEMS)
+    .map((row) => ({
+      eventId: row["Event ID"],
+      event: row.Event,
+      date: normalizeSheetDate(row.Date),
+      item: row.Item,
+      quantity: sheetMoney(row.Quantity),
+      unit: row.Unit,
+      unitCost: sheetMoney(row["Unit Cost"]),
+      plannedCost: sheetMoney(row["Planned Cost"]),
+      actualCost: sheetMoney(row["Actual Cost"]),
+      fundingSource: row["Funding Source"],
+      status: row.Status,
+      notes: row.Notes
+    }));
+  const baseFunding = summaries["Base Funding"];
+  const operationalFunding = summaries["Operational Funding"];
+  const totalApproved = summaries["Total Approved"] || baseFunding + operationalFunding;
+  if (!Number.isFinite(totalApproved) || totalApproved <= 0 || items.length > MAX_BUDGET_ITEMS) {
+    throw new Error("The budget sheet did not contain a valid FQC funding summary.");
+  }
+  const plannedSpend = summaries["Planned Spend"] || items.reduce((sum, item) => sum + item.plannedCost, 0);
+  const actualSpend = summaries["Actual Spend"] || items.reduce((sum, item) => sum + item.actualCost, 0);
+  return {
+    baseFunding,
+    operationalFunding,
+    totalApproved,
+    plannedSpend,
+    actualSpend,
+    availableAfterActual: summaries["Available After Actual"] || totalApproved - actualSpend,
+    uncommittedAfterPlan: summaries["Uncommitted After Plan"] || totalApproved - plannedSpend,
+    items
+  };
+}
+
+function isValidBudgetData(nextBudget) {
+  return Boolean(
+    nextBudget &&
+    Number.isFinite(nextBudget.totalApproved) &&
+    nextBudget.totalApproved > 0 &&
+    Number.isFinite(nextBudget.plannedSpend) &&
+    Number.isFinite(nextBudget.actualSpend) &&
+    Array.isArray(nextBudget.items) &&
+    nextBudget.items.length <= MAX_BUDGET_ITEMS &&
+    nextBudget.items.every((item) => SAFE_ID_PATTERN.test(item.eventId) && item.item && item.plannedCost >= 0 && item.actualCost >= 0)
+  );
+}
+
+function applyBudgetData(nextBudget, options = {}) {
+  if (!isValidBudgetData(nextBudget)) return false;
+  const changed = JSON.stringify(eventBudget) !== JSON.stringify(nextBudget);
+  eventBudget = {
+    ...nextBudget,
+    items: nextBudget.items.map((item) => ({ ...item }))
+  };
+  eventBudgetSource = options.source || EVENT_DATA_SOURCE;
+  eventBudgetUpdatedAt = options.updatedAt || new Date().toISOString();
+  if (options.persist !== false) {
+    try {
+      localStorage.setItem(EVENT_BUDGET_CACHE_KEY, JSON.stringify({ ...eventBudget, updatedAt: eventBudgetUpdatedAt }));
+    } catch {}
+  }
+  return changed;
+}
+
+function loadCachedBudgetData() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(EVENT_BUDGET_CACHE_KEY) || "null");
+    if (!cached) return false;
+    const { updatedAt, ...budget } = cached;
+    return applyBudgetData(budget, { source: "Saved Google Sheet budget", updatedAt, persist: false });
+  } catch {
+    return false;
+  }
 }
 
 function logisticsLocation(value) {
@@ -433,14 +539,19 @@ async function refreshEventData(reason = "scheduled refresh") {
 
   eventRefreshInFlight = Promise.all([
     fetch(sheetCsvUrl("Events"), { cache: "no-store" }),
-    fetch(sheetCsvUrl("UF Locations"), { cache: "no-store" })
+    fetch(sheetCsvUrl("UF Locations"), { cache: "no-store" }),
+    fetch(sheetCsvUrl("Event Budget"), { cache: "no-store" })
   ])
-    .then(async ([eventsResponse, locationsResponse]) => {
-      if (!eventsResponse.ok || !locationsResponse.ok) throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}).`);
+    .then(async ([eventsResponse, locationsResponse, budgetResponse]) => {
+      if (!eventsResponse.ok || !locationsResponse.ok || !budgetResponse.ok) {
+        throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}/${budgetResponse.status}).`);
+      }
       const nextData = buildSheetEventData(await eventsResponse.text(), await locationsResponse.text());
+      const nextBudget = buildSheetBudgetData(await budgetResponse.text());
       const previousSource = eventDataSource;
       const changed = applyEventData(nextData, { source: EVENT_DATA_SOURCE });
-      if ((changed || previousSource !== eventDataSource) && state.view === "home") render();
+      const budgetChanged = applyBudgetData(nextBudget, { source: EVENT_DATA_SOURCE });
+      if ((changed || budgetChanged || previousSource !== eventDataSource) && (state.view === "home" || state.view === "profile")) render();
       return true;
     })
     .catch((error) => {
@@ -455,6 +566,7 @@ async function refreshEventData(reason = "scheduled refresh") {
 }
 
 loadCachedEventData();
+loadCachedBudgetData();
 
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
 if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
@@ -462,13 +574,6 @@ if (!/^(member|officer)$/.test(state.memberRole)) state.memberRole = "member";
 if (!/^(list|calendar)$/.test(state.eventMode)) state.eventMode = "list";
 if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].date.slice(0, 7);
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
-
-const officerStats = [
-  ["$1,840", "Budget available"],
-  ["82%", "Average attendance"],
-  ["3", "Permits pending"],
-  ["5", "Ad posts scheduled"]
-];
 
 const tasks = [
   ["Budget", "Confirm food spend for kickoff", "Ready"],
@@ -529,6 +634,16 @@ function formatEventDataStatus() {
   if (!eventDataUpdatedAt) return eventDataSource;
   const refreshed = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(eventDataUpdatedAt));
   return `${eventDataSource} · ${refreshed}`;
+}
+
+function formatMoney(value) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value) || 0);
+}
+
+function formatBudgetDataStatus() {
+  if (!eventBudgetUpdatedAt) return eventBudgetSource;
+  const refreshed = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(eventBudgetUpdatedAt));
+  return `${eventBudgetSource} · ${refreshed}`;
 }
 
 function escapeHtml(value) {
@@ -1434,8 +1549,41 @@ function renderCheckIn() {
 }
 
 function renderOfficerWorkspace() {
+  const budgetMetrics = [
+    [formatMoney(eventBudget.totalApproved), "Total approved"],
+    [formatMoney(eventBudget.plannedSpend), "Planned spend"],
+    [formatMoney(eventBudget.actualSpend), "Actual spend"],
+    [formatMoney(eventBudget.availableAfterActual), "Available after actuals"]
+  ];
+  const budgetCards = events.map((event) => {
+    const items = eventBudget.items.filter((item) => item.eventId === event.id);
+    const planned = items.reduce((sum, item) => sum + item.plannedCost, 0);
+    const actual = items.reduce((sum, item) => sum + item.actualCost, 0);
+    const remaining = planned - actual;
+    const sources = [...new Set(items.map((item) => item.fundingSource).filter(Boolean))];
+    return `
+      <details class="budget-event-card" ${items.length ? "open" : ""}>
+        <summary>
+          <span><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(formatEventDate(event, { month: "short", day: "numeric" }))}</small></span>
+          <span class="budget-event-total">${items.length ? formatMoney(planned) : "No plan"}</span>
+        </summary>
+        <div class="budget-event-breakdown">
+          <span><small>Planned</small><strong>${formatMoney(planned)}</strong></span>
+          <span><small>Actual</small><strong>${formatMoney(actual)}</strong></span>
+          <span><small>Remaining</small><strong class="${remaining < 0 ? "over-budget" : ""}">${formatMoney(remaining)}</strong></span>
+        </div>
+        ${sources.length ? `<p class="budget-funding-source">${escapeHtml(sources.join(" · "))}</p>` : ""}
+        ${items.length ? `<div class="budget-purchase-list">${items.map((item) => `
+          <article>
+            <div><strong>${escapeHtml(item.item)}</strong><p>${item.quantity ? `${escapeHtml(item.quantity)} ${escapeHtml(item.unit || "")}`.trim() : "Quantity pending"}${item.unitCost ? ` · ${formatMoney(item.unitCost)} each` : ""}</p></div>
+            <div class="budget-purchase-cost"><strong>${item.plannedCost ? formatMoney(item.plannedCost) : "Needs quote"}</strong><span>${escapeHtml(item.status || "Planned")}</span></div>
+          </article>
+        `).join("")}</div>` : '<p class="empty-state budget-empty">No purchase plan has been added for this event.</p>'}
+      </details>
+    `;
+  }).join("");
   return `
-    <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(officerStats)}</section>
+    <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(budgetMetrics)}</section>
     <section class="section">
       <div class="section-header"><div><p class="section-kicker">Admin controls</p><h2>Event Check-In</h2><p>Choose the event members can check into from the middle tab.</p></div></div>
       <div class="checkin-admin-grid">
@@ -1448,15 +1596,21 @@ function renderOfficerWorkspace() {
       </div>
     </section>
     <section class="section">
-      <div class="section-header"><div><p class="section-kicker">Operations</p><h2>Officer Command Center</h2><p>Budget, attendance, permits, rooms, advertising, and socials.</p></div></div>
-      <div class="portal-grid">${officerStats.map(([value, label]) => `<article class="officer-card"><strong>${value}</strong><p>${label}</p></article>`).join("")}</div>
+      <div class="section-header budget-section-header">
+        <div><p class="section-kicker">Operations</p><h2>Officer Command Center</h2><p>Live budget totals and purchase plans for every FQC event.</p></div>
+        <a class="secondary-button budget-sheet-link" href="${EVENT_BUDGET_SHEET_URL}" target="_blank" rel="noopener">Open Budget Sheet</a>
+      </div>
+      <div class="budget-sync-line"><span></span><strong>Google Sheet connected</strong><p>${escapeHtml(formatBudgetDataStatus())} · updates every 5 minutes</p></div>
+      <div class="budget-summary-line"><strong>${formatMoney(eventBudget.baseFunding)} base + ${formatMoney(eventBudget.operationalFunding)} operational</strong><span>${formatMoney(eventBudget.uncommittedAfterPlan)} uncommitted after current plans</span></div>
+      <h3 class="budget-list-title">Budget by Event</h3>
+      <div class="budget-event-list">${budgetCards}</div>
     </section>
     <section class="section">
       <h2>Planning Tasks</h2>
       <div class="task-list">${tasks.map(([area, task, status]) => `<article class="task-item"><div><h3>${area}</h3><p>${task}</p></div><span class="task-status">${status}</span></article>`).join("")}</div>
     </section>
     <section class="section">
-      <div class="section-header"><div><h2>Officer Notes</h2><p>Saved locally for this prototype.</p></div></div>
+      <div class="section-header"><div><h2>Officer Notes</h2><p>Saved on this device.</p></div></div>
       <div class="form-row"><label for="note-area">Area</label><select id="note-area"><option>Budget</option><option>Attendance</option><option>Permits</option><option>Rooms</option><option>Advertising</option><option>Socials</option></select></div>
       <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" placeholder="Add the next action or decision"></textarea></div>
       <button class="primary-button" id="add-note" type="button"><svg><use href="#icon-plus"></use></svg><span>Add Note</span></button>
