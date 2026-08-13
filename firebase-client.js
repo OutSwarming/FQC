@@ -22,7 +22,7 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 
 const firebaseConfig = {
   apiKey: "AIzaSyDB_R45SNkEJT9LoNE6BuX2bt4TDO_Bs4g",
-  authDomain: "florida-quantum-computing.firebaseapp.com",
+  authDomain: "florida-quantum-computing.web.app",
   projectId: "florida-quantum-computing",
   storageBucket: "florida-quantum-computing.firebasestorage.app",
   messagingSenderId: "652691476530",
