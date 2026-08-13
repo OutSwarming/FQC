@@ -25,6 +25,29 @@ const officerRosterSheetName = "Current Leadership";
 const officerRosterCacheMs = 5 * 60 * 1000;
 const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
 let officerRosterCache = { expiresAt: 0, entries: [] };
+const driveResourceUrl = (fileId) => `https://drive.google.com/open?id=${fileId}`;
+export const officerResourceCatalog = Object.freeze([
+  { id: "general-onboarding", title: "General Onboarding", kind: "Google Doc", category: "Getting Started", roles: ["general"], featured: ["all"], summary: "Start here for the club-wide officer onboarding process.", url: driveResourceUrl("1QTB_FgUUzLY6x3gb9Qy4VXjBkdCuMak9Qd8OhEhA-DM") },
+  { id: "president-guide", title: "President Guide", kind: "Google Doc", category: "Role Guides", roles: ["president"], featured: ["president"], summary: "President responsibilities, recurring work, and handoff information.", url: driveResourceUrl("1silsTsr5IC1zf7H6yfAdn_v5K4sgjEkdTYVG84wsUf0") },
+  { id: "vice-president-guide", title: "Vice President Guide", kind: "Google Doc", category: "Role Guides", roles: ["vice-president"], featured: ["vice-president"], summary: "Vice President responsibilities and operational support workflow.", url: driveResourceUrl("1mZlod9xpK3mlm45EpFelwG8IpUBPJKnUtAeGl5AfbDg") },
+  { id: "secretary-guide", title: "Secretary Guide", kind: "Google Doc", category: "Role Guides", roles: ["secretary"], featured: ["secretary"], summary: "Secretary responsibilities, records, and communication workflow.", url: driveResourceUrl("1BiCnuETsABgXeEUtzw4pPYfooQx1ZDU-sokSfwFMQ-E") },
+  { id: "treasurer-guide", title: "Treasurer Guide", kind: "Google Doc", category: "Role Guides", roles: ["treasurer"], featured: ["treasurer"], summary: "Treasurer responsibilities, funding, purchasing, and reimbursement workflow.", url: driveResourceUrl("1cadNMOdQ36Go2Tz_TbxJUI1fAMEjQlbZQvrDu-ydVDQ") },
+  { id: "workshop-guide", title: "Workshop Guide", kind: "Google Doc", category: "Role Guides", roles: ["workshop"], featured: ["workshop"], summary: "Workshop planning, preparation, and delivery guidance.", url: driveResourceUrl("1RdvqcjEFb7kMy5VgtGw1u7nsYH6pq0IYbBXSmeCCB_4") },
+  { id: "outreach-guide", title: "Outreach Guide", kind: "Google Doc", category: "Role Guides", roles: ["outreach"], featured: ["outreach"], summary: "Outreach responsibilities, contacts, and external communication workflow.", url: driveResourceUrl("1lIWEsySDSyN4TAsNUiofA2x1rZSDbYbO9M46a4z3q4k") },
+  { id: "social-media-guide", title: "Social Media Guide", kind: "Google Doc", category: "Role Guides", roles: ["social-media"], featured: ["social-media"], summary: "Social posting, event promotion, and account workflow.", url: driveResourceUrl("1n4lHL-JLqZhsClDR0VrzXjwNDG7FgR0APNBodGqKxXY") },
+  { id: "merch-guide", title: "Merch Guide", kind: "Google Doc", category: "Role Guides", roles: ["merch"], featured: ["merch"], summary: "Merchandise planning, vendor, inventory, and fulfillment guidance.", url: driveResourceUrl("1jlLvlk3nhB7AymKY3cSrIXuuWrDE5QiVbEmztRLkOgg") },
+  { id: "event-logistics", title: "2026 Event Logistics", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["all"], summary: "Live events, per-event budgets, treasury details, UF locations, and leadership.", url: driveResourceUrl("1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0") },
+  { id: "annual-calendar", title: "Annual Calendar", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "secretary", "workshop", "social-media"], summary: "Year-round schedule and planning reference.", url: driveResourceUrl("1Q8nTp6xPnwZEITDgHKybljW5ikGW40E_oalAeH-MKmA") },
+  { id: "officer-tasks", title: "FQC To Do List", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "secretary"], summary: "Shared current action list for the officer team.", url: driveResourceUrl("14FCA-rZteURTS9DXcUBgHKHpcv_5UaWscCtDN_Nri1o") },
+  { id: "deadlines", title: "Deadlines Tracker", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "treasurer", "secretary"], summary: "Important organization, event, funding, and submission deadlines.", url: driveResourceUrl("1geo4p1mRyla8kuXV_u2PBxEh2xDBU4F3kAcNeqbxyk4") },
+  { id: "contacts", title: "Contacts", kind: "Google Sheet", category: "Communication & Forms", roles: ["all"], featured: ["president", "vice-president", "secretary", "outreach", "merch"], summary: "Shared FQC contacts and relationship reference.", url: driveResourceUrl("1OKSz-F8wqID_OE1-AhfrcHpqc4iVhmYOew5TJofSFQg") },
+  { id: "reimbursement", title: "Reimbursement Form", kind: "Google Form", category: "Communication & Forms", roles: ["all"], featured: ["treasurer"], summary: "Submit and track an officer reimbursement request.", url: driveResourceUrl("1ngiD2teRShlXaGy49Dp7lmQiy_dbhYP2E9M4XDzNgxo") },
+  { id: "incident-report", title: "Incident Report Form", kind: "Google Form", category: "Communication & Forms", roles: ["all"], featured: ["president", "vice-president", "secretary"], summary: "Record an incident consistently for officer follow-up.", url: driveResourceUrl("1IXeS19ZqLjsNOiDBdufpgdEhJf4vAeNQ0B-5VtRvKLY") },
+  { id: "signature-template", title: "FQC Signature Template", kind: "Google Doc", category: "Communication & Forms", roles: ["all"], featured: ["outreach", "social-media"], summary: "Official FQC email signature and branding reference.", url: driveResourceUrl("1F0DybYt2KsGTlDC0J8lG4WCWZkxcuFRVFrd72lvQbnk") },
+  { id: "constitution", title: "Constitution 2026–27", kind: "Google Doc", category: "Governance & Continuity", roles: ["all"], featured: ["president", "vice-president"], summary: "Current governing constitution for the 2026–27 organization year.", url: driveResourceUrl("1fhKyCr1jd3T95VY9YZ2CPIi8ASFTnzp7RF8yM0xn46k") },
+  { id: "bylaws", title: "Bylaws", kind: "Google Doc", category: "Governance & Continuity", roles: ["all"], featured: ["president", "vice-president"], summary: "Current officer and organization operating rules.", url: driveResourceUrl("1rWf08RjafNYlwX1jWU1hTe1nRcMcygWF8nSwawmc8rA") },
+  { id: "handover", title: "Handover Guide", kind: "Google Doc", category: "Governance & Continuity", roles: ["all"], featured: ["president", "vice-president"], summary: "Continuity checklist and transfer guidance for future officer teams.", url: driveResourceUrl("1CQ7QGbDqAKEucQP7Ei-g6cL2f3rot65NLtUBsa6GRhM") }
+]);
 const allowedOrigins = new Map([
   ["https://florida-quantum-computing.web.app", "florida-quantum-computing.web.app"],
   ["https://florida-quantum-computing.firebaseapp.com", "florida-quantum-computing.firebaseapp.com"],
@@ -125,6 +148,22 @@ export function leadershipForRole(role) {
   if (normalized === "vice president" || normalized === "vice-president" || normalized === "vp") return "vice_president";
   if (normalized === "treasurer") return "treasurer";
   return "";
+}
+
+export function officerResourceRoleKey(officerTitle = "", leadership = "") {
+  if (leadership === "president") return "president";
+  if (leadership === "vice_president") return "vice-president";
+  if (leadership === "treasurer") return "treasurer";
+  const normalized = String(officerTitle || "").trim().toLowerCase();
+  if (normalized.includes("vice") && normalized.includes("president")) return "vice-president";
+  if (normalized.includes("president")) return "president";
+  if (normalized.includes("treasurer")) return "treasurer";
+  if (normalized.includes("secretary")) return "secretary";
+  if (normalized.includes("workshop")) return "workshop";
+  if (normalized.includes("outreach")) return "outreach";
+  if (normalized.includes("social")) return "social-media";
+  if (normalized.includes("merch")) return "merch";
+  return "general";
 }
 
 export function canManageOfficerRoles(token = {}) {
@@ -370,6 +409,11 @@ export const listMembers = onCall(callableOptions, async (request) => {
       officerNomination: nominated.has(doc.id) ? "pending" : ""
     }))
   };
+});
+
+export const getOfficerResources = onCall(callableOptions, (request) => {
+  requireOfficer(request);
+  return { resources: officerResourceCatalog };
 });
 
 export const setMemberRole = onCall(callableOptions, async (request) => {

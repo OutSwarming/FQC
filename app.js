@@ -5,6 +5,7 @@ import {
   createEmailAccount,
   loadLeaderboard,
   loadMembers,
+  loadOfficerResources,
   logOut,
   observeCheckIn,
   observeSession,
@@ -23,9 +24,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.2.1";
+const APP_VERSION = "2.3.0";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.3.0", "Added secure, role-prioritized FQC Drive resources for officers on phones and computers"],
   ["2.2.1", "Consolidated events, treasury, UF locations, and current leadership into one canonical workbook"],
   ["2.2.0", "Added live officer event budgets, itemized purchase plans, and verified FQC funding totals"],
   ["2.1.0", "Added a one-read live leaderboard with one point per unique event check-in"],
@@ -104,6 +106,10 @@ const state = {
   passkeyCount: 0,
   members: [],
   membersLoading: false,
+  officerResources: [],
+  officerResourcesLoaded: false,
+  officerResourcesLoading: false,
+  officerResourcesError: "",
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
   checkedInEvents: [],
@@ -1413,6 +1419,12 @@ function applyMemberProfile(profile) {
   state.passkeyCount = Number(profile.passkeyCount) || 0;
   state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
   state.memberPoints = state.checkedInEvents.length;
+  if (state.memberRole !== "officer") {
+    state.officerResources = [];
+    state.officerResourcesLoaded = false;
+    state.officerResourcesLoading = false;
+    state.officerResourcesError = "";
+  }
   localStorage.setItem("fqc:name", state.memberName);
 }
 
@@ -1465,6 +1477,23 @@ async function refreshMemberDirectory() {
   } finally {
     state.membersLoading = false;
     render();
+  }
+}
+
+async function refreshOfficerResources(force = false) {
+  if (state.memberRole !== "officer" || state.officerResourcesLoading) return;
+  if (state.officerResourcesLoaded && !force) return;
+  state.officerResourcesLoading = true;
+  state.officerResourcesError = "";
+  if (state.view === "profile") render();
+  try {
+    state.officerResources = await loadOfficerResources();
+    state.officerResourcesLoaded = true;
+  } catch (error) {
+    state.officerResourcesError = readableAuthError(error);
+  } finally {
+    state.officerResourcesLoading = false;
+    if (state.view === "profile") render();
   }
 }
 
@@ -1587,6 +1616,7 @@ function renderOfficerWorkspace() {
     `;
   }).join("");
   return `
+    ${renderOfficerResources()}
     <section class="metric-grid" aria-label="Officer metrics">${renderMetrics(budgetMetrics)}</section>
     <section class="section">
       <div class="section-header"><div><p class="section-kicker">Admin controls</p><h2>Event Check-In</h2><p>Choose the event members can check into from the middle tab.</p></div></div>
@@ -1619,6 +1649,89 @@ function renderOfficerWorkspace() {
       <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" placeholder="Add the next action or decision"></textarea></div>
       <button class="primary-button" id="add-note" type="button"><svg><use href="#icon-plus"></use></svg><span>Add Note</span></button>
       <div class="task-list" id="notes-list">${renderNotes()}</div>
+    </section>
+  `;
+}
+
+function officerResourceRoleKey() {
+  if (state.leadership === "president") return "president";
+  if (state.leadership === "vice_president") return "vice-president";
+  if (state.leadership === "treasurer") return "treasurer";
+  const title = String(state.officerTitle || "").toLowerCase();
+  if (title.includes("vice") && title.includes("president")) return "vice-president";
+  if (title.includes("president")) return "president";
+  if (title.includes("treasurer")) return "treasurer";
+  if (title.includes("secretary")) return "secretary";
+  if (title.includes("workshop")) return "workshop";
+  if (title.includes("outreach")) return "outreach";
+  if (title.includes("social")) return "social-media";
+  if (title.includes("merch")) return "merch";
+  return "general";
+}
+
+function renderResourceLink(resource, featured = false) {
+  return `
+    <a class="officer-resource-card${featured ? " featured" : ""}" href="${escapeHtml(resource.url)}" target="_blank" rel="noopener noreferrer">
+      <span class="officer-resource-icon" aria-hidden="true"><svg><use href="#icon-file"></use></svg></span>
+      <span class="officer-resource-copy"><strong>${escapeHtml(resource.title)}</strong><small>${escapeHtml(resource.kind || "Google Drive")}</small><p>${escapeHtml(resource.summary || "Open this FQC officer resource in Google Drive.")}</p></span>
+      <span class="officer-resource-open" aria-hidden="true">↗</span>
+    </a>
+  `;
+}
+
+function renderOfficerResources() {
+  const currentRole = officerResourceRoleKey();
+  const roleName = roleLabel();
+  if ((!state.officerResourcesLoaded || state.officerResourcesLoading) && !state.officerResources.length && !state.officerResourcesError) {
+    return `
+      <section class="section officer-resources" aria-live="polite">
+        <p class="section-kicker">Useful information</p>
+        <h2>${escapeHtml(roleName)} Resources</h2>
+        <p>Loading your secure FQC Drive toolkit…</p>
+      </section>
+    `;
+  }
+  if (state.officerResourcesError && !state.officerResources.length) {
+    return `
+      <section class="section officer-resources" aria-live="polite">
+        <p class="section-kicker">Useful information</p>
+        <h2>${escapeHtml(roleName)} Resources</h2>
+        <p>${escapeHtml(state.officerResourcesError)}</p>
+        <button class="secondary-button" id="retry-officer-resources" type="button">Try Again</button>
+      </section>
+    `;
+  }
+
+  const personal = state.officerResources
+    .filter((resource) => resource.featured?.includes("all") || resource.featured?.includes(currentRole))
+    .sort((a, b) => Number(b.roles?.includes(currentRole)) - Number(a.roles?.includes(currentRole)))
+    .slice(0, 6);
+  const grouped = state.officerResources.reduce((groups, resource) => {
+    const category = resource.category || "Other Resources";
+    (groups[category] ||= []).push(resource);
+    return groups;
+  }, {});
+
+  return `
+    <section class="section officer-resources">
+      <div class="section-header officer-resource-header">
+        <div><p class="section-kicker">Useful information</p><h2>Your ${escapeHtml(roleName)} Toolkit</h2><p>Your most useful FQC Drive documents are first. Links open in Google Drive on phones and computers.</p></div>
+        <span class="role-badge officer">${escapeHtml(roleName)}</span>
+      </div>
+      <div class="officer-resource-featured" aria-label="Your ${escapeHtml(roleName)} resources">
+        ${personal.length ? personal.map((resource) => renderResourceLink(resource, true)).join("") : '<p class="empty-state">Your role guide is being organized. Use the complete Drive library below.</p>'}
+      </div>
+      <details class="officer-resource-browser">
+        <summary><span>All Officer Documents</span><small>${state.officerResources.length} current resources</small></summary>
+        <div class="officer-resource-groups">
+          ${Object.entries(grouped).map(([category, resources]) => `
+            <section class="officer-resource-group">
+              <h3>${escapeHtml(category)}</h3>
+              <div>${resources.map((resource) => renderResourceLink(resource)).join("")}</div>
+            </section>
+          `).join("")}
+        </div>
+      </details>
     </section>
   `;
 }
@@ -1895,6 +2008,7 @@ function bindViewEvents() {
   document.querySelectorAll(".event-list [data-select-event]").forEach((button) => {
     button.addEventListener("click", () => selectEvent(button.dataset.selectEvent));
   });
+  document.querySelector("#retry-officer-resources")?.addEventListener("click", () => refreshOfficerResources(true));
   bindCalendarEvents();
   bindRsvpEvents();
   bindMobileEventSheet();
@@ -2101,11 +2215,16 @@ observeSession((session) => {
     state.leaderboardLoading = false;
     state.leaderboardError = "";
     state.members = [];
+    state.officerResources = [];
+    state.officerResourcesLoaded = false;
+    state.officerResourcesLoading = false;
+    state.officerResourcesError = "";
     localStorage.removeItem("fqc:name");
   }
   render();
   if (state.view === "profile" && state.loggedIn && state.ufidStatus !== "required") queueMicrotask(() => refreshLeaderboard());
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
+  if (state.memberRole === "officer" && !state.officerResourcesLoaded && !state.officerResourcesLoading) queueMicrotask(refreshOfficerResources);
 }, (error) => {
   state.authReady = true;
   state.authError = readableAuthError(error);

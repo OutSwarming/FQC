@@ -5,6 +5,7 @@ A responsive Firebase web app for Florida Quantum Computing with a unified event
 - Members: one synchronized event list, calendar, and interactive map; RSVP tracking; light and dark themes; leaderboard; and profile progress.
 - Settings: explicit update checking, an in-app version history, and a destructive device reset hidden under Advanced settings.
 - Officers: live event check-in controls and an officer-specific profile workspace.
+- Officer resources: a secure Firebase endpoint returns the current FQC Drive library only to verified officers. The Profile screen places the signed-in officer's role guide and most relevant files first, with the complete document library in a responsive dropdown.
 - President and Treasurer: protected ordinary-officer promotion and removal from the Firebase-backed account directory.
 
 ## Authentication and access
@@ -15,6 +16,7 @@ A responsive Firebase web app for Florida Quantum Computing with a unified event
 - The `Current Leadership` tab in the events workbook contains only HMAC fingerprints, active flags, and officer titles. Firebase refreshes it on a five-minute cache cycle. A match receives the listed title; no match becomes a Member.
 - Any officer can recommend a member. Only the President and Treasurer can complete promotions or remove ordinary officers, and their own leadership roles are protected.
 - Role claims and attendance writes are enforced server-side and are never trusted from the browser.
+- Real Google Drive file IDs are not embedded in the public web bundle. Officers receive direct Drive links only after Firebase verifies their officer claim; Google Drive permissions remain the final access control for every file.
 - Firestore security rules keep profiles private, passkey credentials server-only, and check-in mutations restricted to Cloud Functions.
 
 ## Event Data Workflow
