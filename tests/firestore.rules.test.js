@@ -29,6 +29,7 @@ beforeEach(async () => {
     });
     await setDoc(doc(database, "events", "gbm-1", "checkins", "member-1"), { uid: "member-1" });
     await setDoc(doc(database, "passkeyCredentials", "credential-1"), { uid: "member-1" });
+    await setDoc(doc(database, "usernameDirectory", "member"), { uid: "member-1" });
   });
 });
 
@@ -53,6 +54,7 @@ test("President and Treasurer claims can read member profiles but secrets stay s
   assert.equal(profile.data().displayName, "Other Member");
   await assertFails(getDoc(doc(database, "passkeyCredentials", "credential-1")));
   await assertFails(getDoc(doc(database, "ufidClaimAttempts", "member-1")));
+  await assertFails(getDoc(doc(database, "usernameDirectory", "member")));
 });
 
 test("check-in state is public while mutations remain server-only", async () => {
