@@ -1014,6 +1014,7 @@ function renderSelectedEventDetails() {
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
   const going = state.rsvps.includes(event.id);
+  const past = isPastEvent(event);
   const directionsDestination = encodeURIComponent(`${location.lat},${location.lng}`);
   return `
     <article class="event-detail-card">
@@ -1032,7 +1033,9 @@ function renderSelectedEventDetails() {
       </div>
       <div class="event-detail-actions">
         <a class="secondary-button" href="https://www.google.com/maps/dir/?api=1&destination=${directionsDestination}" target="_blank" rel="noopener noreferrer">Directions</a>
-        <button class="primary-button${going ? " going" : ""}" type="button" data-rsvp="${event.id}">${going ? "Going" : "RSVP"}</button>
+        ${past
+          ? '<span class="event-detail-past-label">Past event</span>'
+          : `<button class="primary-button${going ? " going" : ""}" type="button" data-rsvp="${event.id}">${going ? "Going" : "RSVP"}</button>`}
       </div>
     </article>
   `;

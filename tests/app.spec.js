@@ -124,6 +124,9 @@ test("moves events into Past 24 hours after their scheduled start", async ({ pag
   await expect(page.locator('[data-event-panel="past"] .event-card')).toHaveCount(1);
   await expect(page.locator('[data-event-card="fqc-2026-02-27-archived"]')).toBeVisible();
   await expect(page.locator('[data-event-card="fqc-2026-02-28-grace"]')).toBeHidden();
+  await page.locator('[data-event-card="fqc-2026-02-27-archived"] [data-select-event]').click();
+  await expect(page.locator("#event-details").getByText("Past event", { exact: true })).toHaveCount(1);
+  await expect(page.locator("#event-details").getByRole("button", { name: "RSVP" })).toHaveCount(0);
 });
 
 test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", async ({ page }) => {

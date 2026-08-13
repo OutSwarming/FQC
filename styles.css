@@ -796,6 +796,19 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
   gap: 8px;
 }
 
+.event-detail-past-label {
+  min-height: 43px;
+  display: inline-grid;
+  padding: 0 14px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .primary-button,
 .secondary-button,
 .chip-button,
