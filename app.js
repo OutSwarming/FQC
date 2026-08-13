@@ -29,9 +29,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.6.1";
+const APP_VERSION = "2.7.0";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.7.0", "Polished RSVP, sign-in, and check-in handoffs with faster location checks and clear live confirmation feedback"],
   ["2.6.1", "Moved three-step signup into a dismissible modal and removed the duplicate post-account UFID screen"],
   ["2.6.0", "Added a welcoming three-step signup, unique usernames, username-or-UF-email login, and passkey-only account setup"],
   ["2.5.1", "Added secure pending-leadership account linking and verified every officer-title permission path"],
@@ -109,6 +110,10 @@ const state = {
   authError: "",
   authMessage: "",
   authMode: "login",
+  authPromptOpen: false,
+  authPromptAction: "",
+  authPromptEventId: "",
+  pendingIntent: null,
   signupOpen: false,
   signupStep: 1,
   signupEmail: "",
@@ -820,7 +825,7 @@ function render() {
   const eventsScreenActive = state.view === "home";
   document.documentElement.classList.toggle("events-screen-active", eventsScreenActive);
   document.body.classList.toggle("events-screen-active", eventsScreenActive);
-  document.body.classList.toggle("signup-modal-open", state.signupOpen);
+  document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
   title.textContent = titles[state.view] || "Events";
@@ -838,7 +843,7 @@ function render() {
     settings: renderSettings
   };
 
-  app.innerHTML = `${views[state.view]?.() || renderHome()}${state.signupOpen ? renderSignupModal() : ""}`;
+  app.innerHTML = `${views[state.view]?.() || renderHome()}${state.authPromptOpen ? renderAuthPromptModal() : ""}${state.signupOpen ? renderSignupModal() : ""}`;
   bindViewEvents();
   app.focus({ preventScroll: true });
   if (state.view === "home") requestAnimationFrame(initEventMap);
@@ -1378,6 +1383,14 @@ function bindMobileEventSheet() {
 }
 
 async function toggleRsvp(eventId) {
+  if (!state.loggedIn || state.ufidStatus === "required") {
+    state.pendingIntent = { type: "rsvp", eventId };
+    state.authPromptOpen = true;
+    state.authPromptAction = "rsvp";
+    state.authPromptEventId = eventId;
+    render();
+    return;
+  }
   const wasGoing = state.rsvps.includes(eventId);
   const going = !wasGoing;
   state.rsvps = going ? [...state.rsvps, eventId] : state.rsvps.filter((id) => id !== eventId);
@@ -1385,17 +1398,27 @@ async function toggleRsvp(eventId) {
 
   document.querySelectorAll(`[data-rsvp="${eventId}"]`).forEach((button) => {
     button.classList.toggle("going", going);
+    button.classList.add("is-working");
+    button.disabled = true;
     button.textContent = going ? "Going" : "RSVP";
     button.setAttribute("aria-label", `${going ? "Cancel RSVP for" : "RSVP for"} ${getEvent(eventId).title}`);
   });
-  if (!state.loggedIn) return;
+  showActionFeedback("working", going ? "Saving your RSVP…" : "Updating your RSVP…");
   try {
     await updateEventRsvp(eventId, going);
     if (state.memberRole === "officer") state.officerOperationsLoaded = false;
+    document.querySelectorAll(`[data-rsvp="${eventId}"]`).forEach((button) => {
+      button.classList.remove("is-working");
+      button.classList.add("is-confirmed");
+      button.disabled = false;
+      window.setTimeout(() => button.classList.remove("is-confirmed"), 900);
+    });
+    showActionFeedback("success", going ? "RSVP confirmed — you’re going." : "RSVP removed.");
   } catch (error) {
     state.rsvps = wasGoing ? [...new Set([...state.rsvps, eventId])] : state.rsvps.filter((id) => id !== eventId);
     state.authError = readableAuthError(error);
     saveState();
+    showActionFeedback("error", state.authError);
     render();
   }
 }
@@ -1549,21 +1572,56 @@ async function refreshLeaderboard(force = false) {
   }
 }
 
-async function runAuthAction(action, successMessage = "") {
+let actionFeedbackTimer = 0;
+
+function showActionFeedback(kind, message) {
+  window.clearTimeout(actionFeedbackTimer);
+  let feedback = document.querySelector("#action-feedback");
+  if (!feedback) {
+    feedback = document.createElement("div");
+    feedback.id = "action-feedback";
+    feedback.setAttribute("role", "status");
+    feedback.setAttribute("aria-live", "polite");
+    document.body.append(feedback);
+  }
+  feedback.className = `action-feedback ${kind} visible`;
+  feedback.innerHTML = `${kind === "working" ? '<span class="auth-spinner" aria-hidden="true"></span>' : `<span class="action-feedback-icon" aria-hidden="true">${kind === "success" ? "✓" : "!"}</span>`}<span>${escapeHtml(message)}</span>`;
+  if (kind !== "working") {
+    actionFeedbackTimer = window.setTimeout(() => feedback.classList.remove("visible"), kind === "success" ? 2400 : 4200);
+  }
+}
+
+function setActiveControlBusy(busy) {
+  const active = document.activeElement?.closest?.("button");
+  if (busy && active && !active.disabled) {
+    active.dataset.actionBusy = "true";
+    active.disabled = true;
+    active.classList.add("is-working");
+    return active;
+  }
+  return null;
+}
+
+async function runAuthAction(action, successMessage = "", workingMessage = "Updating FQC…") {
   state.authBusy = true;
   state.authError = "";
   state.authMessage = "";
-  render();
+  const activeControl = setActiveControlBusy(true);
+  showActionFeedback("working", workingMessage);
   try {
     const result = await action();
-    if (successMessage) state.authMessage = successMessage;
+    showActionFeedback("success", successMessage || "Done — your change is confirmed.");
     return result;
   } catch (error) {
     state.authError = readableAuthError(error);
+    showActionFeedback("error", state.authError);
     return null;
   } finally {
     state.authBusy = false;
-    render();
+    if (activeControl?.isConnected) {
+      activeControl.disabled = false;
+      activeControl.classList.remove("is-working");
+    }
   }
 }
 
@@ -1580,7 +1638,7 @@ function currentCheckInLocation() {
       if (error.code === 1) reject(new Error("Allow location access to check in, then try again."));
       else if (error.code === 3) reject(new Error("Location took too long. Move near a window and try again."));
       else reject(new Error("Your location could not be determined. Check location services and try again."));
-    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+    }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 });
   });
 }
 
@@ -2254,6 +2312,31 @@ function renderSignupModal() {
   `;
 }
 
+function renderAuthPromptModal() {
+  const event = state.authPromptEventId ? getEvent(state.authPromptEventId) : null;
+  const isRsvp = state.authPromptAction === "rsvp" && event;
+  return `
+    <div class="signup-modal-backdrop auth-prompt-backdrop" id="auth-prompt-backdrop">
+      <section class="signup-modal auth-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="auth-prompt-title">
+        <button class="signup-modal-close" id="close-auth-prompt" type="button" aria-label="Close sign-in prompt">×</button>
+        <div class="signup-modal-heading">
+          <div class="checkin-icon"><svg><use href="#icon-${isRsvp ? "calendar" : "check"}"></use></svg></div>
+          <div>
+            <p class="section-kicker">${isRsvp ? "Save your spot" : "FQC attendance"}</p>
+            <h2 id="auth-prompt-title">${isRsvp ? `RSVP to ${escapeHtml(event.title)}` : "Sign in to check in"}</h2>
+            <p>Log in to continue, or create your FQC account in three quick steps.</p>
+          </div>
+        </div>
+        <div class="auth-prompt-actions">
+          <button class="primary-button" id="auth-prompt-login" type="button"><svg><use href="#icon-lock"></use></svg><span>Log In</span></button>
+          <button class="secondary-button" id="auth-prompt-create" type="button">Create Account</button>
+        </div>
+        <p class="auth-privacy">After you sign in, we’ll bring you right back and finish this action.</p>
+      </section>
+    </div>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
@@ -2327,7 +2410,17 @@ function bindViewEvents() {
   bindRsvpEvents();
   bindMobileEventSheet();
 
-  document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
+  document.querySelector("#go-to-login")?.addEventListener("click", () => {
+    if (!state.loggedIn) {
+      state.pendingIntent = { type: "checkin" };
+      state.authPromptOpen = true;
+      state.authPromptAction = "checkin";
+      state.authPromptEventId = "";
+      render();
+      return;
+    }
+    setView("profile");
+  });
   document.querySelector("#settings-go-to-login")?.addEventListener("click", () => setView("profile"));
   document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
@@ -2345,6 +2438,37 @@ function bindViewEvents() {
   document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
     state.authMode = "login";
     state.signupOpen = false;
+    state.authError = "";
+    state.authMessage = "";
+    render();
+  });
+  const closeAuthPrompt = () => {
+    state.authPromptOpen = false;
+    state.authPromptAction = "";
+    state.authPromptEventId = "";
+    state.pendingIntent = null;
+    render();
+  };
+  document.querySelector("#close-auth-prompt")?.addEventListener("click", closeAuthPrompt);
+  const authPromptBackdrop = document.querySelector("#auth-prompt-backdrop");
+  authPromptBackdrop?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeAuthPrompt();
+  });
+  authPromptBackdrop?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAuthPrompt();
+  });
+  document.querySelector("#auth-prompt-login")?.addEventListener("click", () => {
+    state.authPromptOpen = false;
+    state.authPromptAction = "";
+    state.authPromptEventId = "";
+    setView("profile");
+  });
+  document.querySelector("#auth-prompt-create")?.addEventListener("click", () => {
+    state.authPromptOpen = false;
+    state.authPromptAction = "";
+    state.authPromptEventId = "";
+    state.signupOpen = true;
+    state.signupStep = 1;
     state.authError = "";
     state.authMessage = "";
     render();
@@ -2502,10 +2626,32 @@ function bindViewEvents() {
 
   document.querySelector("#check-in-now")?.addEventListener("click", async () => {
     if (!state.loggedIn || !state.checkInOpen) return;
-    const result = await runAuthAction(async () => {
+    const button = document.querySelector("#check-in-now");
+    const label = button?.querySelector("span");
+    if (button) {
+      button.disabled = true;
+      button.classList.add("is-working");
+    }
+    if (label) label.textContent = state.checkInRequireLocation ? "Checking location…" : "Saving check-in…";
+    showActionFeedback("working", state.checkInRequireLocation ? "Checking that you’re within two miles…" : "Saving your attendance…");
+    let result = null;
+    try {
       const location = state.checkInRequireLocation ? await currentCheckInLocation() : null;
-      return recordCheckIn(location);
-    });
+      if (state.checkInRequireLocation) {
+        if (label) label.textContent = "Saving attendance…";
+        showActionFeedback("working", "Location confirmed — saving attendance…");
+      }
+      result = await recordCheckIn(location);
+    } catch (error) {
+      state.authError = readableAuthError(error);
+      showActionFeedback("error", state.authError);
+      if (button?.isConnected) {
+        button.disabled = false;
+        button.classList.remove("is-working");
+      }
+      if (label?.isConnected) label.textContent = "I’m Here";
+      return;
+    }
     if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
       state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
     }
@@ -2516,6 +2662,7 @@ function bindViewEvents() {
         state.leaderboardParticipantCount = result.leaderboard.participantCount || state.leaderboardEntries.length;
         state.leaderboardLoaded = true;
       }
+      showActionFeedback("success", result.awarded === false ? "You were already checked in." : "Checked in — 1 point added.");
       render();
     }
   });
@@ -2559,13 +2706,21 @@ function bindViewEvents() {
     button.addEventListener("click", async () => {
       if (state.memberRole !== "officer") return;
       const eventId = button.dataset.startEvent;
-      await runAuthAction(() => updateActiveCheckIn(eventId, true), "Event check-in is open from the middle tab.");
+      await runAuthAction(
+        () => updateActiveCheckIn(eventId, true),
+        "Check-in is open in the middle tab.",
+        "Starting event check-in…"
+      );
     });
   });
   document.querySelectorAll("[data-close-event]").forEach((button) => {
     button.addEventListener("click", async () => {
       if (state.memberRole !== "officer") return;
-      await runAuthAction(() => updateActiveCheckIn(button.dataset.closeEvent, false), "Event check-in is closed.");
+      await runAuthAction(
+        () => updateActiveCheckIn(button.dataset.closeEvent, false),
+        "Event check-in is closed.",
+        "Closing event check-in…"
+      );
     });
   });
 
@@ -2648,6 +2803,20 @@ window.setInterval(() => {
   }
 }, EVENT_REFRESH_INTERVAL_MS);
 
+async function resumePendingIntent() {
+  const intent = state.pendingIntent;
+  if (!intent || !state.loggedIn || state.ufidStatus === "required") return;
+  state.pendingIntent = null;
+  if (intent.type === "rsvp" && intent.eventId) {
+    state.view = "home";
+    saveState();
+    render();
+    await toggleRsvp(intent.eventId);
+    return;
+  }
+  if (intent.type === "checkin") setView("checkin");
+}
+
 observeSession((session) => {
   state.authReady = true;
   state.authUser = session?.user || null;
@@ -2684,6 +2853,7 @@ observeSession((session) => {
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
   if (state.memberRole === "officer" && !state.officerResourcesLoaded && !state.officerResourcesLoading) queueMicrotask(refreshOfficerResources);
   if (state.memberRole === "officer" && !state.officerOperationsLoaded && !state.officerOperationsLoading) queueMicrotask(refreshOfficerOperations);
+  if (state.loggedIn && state.pendingIntent && state.ufidStatus !== "required") queueMicrotask(resumePendingIntent);
 }, (error) => {
   state.authReady = true;
   state.authError = readableAuthError(error);

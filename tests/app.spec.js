@@ -379,11 +379,34 @@ test("calendar tab selects an event and preserves it across reloads", async ({ p
   }
 });
 
-test("saves an RSVP from the unified home", async ({ page }) => {
+test("asks signed-out visitors to log in or create an account before RSVP", async ({ page }) => {
+  const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
+  await speakerCard.locator("[data-rsvp]").click();
+  await expect(page.getByRole("heading", { name: /RSVP to IonQ Quantum Networking/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Log In", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create Account", exact: true })).toBeVisible();
+  await expect(speakerCard.locator("[data-rsvp]")).toHaveText("RSVP");
+
+  await page.getByRole("button", { name: "Create Account", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Create your FQC account" })).toBeVisible();
+});
+
+test("returns from login and automatically finishes the pending RSVP", async ({ page }) => {
+  const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
+  await speakerCard.locator("[data-rsvp]").click();
+  await page.getByRole("button", { name: "Log In", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
+  await expect(page.locator('[data-event-card="fqc-2026-03-03-ionq"] [data-rsvp]')).toHaveText("Going");
+  await expect(page.locator("#action-feedback")).toContainText("RSVP confirmed");
+});
+
+test("saves a signed-in RSVP from the unified home", async ({ page }) => {
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "rsvp-member", displayName: "Riley", username: "riley", email: "riley@ufl.edu", role: "member", ufidStatus: "member" }));
   const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
   await speakerCard.locator("[data-rsvp]").click();
   await expect(speakerCard.locator("[data-rsvp]")).toHaveText("Going");
-  await expect(page.locator("#event-details [data-rsvp]")).toHaveText("Going");
+  await expect(page.locator("#action-feedback")).toContainText("RSVP confirmed");
 
   await page.reload();
   await expect(page.locator('[data-event-card="fqc-2026-03-03-ionq"] [data-rsvp]')).toHaveText("Going");
@@ -405,7 +428,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.6.1 · Current")).toBeVisible();
+  await expect(page.getByText("v2.7.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -459,7 +482,7 @@ test("officers control the club-wide two-mile check-in setting", async ({ page }
   await expect(locationSwitch).not.toBeChecked();
   await locationSwitch.check();
   await expect(locationSwitch).toBeChecked();
-  await expect(page.getByText("Two-mile check-in verification is on for the whole club.")).toBeVisible();
+  await expect(page.locator("#action-feedback")).toContainText("Two-mile check-in verification is on for the whole club.");
 });
 
 test("prioritizes the logged-in officer's Drive resources and expands the complete library", async ({ page }) => {
@@ -520,6 +543,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
   await page.getByRole("button", { name: "Open Profile Login" }).click();
+  await page.getByRole("button", { name: "Log In", exact: true }).click();
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
