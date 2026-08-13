@@ -344,7 +344,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.0.4 · Current")).toBeVisible();
+  await expect(page.getByText("v2.1.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -390,6 +390,44 @@ test("member login enables event check-in and shows a member profile", async ({ 
 
   await expect(page.getByRole("heading", { name: "Alex Q", level: 2 })).toBeVisible();
   await expect(page.locator("#profile-initial")).toHaveText("A");
+});
+
+test("leaderboard uses one cached read and awards one point per unique event", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setLeaderboard({
+      entries: [
+        { uid: "ranger-1", displayName: "Jordan", points: 3, role: "member" },
+        { uid: "ranger-2", displayName: "Taylor", points: 2, role: "officer" },
+        { uid: "member-1", displayName: "Alex", points: 99, role: "member" }
+      ]
+    });
+    window.__FQC_AUTH_TEST_API__.resetLeaderboardReads();
+    window.__FQC_AUTH_TEST_API__.signInAs({
+      uid: "member-1",
+      displayName: "Alex",
+      email: "alex@ufl.edu",
+      role: "member",
+      checkedInEvents: ["past-event", "past-event"]
+    });
+  });
+
+  await navButton(page, "Profile").click();
+  await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+  await expect(page.getByText("3 participants · verified event check-ins")).toBeVisible();
+  await expect(page.locator(".leader-card").first()).toContainText("Jordan");
+  await expect(page.locator(".leader-card.current-user")).toContainText("You");
+  await expect(page.getByText("1 point earned · Member")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
+
+  await navButton(page, "Home").click();
+  await navButton(page, "Profile").click();
+  await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
+
+  await navButton(page, "Check In").click();
+  await page.getByRole("button", { name: "Check In Now" }).click();
+  await navButton(page, "Profile").click();
+  await expect(page.getByText("2 points earned · Member")).toBeVisible();
+  await expect(page.locator(".leader-card.current-user")).toContainText("2 PTS");
 });
 
 test("login and account creation are separate and creation includes UFID", async ({ page }) => {
