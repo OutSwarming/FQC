@@ -3,13 +3,16 @@ import test from "node:test";
 import {
   buildLeaderboardEntries,
   canManageOfficerRoles,
+  distanceMilesBetween,
   leadershipForRole,
+  masterMemberKey,
   normalizedEventStatus,
   officerResourceCatalog,
   officerResourceRoleKey,
   parseCsv,
   pointsForEvents,
-  resolvedAccess
+  resolvedAccess,
+  sheetColumnLetter
 } from "./index.js";
 
 test("CSV parsing preserves quoted officer titles", () => {
@@ -79,4 +82,20 @@ test("event status is constrained to the spreadsheet dropdown", () => {
   assert.equal(normalizedEventStatus("Confirmed", "2026-09-03"), "Confirmed");
   assert.equal(normalizedEventStatus("made up", "2099-01-01"), "Planned");
   assert.equal(normalizedEventStatus("", "2020-01-01"), "Completed");
+});
+
+test("member attendance uses stable private keys and spreadsheet columns", () => {
+  assert.equal(masterMemberKey("firebase-user-1").length, 64);
+  assert.notEqual(masterMemberKey("firebase-user-1"), masterMemberKey("firebase-user-2"));
+  assert.equal(sheetColumnLetter(0), "A");
+  assert.equal(sheetColumnLetter(25), "Z");
+  assert.equal(sheetColumnLetter(26), "AA");
+  assert.ok(distanceMilesBetween(
+    { lat: 29.64631, lng: -82.34788 },
+    { lat: 29.64794, lng: -82.34394 }
+  ) < 2);
+  assert.ok(distanceMilesBetween(
+    { lat: 29.64631, lng: -82.34788 },
+    { lat: 29.70, lng: -82.35 }
+  ) > 2);
 });

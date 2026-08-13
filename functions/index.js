@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
@@ -26,6 +26,10 @@ const officerRosterSheetName = "Current Leadership";
 const eventSheetName = "Events";
 const treasurySheetName = "Treasurer Breakdown";
 const locationSheetName = "UF Locations";
+const masterMembersSheetName = "Master Members";
+const masterMembersBaseColumns = 5;
+const masterMembersColumnCount = 260;
+const maxCheckInDistanceMiles = 2;
 const officerRosterCacheMs = 5 * 60 * 1000;
 const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
 let officerRosterCache = { expiresAt: 0, entries: [] };
@@ -42,7 +46,7 @@ export const officerResourceCatalog = Object.freeze([
   { id: "outreach-guide", title: "Outreach Guide", kind: "Google Doc", category: "Role Guides", roles: ["outreach"], featured: ["outreach"], summary: "Outreach responsibilities, contacts, and external communication workflow.", url: driveResourceUrl("1lIWEsySDSyN4TAsNUiofA2x1rZSDbYbO9M46a4z3q4k") },
   { id: "social-media-guide", title: "Social Media Guide", kind: "Google Doc", category: "Role Guides", roles: ["social-media"], featured: ["social-media"], summary: "Social posting, event promotion, and account workflow.", url: driveResourceUrl("1n4lHL-JLqZhsClDR0VrzXjwNDG7FgR0APNBodGqKxXY") },
   { id: "merch-guide", title: "Merch Guide", kind: "Google Doc", category: "Role Guides", roles: ["merch"], featured: ["merch"], summary: "Merchandise planning, vendor, inventory, and fulfillment guidance.", url: driveResourceUrl("1jlLvlk3nhB7AymKY3cSrIXuuWrDE5QiVbEmztRLkOgg") },
-  { id: "event-logistics", title: "2026 Event Logistics", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["all"], summary: "Live events, per-event budgets, treasury details, UF locations, and leadership.", url: driveResourceUrl("1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0") },
+  { id: "event-logistics", title: "2026 Event Logistics", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["all"], summary: "Live events, member attendance, per-event budgets, treasury details, UF locations, and leadership.", url: driveResourceUrl("1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0") },
   { id: "annual-calendar", title: "Annual Calendar", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "secretary", "workshop", "social-media"], summary: "Year-round schedule and planning reference.", url: driveResourceUrl("1Q8nTp6xPnwZEITDgHKybljW5ikGW40E_oalAeH-MKmA") },
   { id: "officer-tasks", title: "FQC To Do List", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "secretary"], summary: "Shared current action list for the officer team.", url: driveResourceUrl("14FCA-rZteURTS9DXcUBgHKHpcv_5UaWscCtDN_Nri1o") },
   { id: "deadlines", title: "Deadlines Tracker", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["president", "vice-president", "treasurer", "secretary"], summary: "Important organization, event, funding, and submission deadlines.", url: driveResourceUrl("1geo4p1mRyla8kuXV_u2PBxEh2xDBU4F3kAcNeqbxyk4") },
@@ -230,6 +234,35 @@ function sheetNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+export function sheetColumnLetter(index) {
+  let value = Math.trunc(Number(index));
+  if (!Number.isFinite(value) || value < 0) return "";
+  let result = "";
+  do {
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26) - 1;
+  } while (value >= 0);
+  return result;
+}
+
+export function masterMemberKey(uid) {
+  return createHash("sha256").update(cleanText(uid, 160)).digest("hex");
+}
+
+export function distanceMilesBetween(first = {}, second = {}) {
+  const lat1 = Number(first.lat);
+  const lng1 = Number(first.lng);
+  const lat2 = Number(second.lat);
+  const lng2 = Number(second.lng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return Number.POSITIVE_INFINITY;
+  const radians = (degrees) => degrees * Math.PI / 180;
+  const deltaLat = radians(lat2 - lat1);
+  const deltaLng = radians(lng2 - lng1);
+  const a = Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(deltaLng / 2) ** 2;
+  return 3958.7613 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export function normalizedEventStatus(value, date = "") {
   const status = cleanText(value, 40);
   if (eventStatuses.includes(status)) return status;
@@ -278,6 +311,233 @@ async function updateSheetValues(data) {
     method: "POST",
     body: { valueInputOption: "USER_ENTERED", data }
   });
+}
+
+async function appendSheetValues(range, values) {
+  const query = new URLSearchParams({
+    valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS"
+  });
+  return sheetsRequest(`/values/${encodeURIComponent(range)}:append?${query}`, {
+    method: "POST",
+    body: { majorDimension: "ROWS", values }
+  });
+}
+
+async function ensureMasterMembersSchema() {
+  const metadata = await sheetsRequest("?fields=sheets(properties(sheetId,title,gridProperties))");
+  let properties = metadata.sheets?.map((sheet) => sheet.properties)
+    .find((sheet) => sheet.title === masterMembersSheetName);
+  let created = false;
+  if (!properties) {
+    const response = await sheetsRequest(":batchUpdate", {
+      method: "POST",
+      body: {
+        requests: [{
+          addSheet: {
+            properties: {
+              title: masterMembersSheetName,
+              gridProperties: { rowCount: 1000, columnCount: masterMembersColumnCount, frozenRowCount: 2 }
+            }
+          }
+        }]
+      }
+    });
+    properties = response.replies?.[0]?.addSheet?.properties;
+    created = true;
+  }
+  if (!properties?.sheetId) throw new HttpsError("unavailable", "The Master Members tab is unavailable.");
+
+  const needsStructure = created ||
+    Number(properties.gridProperties?.columnCount) < masterMembersColumnCount ||
+    Number(properties.gridProperties?.frozenRowCount) !== 2;
+  if (needsStructure) {
+    await sheetsRequest(":batchUpdate", {
+      method: "POST",
+      body: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: properties.sheetId,
+                gridProperties: { columnCount: masterMembersColumnCount, frozenRowCount: 2 }
+              },
+              fields: "gridProperties.columnCount,gridProperties.frozenRowCount"
+            }
+          },
+          {
+            repeatCell: {
+              range: { sheetId: properties.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: masterMembersColumnCount },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColorStyle: { rgbColor: { red: 0.9, green: 0.9, blue: 0.9 } },
+                  textFormat: { bold: true },
+                  verticalAlignment: "MIDDLE",
+                  wrapStrategy: "WRAP"
+                }
+              },
+              fields: "userEnteredFormat(backgroundColorStyle,textFormat,verticalAlignment,wrapStrategy)"
+            }
+          },
+          {
+            repeatCell: {
+              range: { sheetId: properties.sheetId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: masterMembersColumnCount },
+              cell: {
+                userEnteredFormat: {
+                  backgroundColorStyle: { rgbColor: { red: 0.96, green: 0.96, blue: 0.96 } },
+                  textFormat: { italic: true }
+                }
+              },
+              fields: "userEnteredFormat(backgroundColorStyle,textFormat)"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "ROWS", startIndex: 1, endIndex: 2 },
+              properties: { hiddenByUser: true },
+              fields: "hiddenByUser"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: 1 },
+              properties: { hiddenByUser: true, pixelSize: 150 },
+              fields: "hiddenByUser,pixelSize"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "COLUMNS", startIndex: 1, endIndex: 2 },
+              properties: { pixelSize: 190 },
+              fields: "pixelSize"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "COLUMNS", startIndex: 2, endIndex: 3 },
+              properties: { pixelSize: 125 },
+              fields: "pixelSize"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "COLUMNS", startIndex: 3, endIndex: 4 },
+              properties: { pixelSize: 75 },
+              fields: "pixelSize"
+            }
+          },
+          {
+            updateDimensionProperties: {
+              range: { sheetId: properties.sheetId, dimension: "COLUMNS", startIndex: 4, endIndex: masterMembersColumnCount },
+              properties: { pixelSize: 170 },
+              fields: "pixelSize"
+            }
+          }
+        ]
+      }
+    });
+  }
+
+  const [header = [], identity = []] = await getSheetValues(`'${masterMembersSheetName}'!A1:E2`);
+  const expectedHeader = ["Member Key", "Member Name", "Role", "Points", "Last Check-In"];
+  const expectedIdentity = ["Stable private app key", "", "", "", "Event IDs continue from column F"];
+  if (JSON.stringify(header) !== JSON.stringify(expectedHeader) || JSON.stringify(identity) !== JSON.stringify(expectedIdentity)) {
+    await updateSheetValues([{
+      range: `'${masterMembersSheetName}'!A1:E2`,
+      values: [expectedHeader, expectedIdentity]
+    }]);
+  }
+  return properties;
+}
+
+function masterEventHeader(event = {}) {
+  return `${cleanText(event.date, 24)} · ${cleanText(event.title, 120)}`;
+}
+
+async function syncMasterMemberEventHeaders(workbook) {
+  await ensureMasterMembersSchema();
+  const [titleRow = [], idRow = []] = await getSheetValues(`'${masterMembersSheetName}'!A1:IZ2`);
+  const columnByEventId = new Map();
+  for (let column = masterMembersBaseColumns; column < idRow.length; column += 1) {
+    const eventId = cleanText(idRow[column], 100);
+    if (eventId) columnByEventId.set(eventId, column);
+  }
+
+  const claimedColumns = new Set();
+  const nextOpenColumn = () => {
+    for (let column = masterMembersBaseColumns; column < masterMembersColumnCount; column += 1) {
+      if (!claimedColumns.has(column) && !cleanText(idRow[column], 100)) return column;
+    }
+    throw new HttpsError("resource-exhausted", "The Master Members tab needs more event columns.");
+  };
+  const updates = [];
+  for (const event of workbook.events) {
+    let column = columnByEventId.get(event.id);
+    if (column !== undefined) {
+      claimedColumns.add(column);
+    } else {
+      const datePrefix = `${event.date} · `;
+      const sameDateColumns = [];
+      for (let candidate = masterMembersBaseColumns; candidate < titleRow.length; candidate += 1) {
+        if (String(titleRow[candidate] || "").startsWith(datePrefix) && !claimedColumns.has(candidate)) sameDateColumns.push(candidate);
+      }
+      column = sameDateColumns.length === 1 ? sameDateColumns[0] : nextOpenColumn();
+      claimedColumns.add(column);
+      columnByEventId.set(event.id, column);
+    }
+    const letter = sheetColumnLetter(column);
+    const header = masterEventHeader(event);
+    if (titleRow[column] !== header) updates.push({ range: `'${masterMembersSheetName}'!${letter}1`, values: [[header]] });
+    if (idRow[column] !== event.id) updates.push({ range: `'${masterMembersSheetName}'!${letter}2`, values: [[event.id]] });
+  }
+  if (updates.length) await updateSheetValues(updates);
+  return columnByEventId;
+}
+
+async function syncMasterMemberAttendance({ uid, displayName, roleLabel, points, checkedInEvents, checkedInAt }, workbook) {
+  const columnByEventId = await syncMasterMemberEventHeaders(workbook);
+  const memberKey = masterMemberKey(uid);
+  const memberRows = await getSheetValues(`'${masterMembersSheetName}'!A3:A1000`);
+  const existingIndex = memberRows.findIndex((row) => cleanText(row[0], 80) === memberKey);
+  const attendedColumns = uniqueEventIds(checkedInEvents)
+    .map((eventId) => columnByEventId.get(eventId))
+    .filter((column) => Number.isInteger(column));
+  const baseValues = [memberKey, cleanText(displayName, 80), cleanText(roleLabel, 80), Math.max(0, Math.trunc(Number(points) || 0)), checkedInAt];
+
+  if (existingIndex >= 0) {
+    const row = existingIndex + 3;
+    const updates = [{ range: `'${masterMembersSheetName}'!A${row}:E${row}`, values: [baseValues] }];
+    attendedColumns.forEach((column) => updates.push({
+      range: `'${masterMembersSheetName}'!${sheetColumnLetter(column)}${row}`,
+      values: [["✓"]]
+    }));
+    await updateSheetValues(updates);
+    return { row, added: false };
+  }
+
+  const finalColumn = Math.max(masterMembersBaseColumns - 1, ...attendedColumns);
+  const rowValues = Array(finalColumn + 1).fill("");
+  baseValues.forEach((value, index) => { rowValues[index] = value; });
+  attendedColumns.forEach((column) => { rowValues[column] = "✓"; });
+  const response = await appendSheetValues(`'${masterMembersSheetName}'!A:IZ`, [rowValues]);
+  return { row: response.updates?.updatedRange || "appended", added: true };
+}
+
+async function syncExistingMasterMemberProfile(uid, profile = {}) {
+  await ensureMasterMembersSchema();
+  const memberKey = masterMemberKey(uid);
+  const memberRows = await getSheetValues(`'${masterMembersSheetName}'!A3:A1000`);
+  const existingIndex = memberRows.findIndex((row) => cleanText(row[0], 80) === memberKey);
+  if (existingIndex < 0) return false;
+  const role = profileRole(profile.role);
+  const roleLabel = cleanText(profile.officerTitle || (role === "officer" ? "Officer" : "Member"), 80);
+  const points = pointsForEvents(profile.checkedInEvents);
+  const row = existingIndex + 3;
+  await updateSheetValues([{
+    range: `'${masterMembersSheetName}'!B${row}:D${row}`,
+    values: [[cleanText(profile.displayName || "FQC Member", 80), roleLabel, points]]
+  }]);
+  return true;
 }
 
 async function ensureEventOperationsSchema() {
@@ -391,8 +651,40 @@ async function loadEventOperationsWorkbook() {
   const summaries = Object.fromEntries(treasuryRows
     .filter((row) => row[treasuryIndex["Budget Summary"]])
     .map((row) => [cleanText(row[treasuryIndex["Budget Summary"]], 80), sheetNumber(row[treasuryIndex.Amount])]));
-  const locations = locationRows.map((row) => cleanText(row[locationIndex.Location], 160)).filter(Boolean);
-  return { events, budgetItems, summaries, locations, eventRowById, treasuryRows };
+  const locationRecords = locationRows.map((row) => ({
+    name: cleanText(row[locationIndex.Location], 160),
+    address: cleanText(row[locationIndex.Address], 220),
+    lat: sheetNumber(row[locationIndex.Latitude]),
+    lng: sheetNumber(row[locationIndex.Longitude])
+  })).filter((location) => location.name && Number.isFinite(location.lat) && Number.isFinite(location.lng));
+  const locations = locationRecords.map((location) => location.name);
+  return { events, budgetItems, summaries, locations, locationRecords, eventRowById, treasuryRows };
+}
+
+function coordinatesForEvent(event = {}, locationRecords = []) {
+  const source = cleanText(event.location, 180).toLowerCase();
+  if (!source) return null;
+  const aliases = [
+    [/reitz/, "Reitz Student Union"],
+    [/larsen/, "Larsen Hall"],
+    [/marston/, "Marston Science Library"],
+    [/malachowsky/, "Malachowsky Hall"],
+    [/newell/, "Newell Hall"],
+    [/pugh/, "Pugh Hall"],
+    [/turlington/, "Turlington Hall"],
+    [/little/, "Little Hall"],
+    [/weil/, "Weil Hall"],
+    [/smathers/, "Smathers Library"],
+    [/^(campus|uf|university of florida)$/i, "University of Florida"]
+  ];
+  const alias = aliases.find(([pattern]) => pattern.test(source))?.[1] || "";
+  const match = locationRecords.find((location) =>
+    location.name.toLowerCase() === source ||
+    source.includes(location.name.toLowerCase()) ||
+    location.name === alias
+  );
+  if (!match) return null;
+  return { lat: match.lat, lng: match.lng, name: match.name };
 }
 
 function rosterUrl() {
@@ -567,6 +859,11 @@ export const claimUfidRole = onCall(ufidCallableOptions, async (request) => {
   };
   await Promise.all([userRef.set(data, { merge: true }), setAccessClaims(userRecord, access)]);
   await syncLeaderboardProfile(caller.uid, { ...existing, ...data });
+  try {
+    await syncExistingMasterMemberProfile(caller.uid, { ...existing, ...data });
+  } catch (error) {
+    console.error("Master Members role sync failed", error);
+  }
   return publicProfile(caller.uid, { ...existing, ...data });
 });
 
@@ -581,6 +878,11 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
   const snapshot = await db.collection("users").doc(caller.uid).get();
   const profile = snapshot.data() || {};
   await syncLeaderboardProfile(caller.uid, profile);
+  try {
+    await syncExistingMasterMemberProfile(caller.uid, profile);
+  } catch (error) {
+    console.error("Master Members profile sync failed", error);
+  }
   return publicProfile(caller.uid, profile);
 });
 
@@ -626,6 +928,14 @@ function eventFormData(value = {}) {
   };
 }
 
+function eventIdFor(date, title) {
+  const slug = cleanText(title, 120).toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 52);
+  return `fqc-${date}-${slug}`;
+}
+
 function eventRowValues(event, row) {
   return [
     event.date,
@@ -665,6 +975,7 @@ export const getOfficerEventOperations = onCall(callableOptions, async (request)
     loadEventOperationsWorkbook(),
     db.collection("system").doc("eventRsvps").get()
   ]);
+  await syncMasterMemberEventHeaders(workbook);
   const rsvpData = rsvpSnapshot.data() || {};
   return {
     events: workbook.events.map((event) => ({
@@ -699,13 +1010,22 @@ export const saveOfficerEvent = onCall(callableOptions, async (request) => {
   if (existingRow) {
     const updates = [
       ["A", input.date], ["B", input.time], ["C", input.title], ["D", input.location], ["E", input.backupRoom],
-      ["F", input.attendance], ["K", input.roomStatus], ["L", input.backupRoomStatus], ["O", input.notes], ["V", input.eventStatus]
+      ["F", input.attendance], ["K", input.roomStatus], ["L", input.backupRoomStatus], ["O", input.notes], ["P", requestedId], ["V", input.eventStatus]
     ].map(([column, value]) => ({ range: `'${eventSheetName}'!${column}${existingRow}`, values: [[value]] }));
     await updateSheetValues(updates);
   } else {
     row = Math.max(1, ...workbook.events.map((event) => event.row)) + 1;
     await updateSheetValues([{ range: `'${eventSheetName}'!A${row}:W${row}`, values: [eventRowValues(input, row)] }]);
   }
+  const savedEvent = {
+    ...input,
+    id: requestedId || eventIdFor(input.date, input.title),
+    row
+  };
+  const existingIndex = workbook.events.findIndex((event) => event.id === requestedId);
+  if (existingIndex >= 0) workbook.events[existingIndex] = { ...workbook.events[existingIndex], ...savedEvent };
+  else workbook.events.push(savedEvent);
+  await syncMasterMemberEventHeaders(workbook);
   await db.collection("eventOperationsAudit").add({
     action: existingRow ? "event-updated" : "event-created",
     eventId: requestedId || "generated-in-sheet",
@@ -850,7 +1170,13 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   }, { merge: true });
   batch.delete(db.collection("officerNominations").doc(uid));
   await Promise.all([auth.setCustomUserClaims(uid, claims), batch.commit()]);
-  await syncLeaderboardProfile(uid, { ...targetData, role, officerTitle: role === "officer" ? "Officer" : "" });
+  const updatedProfile = { ...targetData, role, officerTitle: role === "officer" ? "Officer" : "" };
+  await syncLeaderboardProfile(uid, updatedProfile);
+  try {
+    await syncExistingMasterMemberProfile(uid, updatedProfile);
+  } catch (error) {
+    console.error("Master Members officer title sync failed", error);
+  }
   return { uid, role, leadership: "", canManageOfficers: false };
 });
 
@@ -877,19 +1203,72 @@ export const nominateOfficer = onCall(callableOptions, async (request) => {
   return { uid, officerNomination: "pending" };
 });
 
+function normalizedClientLocation(value = {}) {
+  const lat = Number(value.lat);
+  const lng = Number(value.lng);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+function requireNearbyLocation(checkIn = {}, requestLocation = {}) {
+  if (checkIn.requireLocation === false) return false;
+  const eventLocation = normalizedClientLocation({ lat: checkIn.eventLat, lng: checkIn.eventLng });
+  if (!eventLocation) {
+    throw new HttpsError("failed-precondition", "This event does not have a mapped UF location. An officer can fix the event location or turn off location verification for an online event.");
+  }
+  const memberLocation = normalizedClientLocation(requestLocation);
+  if (!memberLocation) {
+    throw new HttpsError("failed-precondition", "Location is required for this check-in. Allow location access and try again.");
+  }
+  if (distanceMilesBetween(memberLocation, eventLocation) > maxCheckInDistanceMiles) {
+    throw new HttpsError("out-of-range", "You must be within 2 miles of the event location to check in.");
+  }
+  return true;
+}
+
 export const setActiveCheckIn = onCall(callableOptions, async (request) => {
   const caller = requireOfficer(request);
   const eventId = cleanText(request.data?.eventId, 100);
   const open = request.data?.open === true;
   if (open && !eventId) throw new HttpsError("invalid-argument", "Choose an event.");
+  const current = await db.collection("settings").doc("checkin").get();
+  const requireLocation = current.data()?.requireLocation !== false;
   const checkIn = {
     eventId,
     open,
     updatedBy: caller.uid,
     updatedAt: FieldValue.serverTimestamp()
   };
+  if (open) {
+    const workbook = await loadEventOperationsWorkbook();
+    const event = workbook.events.find((entry) => entry.id === eventId);
+    if (!event) throw new HttpsError("not-found", "That event is no longer in the 2026 Event Logistics Sheet.");
+    const coordinates = coordinatesForEvent(event, workbook.locationRecords);
+    if (requireLocation && !coordinates) {
+      throw new HttpsError("failed-precondition", "This event needs a mapped UF location before check-in can open. Update its location, or turn off location verification in Settings for an online event.");
+    }
+    Object.assign(checkIn, {
+      eventTitle: event.title,
+      eventLocation: event.location,
+      eventLat: coordinates?.lat ?? null,
+      eventLng: coordinates?.lng ?? null
+    });
+  }
   await db.collection("settings").doc("checkin").set(checkIn, { merge: true });
-  return { eventId, open };
+  return { eventId, open, requireLocation };
+});
+
+export const setCheckInLocationRequirement = onCall(callableOptions, async (request) => {
+  const caller = requireOfficer(request);
+  const requireLocation = request.data?.requireLocation !== false;
+  const settingRef = db.collection("settings").doc("checkin");
+  const current = await settingRef.get();
+  const checkIn = current.data() || {};
+  if (requireLocation && checkIn.open === true && !normalizedClientLocation({ lat: checkIn.eventLat, lng: checkIn.eventLng })) {
+    throw new HttpsError("failed-precondition", "The current event has no mapped UF location. Close it or update the event location before turning verification on.");
+  }
+  await settingRef.set({ requireLocation, updatedBy: caller.uid, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  return { requireLocation };
 });
 
 export const recordEventCheckIn = onCall(callableOptions, async (request) => {
@@ -897,13 +1276,32 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
   const settingRef = db.collection("settings").doc("checkin");
   const userRef = db.collection("users").doc(caller.uid);
   const leaderboardRef = db.collection("system").doc("leaderboardData");
+  const checkedInAt = new Date().toISOString();
+  const preflightSnapshot = await settingRef.get();
+  const preflight = preflightSnapshot.data() || {};
+  if (preflight.open === true && preflight.eventId && preflight.requireLocation !== false &&
+    !normalizedClientLocation({ lat: preflight.eventLat, lng: preflight.eventLng })) {
+    const workbook = await loadEventOperationsWorkbook();
+    const event = workbook.events.find((entry) => entry.id === cleanText(preflight.eventId, 100));
+    const coordinates = event ? coordinatesForEvent(event, workbook.locationRecords) : null;
+    if (coordinates) {
+      await settingRef.set({
+        eventTitle: event.title,
+        eventLocation: event.location,
+        eventLat: coordinates.lat,
+        eventLng: coordinates.lng,
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+  }
 
-  return db.runTransaction(async (transaction) => {
+  const result = await db.runTransaction(async (transaction) => {
     const setting = await transaction.get(settingRef);
     const checkIn = setting.data() || {};
     if (checkIn.open !== true || !checkIn.eventId) {
       throw new HttpsError("failed-precondition", "Event check-in is not open.");
     }
+    const locationVerified = requireNearbyLocation(checkIn, request.data?.location);
 
     const eventId = cleanText(checkIn.eventId, 100);
     const checkInRef = db.collection("events").doc(eventId).collection("checkins").doc(caller.uid);
@@ -917,6 +1315,7 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
     const points = pointsForEvents(checkedInEvents);
     const displayName = cleanText(userData.displayName || caller.token.name || caller.token.email || "FQC Member", 80);
     const role = profileRole(userData.role || caller.token.role);
+    const roleLabel = cleanText(userData.officerTitle || caller.token.officerTitle || (role === "officer" ? "Officer" : "Member"), 80);
     const entries = buildLeaderboardEntries(leaderboardSnapshot.data()?.entries, {
       uid: caller.uid,
       displayName,
@@ -930,6 +1329,8 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
         displayName,
         email: cleanText(caller.token.email, 180),
         pointsAwarded: alreadyEarned ? 0 : 1,
+        locationVerified,
+        locationRequirement: locationVerified ? "within-2-miles" : "disabled",
         checkedInAt: FieldValue.serverTimestamp()
       });
     }
@@ -955,9 +1356,31 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
       eventId,
       awarded: !alreadyEarned,
       points,
+      newCheckIn: !checkInSnapshot.exists,
+      memberSheet: { displayName, roleLabel, checkedInEvents, checkedInAt },
       leaderboard: { entries, participantCount: entries.length }
     };
   });
+
+  let sheetSynced = true;
+  if (result.newCheckIn) {
+    try {
+      const workbook = await loadEventOperationsWorkbook();
+      await syncMasterMemberAttendance({
+        uid: caller.uid,
+        displayName: result.memberSheet.displayName,
+        roleLabel: result.memberSheet.roleLabel,
+        points: result.points,
+        checkedInEvents: result.memberSheet.checkedInEvents,
+        checkedInAt: result.memberSheet.checkedInAt
+      }, workbook);
+    } catch (error) {
+      sheetSynced = false;
+      console.error("Master Members attendance sync failed", error);
+    }
+  }
+  const { memberSheet, newCheckIn, ...publicResult } = result;
+  return { ...publicResult, sheetSynced };
 });
 
 export const beginPasskeyRegistration = onCall(callableOptions, async (request) => {

@@ -23,14 +23,16 @@ import {
   signInWithPasskey,
   supportsPasskeys,
   updateActiveCheckIn,
+  updateCheckInLocationRequirement,
   updateEventRsvp,
   updateProfileName,
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.4.1";
+const APP_VERSION = "2.5.0";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.5.0", "Added the Master Members attendance roster and secure two-mile event check-in verification with an officer online-event switch"],
   ["2.4.1", "Moved events into a Past archive 24 hours after they begin and repaired leadership role matching"],
   ["2.4.0", "Cleaned up Profile and added one Sheet-synced event operations workspace for officers"],
   ["2.3.0", "Added secure, role-prioritized FQC Drive resources for officers on phones and computers"],
@@ -123,6 +125,7 @@ const state = {
   selectedOfficerEventId: "",
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
+  checkInRequireLocation: true,
   checkedInEvents: [],
   memberPoints: 0,
   leaderboardEntries: [],
@@ -1551,6 +1554,23 @@ async function runAuthAction(action, successMessage = "") {
   }
 }
 
+function currentCheckInLocation() {
+  if (!navigator.geolocation) return Promise.reject(new Error("Location services are not available on this device."));
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition((position) => {
+      resolve({
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy
+      });
+    }, (error) => {
+      if (error.code === 1) reject(new Error("Allow location access to check in, then try again."));
+      else if (error.code === 3) reject(new Error("Location took too long. Move near a window and try again."));
+      else reject(new Error("Your location could not be determined. Check location services and try again."));
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+  });
+}
+
 async function refreshMemberDirectory() {
   if (state.memberRole !== "officer") return;
   state.membersLoading = true;
@@ -1671,8 +1691,11 @@ function renderCheckIn() {
             <span>${escapeHtml(event.room)}</span>
           </div>
           <p>${escapeHtml(event.description)}</p>
+          <p class="checkin-location-note"><svg><use href="#icon-location"></use></svg>${state.checkInRequireLocation
+            ? "I’m Here checks that this device is within 2 miles. Your precise location is not saved."
+            : "Online-event mode is on. Location verification is disabled club-wide."}</p>
           <button class="primary-button checkin-button${checkedIn ? " going" : ""}" id="check-in-now" type="button" ${checkedIn ? "disabled" : ""}>
-            <svg><use href="#icon-check"></use></svg><span>${checkedIn ? "Checked In" : "Check In Now"}</span>
+            <svg><use href="#icon-check"></use></svg><span>${checkedIn ? "Checked In" : "I’m Here"}</span>
           </button>
           ${checkedIn ? `<p class="checkin-confirmation">Attendance recorded for ${escapeHtml(state.memberName)}.</p>` : ""}
         ` : `
@@ -2008,6 +2031,21 @@ function renderSettings() {
         <button class="secondary-button" id="close-settings" type="button">Back</button>
       </section>
       ${renderAccountSettings()}
+      ${state.memberRole === "officer" ? `
+        <section class="section checkin-settings-card">
+          <div class="section-header">
+            <div>
+              <p class="section-kicker">Club-wide check-in</p>
+              <h2>Location verification</h2>
+              <p>This applies to every member and every active event. Turn it off only for an online event.</p>
+            </div>
+          </div>
+          <label class="settings-switch-row" for="checkin-location-required">
+            <span><strong>Require members to be within 2 miles</strong><small>Checked once when they tap I’m Here; precise coordinates are not stored.</small></span>
+            <input id="checkin-location-required" type="checkbox" role="switch" ${state.checkInRequireLocation ? "checked" : ""} ${state.authBusy ? "disabled" : ""} />
+          </label>
+        </section>
+      ` : ""}
       <section class="section">
         <div class="section-header">
           <div><h2>Updates</h2><p>Fetch the newest app shell while keeping your account and saved app data.</p></div>
@@ -2191,6 +2229,15 @@ function bindViewEvents() {
   document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
   document.querySelector("#refresh-leaderboard")?.addEventListener("click", () => refreshLeaderboard(true));
+  document.querySelector("#checkin-location-required")?.addEventListener("change", async (event) => {
+    if (state.memberRole !== "officer") return;
+    const requireLocation = event.currentTarget.checked;
+    const updated = await runAuthAction(
+      () => updateCheckInLocationRequirement(requireLocation),
+      requireLocation ? "Two-mile check-in verification is on for the whole club." : "Online-event mode is on; location verification is off for the whole club."
+    );
+    if (updated) state.checkInRequireLocation = updated.requireLocation !== false;
+  });
 
   document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
     state.authMode = "login";
@@ -2273,7 +2320,10 @@ function bindViewEvents() {
 
   document.querySelector("#check-in-now")?.addEventListener("click", async () => {
     if (!state.loggedIn || !state.checkInOpen) return;
-    const result = await runAuthAction(recordCheckIn);
+    const result = await runAuthAction(async () => {
+      const location = state.checkInRequireLocation ? await currentCheckInLocation() : null;
+      return recordCheckIn(location);
+    });
     if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
       state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
     }
@@ -2447,6 +2497,7 @@ observeSession((session) => {
 observeCheckIn((checkIn) => {
   state.activeCheckInEventId = events.some((event) => event.id === checkIn.eventId) ? checkIn.eventId : events[0].id;
   state.checkInOpen = checkIn.open === true;
+  state.checkInRequireLocation = checkIn.requireLocation !== false;
   if (state.authReady) render();
 }, (error) => {
   state.authError = readableAuthError(error);
