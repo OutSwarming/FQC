@@ -352,7 +352,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.2.1 · Current")).toBeVisible();
+  await expect(page.getByText("v2.3.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -363,6 +363,9 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your Officer Toolkit" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /General Onboarding/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /2026 Event Logistics/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
   await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Officer metrics").getByRole("article").filter({ hasText: "Total approved" }).getByText("$3,540.00")).toBeVisible();
@@ -382,6 +385,28 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
 });
 
+test("prioritizes the logged-in officer's Drive resources and expands the complete library", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({
+    uid: "treasurer-resources",
+    displayName: "Carter",
+    email: "carter@ufl.edu",
+    role: "officer",
+    leadership: "treasurer",
+    officerTitle: "Treasurer"
+  }));
+
+  await expect(page.getByRole("heading", { name: "Your Treasurer Toolkit" })).toBeVisible();
+  const featuredResources = page.locator(".officer-resource-featured .officer-resource-card");
+  await expect(featuredResources.first()).toContainText("Treasurer Guide");
+  await expect(featuredResources.first()).toHaveAttribute("href", /^https:\/\/drive\.google\.com\/open\?id=/);
+
+  await page.getByText("All Officer Documents", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Role Guides" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /President Guide/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Treasurer Guide/ }).last()).toBeVisible();
+});
+
 test("member login enables event check-in and shows a member profile", async ({ page }) => {
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
@@ -390,6 +415,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await finishMemberSetup(page);
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
+  await expect(page.getByText("All Officer Documents", { exact: true })).toHaveCount(0);
 
   await navButton(page, "Check In").click();
   await page.getByRole("button", { name: "Check In Now" }).click();
@@ -527,7 +553,7 @@ test("a matching UFID assigns the spreadsheet officer title during account creat
   }));
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await finishMemberSetup(page, "12345678");
-  await expect(page.getByText("President", { exact: true })).toBeVisible();
+  await expect(page.locator(".profile-role-line").getByText("President", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
 });
 

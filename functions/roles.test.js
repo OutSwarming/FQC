@@ -4,6 +4,8 @@ import {
   buildLeaderboardEntries,
   canManageOfficerRoles,
   leadershipForRole,
+  officerResourceCatalog,
+  officerResourceRoleKey,
   parseCsv,
   pointsForEvents,
   resolvedAccess
@@ -21,6 +23,18 @@ test("only President and Treasurer titles receive officer-management authority",
   assert.equal(canManageOfficerRoles({ leadership: "president" }), true);
   assert.equal(canManageOfficerRoles({ leadership: "vice_president" }), false);
   assert.equal(canManageOfficerRoles({ role: "officer" }), false);
+});
+
+test("officer resources are complete, unique, and mapped to the signed-in role", () => {
+  assert.equal(officerResourceRoleKey("", "president"), "president");
+  assert.equal(officerResourceRoleKey("Vice President"), "vice-president");
+  assert.equal(officerResourceRoleKey("Workshop Coordinator"), "workshop");
+  assert.equal(officerResourceRoleKey("Additional Officer"), "general");
+
+  assert.equal(officerResourceCatalog.length, 20);
+  assert.equal(new Set(officerResourceCatalog.map((resource) => resource.id)).size, officerResourceCatalog.length);
+  assert.ok(officerResourceCatalog.some((resource) => resource.title === "Treasurer Guide" && resource.featured.includes("treasurer")));
+  assert.ok(officerResourceCatalog.every((resource) => /^https:\/\/drive\.google\.com\/open\?id=[\w-]+$/.test(resource.url)));
 });
 
 test("spreadsheet roles and protected leadership resolve predictably", () => {

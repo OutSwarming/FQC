@@ -40,6 +40,12 @@ let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true };
 let mockMembers = [];
 let mockLeaderboard = { entries: [], participantCount: 0 };
 let mockLeaderboardReads = 0;
+let mockOfficerResources = [
+  { id: "general-onboarding", title: "General Onboarding", kind: "Google Doc", category: "Getting Started", roles: ["general"], featured: ["all"], summary: "Start here for club-wide officer onboarding.", url: "https://drive.google.com/open?id=mock-onboarding" },
+  { id: "treasurer-guide", title: "Treasurer Guide", kind: "Google Doc", category: "Role Guides", roles: ["treasurer"], featured: ["treasurer"], summary: "Treasurer responsibilities and workflow.", url: "https://drive.google.com/open?id=mock-treasurer" },
+  { id: "event-logistics", title: "2026 Event Logistics", kind: "Google Sheet", category: "Planning & Operations", roles: ["all"], featured: ["all"], summary: "Live event and budget workbook.", url: "https://drive.google.com/open?id=mock-events" },
+  { id: "president-guide", title: "President Guide", kind: "Google Doc", category: "Role Guides", roles: ["president"], featured: ["president"], summary: "President responsibilities and workflow.", url: "https://drive.google.com/open?id=mock-president" }
+];
 let mockUfidDirectory = new Map();
 let redirectResultChecked = false;
 
@@ -130,6 +136,7 @@ if (testMode) {
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
     setLeaderboard: (snapshot) => { mockLeaderboard = normalizedLeaderboard(snapshot); },
+    setOfficerResources: (resources) => { mockOfficerResources = resources; },
     getLeaderboardReads: () => mockLeaderboardReads,
     resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
     setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); }
@@ -356,6 +363,12 @@ export async function loadMembers() {
   if (testMode) return mockMembers.map(normalizedProfile);
   const result = await callable("listMembers")();
   return (result.data.members || []).map(normalizedProfile);
+}
+
+export async function loadOfficerResources() {
+  if (testMode) return mockOfficerResources.map((resource) => ({ ...resource }));
+  const result = await callable("getOfficerResources")();
+  return Array.isArray(result.data?.resources) ? result.data.resources : [];
 }
 
 export async function changeMemberRole(uid, role) {
