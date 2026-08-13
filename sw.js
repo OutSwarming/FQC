@@ -1,6 +1,6 @@
-const CACHE_NAME = "fqc-app-v241-past-events";
+const CACHE_NAME = "fqc-app-v250-member-attendance";
 const ASSETS = [
-  "/assets/fqc-badge.png?v=241"
+  "/assets/fqc-badge.png?v=250"
 ];
 
 self.addEventListener("install", (event) => {

@@ -36,7 +36,7 @@ let functions;
 let mockSessionObserver = null;
 let mockCheckInObserver = null;
 let mockProfile = null;
-let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true };
+let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true, requireLocation: false };
 let mockMembers = [];
 let mockLeaderboard = { entries: [], participantCount: 0 };
 let mockLeaderboardReads = 0;
@@ -206,7 +206,11 @@ export function observeCheckIn(callback, onError = () => {}) {
   }
   return onSnapshot(doc(db, "settings", "checkin"), (snapshot) => {
     const data = snapshot.data() || {};
-    callback({ eventId: String(data.eventId || ""), open: data.open === true });
+    callback({
+      eventId: String(data.eventId || ""),
+      open: data.open === true,
+      requireLocation: data.requireLocation !== false
+    });
   }, onError);
 }
 
@@ -345,9 +349,10 @@ export async function verifyUfid(ufid) {
   return normalizedProfile(result.data);
 }
 
-export async function recordCheckIn() {
+export async function recordCheckIn(location = null) {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
+    if (mockCheckIn.requireLocation && !location) throw new Error("Location is required for this check-in.");
     const checkedInEvents = [...new Set([...(mockProfile?.checkedInEvents || []), mockCheckIn.eventId])];
     const awarded = checkedInEvents.length > (mockProfile?.checkedInEvents || []).length;
     mockProfile = normalizedProfile({ ...mockProfile, checkedInEvents, points: checkedInEvents.length });
@@ -360,7 +365,7 @@ export async function recordCheckIn() {
     emitMockSession();
     return { eventId: mockCheckIn.eventId, awarded, points: mockProfile.points, leaderboard: mockLeaderboard };
   }
-  const result = await callable("recordEventCheckIn")();
+  const result = await callable("recordEventCheckIn")({ location });
   return result.data;
 }
 
@@ -375,11 +380,21 @@ export async function loadLeaderboard() {
 
 export async function updateActiveCheckIn(eventId, open) {
   if (testMode) {
-    mockCheckIn = { eventId, open };
+    mockCheckIn = { ...mockCheckIn, eventId, open };
     emitMockCheckIn();
     return mockCheckIn;
   }
   const result = await callable("setActiveCheckIn")({ eventId, open });
+  return result.data;
+}
+
+export async function updateCheckInLocationRequirement(requireLocation) {
+  if (testMode) {
+    mockCheckIn = { ...mockCheckIn, requireLocation: requireLocation === true };
+    emitMockCheckIn();
+    return { requireLocation: mockCheckIn.requireLocation };
+  }
+  const result = await callable("setCheckInLocationRequirement")({ requireLocation: requireLocation === true });
   return result.data;
 }
 

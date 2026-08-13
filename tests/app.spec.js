@@ -395,7 +395,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.4.1 · Current")).toBeVisible();
+  await expect(page.getByText("v2.5.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -433,6 +433,23 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+});
+
+test("officers control the club-wide two-mile check-in setting", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({
+    uid: "location-officer",
+    displayName: "Morgan",
+    email: "morgan@ufl.edu",
+    role: "officer"
+  }));
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const locationSwitch = page.getByRole("switch", { name: /Require members to be within 2 miles/ });
+  await expect(locationSwitch).not.toBeChecked();
+  await locationSwitch.check();
+  await expect(locationSwitch).toBeChecked();
+  await expect(page.getByText("Two-mile check-in verification is on for the whole club.")).toBeVisible();
 });
 
 test("prioritizes the logged-in officer's Drive resources and expands the complete library", async ({ page }) => {
@@ -500,7 +517,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await expect(page.getByText("All Officer Documents", { exact: true })).toHaveCount(0);
 
   await navButton(page, "Check In").click();
-  await page.getByRole("button", { name: "Check In Now" }).click();
+  await page.getByRole("button", { name: "I’m Here" }).click();
   await expect(page.getByRole("button", { name: "Checked In" })).toBeDisabled();
   await expect(page.getByText("Attendance recorded for Google Member.")).toBeVisible();
 
@@ -546,7 +563,7 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
 
   await navButton(page, "Check In").click();
-  await page.getByRole("button", { name: "Check In Now" }).click();
+  await page.getByRole("button", { name: "I’m Here" }).click();
   await navButton(page, "Profile").click();
   await expect(page.getByText("2 points from verified event check-ins")).toBeVisible();
   await expect(page.locator(".leader-card.current-user")).toContainText("2 PTS");
