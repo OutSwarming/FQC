@@ -112,13 +112,33 @@ textarea:focus-visible {
 .brand-title { gap: 11px; min-width: 0; }
 .topbar-actions { gap: 8px; }
 
-.brand-title img {
+.brand-mark {
+  position: relative;
+  display: grid;
   width: 43px;
   height: 43px;
   flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
   border-radius: 12px;
-  object-fit: cover;
+  color: white;
+  background: linear-gradient(145deg, #1c3471, #5476f2);
   box-shadow: var(--shadow-soft);
+}
+
+.brand-mark-fallback {
+  font-size: 0.67rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+}
+
+.brand-mark img {
+  position: absolute;
+  inset: 0;
+  width: 43px;
+  height: 43px;
+  object-fit: cover;
 }
 
 .eyebrow {
@@ -1387,7 +1407,8 @@ textarea { min-height: 96px; resize: vertical; }
     overflow: hidden;
   }
   .topbar { min-height: 62px; padding-inline: 2px; }
-  .brand-title img { width: 39px; height: 39px; }
+  .brand-mark,
+  .brand-mark img { width: 39px; height: 39px; }
   .eyebrow { font-size: 0.58rem; }
   h1 { font-size: 1.3rem; }
   .theme-toggle,

@@ -2,13 +2,13 @@
   "name": "Florida Quantum Computing",
   "short_name": "FQC",
   "description": "Explore Florida Quantum Computing events, dates, and meeting locations.",
-  "start_url": "./",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#f4f7fc",
   "theme_color": "#5476f2",
   "icons": [
     {
-      "src": "./assets/fqc-wordmark.jpg",
+      "src": "/assets/fqc-wordmark.jpg",
       "sizes": "890x486",
       "type": "image/jpeg",
       "purpose": "any"
