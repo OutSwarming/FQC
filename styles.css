@@ -1595,42 +1595,6 @@ textarea { min-height: 96px; resize: vertical; }
 .officer-resource-group h3 { margin: 0 0 8px; color: var(--muted); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .officer-resource-group > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 
-.budget-sync-line {
-  display: grid;
-  grid-template-columns: 10px auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 11px 13px;
-  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--line));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--success) 8%, var(--surface-soft));
-}
-
-.budget-sync-line > span {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 15%, transparent);
-}
-
-.budget-sync-line strong { color: var(--ink); font-size: 0.84rem; }
-.budget-sync-line p { margin: 0; color: var(--muted); font-size: 0.76rem; text-align: right; }
-
-.budget-summary-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  color: var(--ink);
-  background: var(--surface-soft);
-}
-
-.budget-summary-line span { color: var(--muted); font-size: 0.82rem; font-weight: 800; }
 .budget-list-title { margin: 0 0 10px; }
 .budget-event-list { display: grid; gap: 10px; }
 
@@ -1846,8 +1810,75 @@ textarea { min-height: 96px; resize: vertical; }
 
 .officer-operations { display: grid; gap: 16px; }
 .officer-operations-header { align-items: start; }
-.officer-operations-header .secondary-button { flex: 0 0 auto; }
-.officer-budget-overview { margin: 0; }
+
+.officer-event-group {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface-soft);
+}
+.officer-event-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.officer-event-group > summary::-webkit-details-marker { display: none; }
+.officer-event-group > summary::after { content: "+"; margin-left: 12px; color: var(--accent); font-size: 1.25rem; font-weight: 900; }
+.officer-event-group[open] > summary::after { content: "−"; }
+.officer-event-group > summary > span { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.officer-event-group > summary strong { color: var(--ink); }
+.officer-event-group > summary small { color: var(--muted); font-size: 0.7rem; font-weight: 750; }
+.officer-event-group[open] > summary { border-bottom: 1px solid var(--line); }
+.officer-event-group-body { display: grid; gap: 10px; padding: 10px; }
+.completed-events-group { background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface-raised)); }
+.officer-show-more {
+  min-height: 42px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 900;
+}
+.officer-event-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.officer-event-footer .officer-add-event { min-width: 0; }
+.officer-event-footer .budget-sheet-link { min-height: 50px; }
+
+.officer-budget-card { display: grid; gap: 13px; }
+.officer-budget-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.officer-budget-heading h2 { margin: 2px 0 0; font-size: 1.05rem; }
+.officer-budget-heading > span { padding: 6px 9px; border-radius: 999px; color: var(--success); background: var(--success-soft); font-size: 0.64rem; font-weight: 900; }
+.officer-budget-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.officer-budget-metrics article,
+.officer-budget-metrics button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  min-height: 82px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  text-align: left;
+}
+.officer-budget-metrics strong { overflow: hidden; font-size: clamp(1rem, 3vw, 1.3rem); text-overflow: ellipsis; white-space: nowrap; }
+.officer-budget-metrics span { align-self: end; color: var(--muted); font-size: 0.68rem; font-weight: 800; }
+.officer-budget-metrics button { border-color: color-mix(in srgb, var(--success) 28%, var(--line)); background: color-mix(in srgb, var(--success-soft) 60%, var(--surface-raised)); cursor: pointer; }
+.officer-budget-metrics button:hover { border-color: var(--success); }
+.officer-budget-metrics button small { color: var(--success); font-size: 0.62rem; font-weight: 850; }
+.budget-breakdown-modal { width: min(100%, 410px); overflow: hidden; }
+.budget-breakdown-modal h2 { margin: 3px 52px 18px 0; }
+.budget-breakdown-rows { display: grid; gap: 8px; }
+.budget-breakdown-rows > span { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border-radius: 12px; background: var(--surface-soft); }
+.budget-breakdown-rows small { color: var(--muted); font-weight: 750; }
+.budget-breakdown-rows strong { color: var(--ink); }
+.budget-breakdown-total { border-top: 1px solid var(--line); }
+.budget-breakdown-available { color: var(--success); background: var(--success-soft) !important; }
+.budget-breakdown-available strong { color: var(--success); }
 
 .officer-add-event,
 .officer-event-card,
@@ -2050,7 +2081,6 @@ textarea { min-height: 96px; resize: vertical; }
   .settings-group > summary { padding: 15px; }
   .settings-group-content { padding: 0 15px 15px; }
   .officer-operations { gap: 12px; }
-  .officer-operations-header .secondary-button { width: 100%; }
   .officer-event-card > summary {
     grid-template-columns: 48px minmax(0, 1fr) auto;
     gap: 9px;
@@ -2082,9 +2112,6 @@ textarea { min-height: 96px; resize: vertical; }
   .officer-resource-card { min-height: 76px; }
   .officer-resource-browser > summary { align-items: flex-start; }
   .officer-resource-browser > summary small { display: none; }
-  .budget-sync-line { grid-template-columns: 10px 1fr; }
-  .budget-sync-line p { grid-column: 1 / -1; text-align: left; }
-  .budget-summary-line { display: grid; }
   .budget-event-breakdown { grid-template-columns: 1fr; }
 
   .event-explorer {
@@ -2296,6 +2323,12 @@ textarea { min-height: 96px; resize: vertical; }
 }
 
 @media (max-width: 430px) {
+  .officer-event-footer { grid-template-columns: 1fr; }
+  .officer-event-footer .budget-sheet-link { width: 100%; }
+  .officer-budget-metrics article,
+  .officer-budget-metrics button { min-height: 76px; padding: 10px 8px; }
+  .officer-budget-metrics strong { font-size: 0.96rem; }
+  .officer-budget-metrics span { font-size: 0.61rem; }
   .event-card-select { padding-right: 53px; }
   .event-card-copy > strong { font-size: 0.82rem; }
   .event-card-copy > span { font-size: 0.66rem; }

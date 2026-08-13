@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v270-polish";
+const CACHE_NAME = "fqc-app-v280-officer-profile";
 const ASSETS = [
   "/assets/fqc-badge.png?v=250"
 ];

@@ -29,9 +29,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.7.0";
+const APP_VERSION = "2.8.0";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.8.0", "Simplified the officer profile into compact current events, completed events, resources, and a tucked-away club budget"],
   ["2.7.0", "Polished RSVP, sign-in, and check-in handoffs with faster location checks and clear live confirmation feedback"],
   ["2.6.1", "Moved three-step signup into a dismissible modal and removed the duplicate post-account UFID screen"],
   ["2.6.0", "Added a welcoming three-step signup, unique usernames, username-or-UF-email login, and passkey-only account setup"],
@@ -139,6 +140,8 @@ const state = {
   officerOperationsLoading: false,
   officerOperationsError: "",
   selectedOfficerEventId: "",
+  showAllOfficerEvents: false,
+  budgetBreakdownOpen: false,
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
   checkInRequireLocation: true,
@@ -825,7 +828,7 @@ function render() {
   const eventsScreenActive = state.view === "home";
   document.documentElement.classList.toggle("events-screen-active", eventsScreenActive);
   document.body.classList.toggle("events-screen-active", eventsScreenActive);
-  document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen);
+  document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
   title.textContent = titles[state.view] || "Events";
@@ -1787,43 +1790,83 @@ function renderCheckIn() {
 function renderOfficerWorkspace() {
   const operations = state.officerOperations;
   if (state.officerOperationsLoading && !operations) {
-    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>Loading events, budgets, notes, rooms, and RSVPs…</p></div><span class="auth-spinner" aria-hidden="true"></span></div></section>${renderOfficerResources()}`;
+    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div><span class="auth-spinner" aria-hidden="true"></span></div></section>${renderOfficerResources()}`;
   }
   if (state.officerOperationsError && !operations) {
-    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>${escapeHtml(state.officerOperationsError)}</p></div><button class="secondary-button" id="retry-officer-operations" type="button">Try Again</button></div></section>${renderOfficerResources()}`;
+    return `<section class="section officer-operations"><div class="section-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2><p>${escapeHtml(state.officerOperationsError)}</p></div><button class="secondary-button" id="retry-officer-operations" type="button">Try Again</button></div></section>${renderOfficerResources()}`;
   }
 
   const totals = operations?.totals || eventBudget;
   const operationEvents = operations?.events || [];
-  const budgetMetrics = [
-    [formatMoney(totals.totalApproved), "Total approved"],
-    [formatMoney(totals.plannedSpend), "Planned spend"],
-    [formatMoney(totals.actualSpend), "Actual spend"],
-    [formatMoney(totals.availableAfterActual), "Available now"]
-  ];
+  const currentEvents = operationEvents
+    .filter((event) => !isOfficerEventCompleted(event))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.time).localeCompare(String(b.time)));
+  const completedEvents = operationEvents
+    .filter(isOfficerEventCompleted)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.time).localeCompare(String(a.time)));
+  const visibleCurrentEvents = state.showAllOfficerEvents ? currentEvents : currentEvents.slice(0, 4);
   return `
     <section class="section officer-operations">
-      <div class="section-header officer-operations-header">
-        <div><p class="section-kicker">Officer workspace</p><h2>Event Operations</h2><p>Rooms, status, money, RSVPs, notes, and check-in are together under each event.</p></div>
-        <button class="secondary-button" id="refresh-officer-operations" type="button" ${state.officerOperationsLoading ? "disabled" : ""}>${state.officerOperationsLoading ? "Refreshing…" : "Refresh"}</button>
-      </div>
-      <div class="budget-sync-line"><span></span><strong>2026 Event Logistics connected</strong><p>App edits save to Google Sheets; Sheet edits return on refresh and every 5 minutes.</p></div>
-      <section class="metric-grid officer-budget-overview" aria-label="Team budget overview">${renderMetrics(budgetMetrics)}</section>
-      <div class="budget-summary-line"><strong>${formatMoney(totals.baseFunding)} base + ${formatMoney(totals.operationalFunding)} operational</strong><span>${formatMoney(totals.uncommittedAfterPlan)} uncommitted after plans</span></div>
-
-      <details class="officer-add-event">
-        <summary><span><svg><use href="#icon-plus"></use></svg>Add Event</span><small>Creates a new Events row</small></summary>
-        ${renderOfficerEventForm({ eventStatus: "Planning" }, true)}
-      </details>
+      <div class="section-header officer-operations-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div></div>
       <datalist id="uf-location-options">${(operations?.locations || []).map((location) => `<option value="${escapeHtml(location)}"></option>`).join("")}</datalist>
-
-      <div class="officer-event-list" aria-label="Officer event operations">
-        ${operationEvents.map((event) => renderOfficerEventCard(event, operations.budgetItems || [])).join("") || '<p class="empty-state">No events are available yet.</p>'}
+      <details class="officer-event-group" open>
+        <summary><span><strong>Current Events</strong><small>${currentEvents.length} scheduled</small></span></summary>
+        <div class="officer-event-group-body">
+          <div class="officer-event-list" aria-label="Current officer events">
+            ${visibleCurrentEvents.map((event) => renderOfficerEventCard(event, operations.budgetItems || [])).join("") || '<p class="empty-state">No current events are scheduled.</p>'}
+          </div>
+          ${currentEvents.length > 4 && !state.showAllOfficerEvents ? `<button class="officer-show-more" id="show-all-officer-events" type="button">Show all ${currentEvents.length} events</button>` : ""}
+        </div>
+      </details>
+      <details class="officer-event-group completed-events-group">
+        <summary><span><strong>Completed Events</strong><small>${completedEvents.length} archived</small></span></summary>
+        <div class="officer-event-group-body">
+          <div class="officer-event-list" aria-label="Completed officer events">
+            ${completedEvents.map((event) => renderOfficerEventCard(event, operations.budgetItems || [])).join("") || '<p class="empty-state">Completed events will appear here.</p>'}
+          </div>
+        </div>
+      </details>
+      <div class="officer-event-footer">
+        <details class="officer-add-event">
+          <summary><span><svg><use href="#icon-plus"></use></svg>Add Event</span></summary>
+          ${renderOfficerEventForm({ eventStatus: "Planning" }, true)}
+        </details>
+        <a class="secondary-button budget-sheet-link" href="${EVENT_BUDGET_SHEET_URL}" target="_blank" rel="noopener noreferrer">Open Google Sheet</a>
       </div>
-      <a class="secondary-button budget-sheet-link" href="${EVENT_BUDGET_SHEET_URL}" target="_blank" rel="noopener noreferrer">Open Full Google Sheet</a>
-      ${renderAuthFeedback()}
+    </section>
+    <section class="section officer-budget-card" aria-label="Club budget overview">
+      <div class="officer-budget-heading"><div><p class="section-kicker">Club budget</p><h2>Overall Money</h2></div><span>Live from Sheets</span></div>
+      <div class="officer-budget-metrics">
+        <article><strong>${formatMoney(totals.totalApproved)}</strong><span>Total approved</span></article>
+        <article><strong>${formatMoney(totals.plannedSpend)}</strong><span>Planned spend</span></article>
+        <button id="open-budget-breakdown" type="button"><strong>${formatMoney(totals.availableAfterActual)}</strong><span>Total available now</span><small>View breakdown</small></button>
+      </div>
     </section>
     ${renderOfficerResources()}
+    ${state.budgetBreakdownOpen ? renderBudgetBreakdownModal(totals) : ""}
+  `;
+}
+
+function isOfficerEventCompleted(event) {
+  const status = String(event.eventStatus || "").trim().toLowerCase();
+  return status === "completed" || status === "cancelled" || isPastEvent(event);
+}
+
+function renderBudgetBreakdownModal(totals) {
+  return `
+    <div class="signup-modal-backdrop budget-breakdown-backdrop" id="budget-breakdown-backdrop">
+      <section class="signup-modal budget-breakdown-modal" role="dialog" aria-modal="true" aria-labelledby="budget-breakdown-title">
+        <button class="signup-modal-close" id="close-budget-breakdown" type="button" aria-label="Close budget breakdown">×</button>
+        <p class="section-kicker">Available now</p>
+        <h2 id="budget-breakdown-title">Funding breakdown</h2>
+        <div class="budget-breakdown-rows">
+          <span><small>Base funding</small><strong>${formatMoney(totals.baseFunding)}</strong></span>
+          <span><small>Operational funding</small><strong>${formatMoney(totals.operationalFunding)}</strong></span>
+          <span class="budget-breakdown-total"><small>Total approved</small><strong>${formatMoney(totals.totalApproved)}</strong></span>
+          <span class="budget-breakdown-available"><small>Available after actual spending</small><strong>${formatMoney(totals.availableAfterActual)}</strong></span>
+        </div>
+      </section>
+    </div>
   `;
 }
 
@@ -1877,6 +1920,7 @@ function renderOfficerEventCard(event, allBudgetItems) {
   const items = allBudgetItems.filter((item) => item.eventId === event.id);
   const open = event.id === state.selectedOfficerEventId;
   const rsvps = event.rsvps || [];
+  const completed = isOfficerEventCompleted(event);
   return `
     <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" ${open ? "open" : ""}>
       <summary>
@@ -1898,10 +1942,10 @@ function renderOfficerEventCard(event, allBudgetItems) {
           <span><strong>Permit</strong>${escapeHtml(event.permitStatus || "Not set")}${event.permitNumber ? ` · ${escapeHtml(event.permitNumber)}` : ""}</span>
           <span><strong>Funding</strong>${escapeHtml(event.fundingSource || "Not assigned")}</span>
         </div>
-        <div class="officer-event-actions">
+        ${completed ? "" : `<div class="officer-event-actions">
           <button class="primary-button" type="button" data-start-event="${escapeHtml(event.id)}">${state.checkInOpen && state.activeCheckInEventId === event.id ? "Check-In Is Live" : "Start Event Check-In"}</button>
           ${state.checkInOpen && state.activeCheckInEventId === event.id ? `<button class="secondary-button" id="close-checkin-${escapeHtml(event.id)}" data-close-event="${escapeHtml(event.id)}" type="button">Close Check-In</button>` : ""}
-        </div>
+        </div>`}
         <details class="officer-event-subsection">
           <summary>Event details & notes</summary>
           ${renderOfficerEventForm(event)}
@@ -1942,7 +1986,7 @@ function renderResourceLink(resource, featured = false) {
   return `
     <a class="officer-resource-card${featured ? " featured" : ""}" href="${escapeHtml(resource.url)}" target="_blank" rel="noopener noreferrer">
       <span class="officer-resource-icon" aria-hidden="true"><svg><use href="#icon-file"></use></svg></span>
-      <span class="officer-resource-copy"><strong>${escapeHtml(resource.title)}</strong><small>${escapeHtml(resource.kind || "Google Drive")}</small><p>${escapeHtml(resource.summary || "Open this FQC officer resource in Google Drive.")}</p></span>
+      <span class="officer-resource-copy"><strong>${escapeHtml(resource.title)}</strong><small>${escapeHtml(resource.kind || "Google Drive")}</small></span>
       <span class="officer-resource-open" aria-hidden="true">↗</span>
     </a>
   `;
@@ -1956,7 +2000,7 @@ function renderOfficerResources() {
       <section class="section officer-resources" aria-live="polite">
         <p class="section-kicker">Useful information</p>
         <h2>${escapeHtml(roleName)} Resources</h2>
-        <p>Loading your secure FQC Drive toolkit…</p>
+        <span class="auth-spinner" aria-hidden="true"></span>
       </section>
     `;
   }
@@ -1984,7 +2028,7 @@ function renderOfficerResources() {
   return `
     <section class="section officer-resources">
       <div class="section-header officer-resource-header">
-        <div><p class="section-kicker">Useful information</p><h2>Your ${escapeHtml(roleName)} Toolkit</h2><p>Your most useful FQC Drive documents are first. Links open in Google Drive on phones and computers.</p></div>
+        <div><p class="section-kicker">Useful information</p><h2>Your ${escapeHtml(roleName)} Toolkit</h2></div>
         <span class="role-badge officer">${escapeHtml(roleName)}</span>
       </div>
       <div class="officer-resource-featured" aria-label="Your ${escapeHtml(roleName)} resources">
@@ -2405,7 +2449,23 @@ function bindViewEvents() {
   });
   document.querySelector("#retry-officer-resources")?.addEventListener("click", () => refreshOfficerResources(true));
   document.querySelector("#retry-officer-operations")?.addEventListener("click", () => refreshOfficerOperations(true));
-  document.querySelector("#refresh-officer-operations")?.addEventListener("click", () => refreshOfficerOperations(true));
+  document.querySelector("#show-all-officer-events")?.addEventListener("click", () => {
+    state.showAllOfficerEvents = true;
+    render();
+  });
+  document.querySelector("#open-budget-breakdown")?.addEventListener("click", () => {
+    state.budgetBreakdownOpen = true;
+    render();
+  });
+  const closeBudgetBreakdown = () => {
+    state.budgetBreakdownOpen = false;
+    render();
+  };
+  document.querySelector("#close-budget-breakdown")?.addEventListener("click", closeBudgetBreakdown);
+  const budgetBackdrop = document.querySelector("#budget-breakdown-backdrop");
+  budgetBackdrop?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeBudgetBreakdown();
+  });
   bindCalendarEvents();
   bindRsvpEvents();
   bindMobileEventSheet();

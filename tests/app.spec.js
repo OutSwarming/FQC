@@ -428,7 +428,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.7.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.8.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -438,15 +438,18 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
-  await expect(page.getByRole("heading", { name: "Event Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Events", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your Officer Toolkit" })).toBeVisible();
   await expect(page.getByRole("link", { name: /General Onboarding/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /2026 Event Logistics/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
   await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Team budget overview").getByRole("article").filter({ hasText: "Total approved" }).getByText("$3,540.00")).toBeVisible();
-  await expect(page.getByText("$1,050.00 base + $2,490.00 operational")).toBeVisible();
-  await expect(page.getByText(/Sheet edits return on refresh and every 5 minutes/)).toBeVisible();
+  await expect(page.getByLabel("Club budget overview").getByText("$3,540.00")).toBeVisible();
+  await page.getByRole("button", { name: /available now/i }).click();
+  await expect(page.getByRole("heading", { name: "Funding breakdown" })).toBeVisible();
+  await expect(page.getByText("$1,050.00")).toBeVisible();
+  await expect(page.getByText("$2,490.00")).toBeVisible();
+  await page.getByRole("button", { name: "Close budget breakdown" }).click();
 
   const firstEvent = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
   await firstEvent.getByText("Budget & purchases", { exact: true }).click();
@@ -466,6 +469,63 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+});
+
+test("keeps the officer profile minimal with four current events and a completed archive", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    const current = Array.from({ length: 6 }, (_, index) => ({
+      id: `current-${index + 1}`,
+      row: index + 2,
+      date: `2026-03-0${index + 2}`,
+      time: "6:00 PM",
+      title: `Current Event ${index + 1}`,
+      location: "Reitz G320",
+      eventStatus: "Planned",
+      plannedBudget: 20,
+      actualSpend: 0,
+      remainingBudget: 20,
+      rsvps: [],
+      officerRsvps: []
+    }));
+    window.__FQC_AUTH_TEST_API__.setOfficerEventOperations({
+      events: [...current, {
+        id: "completed-1",
+        row: 8,
+        date: "2026-02-20",
+        time: "6:00 PM",
+        title: "Completed Workshop",
+        location: "Larsen 234",
+        eventStatus: "Completed",
+        plannedBudget: 40,
+        actualSpend: 35,
+        remainingBudget: 5,
+        rsvps: [],
+        officerRsvps: []
+      }],
+      budgetItems: [],
+      totals: { baseFunding: 1050, operationalFunding: 2490, totalApproved: 3540, plannedSpend: 120, actualSpend: 35, availableAfterActual: 3505, uncommittedAfterPlan: 3420 },
+      locations: ["Reitz G320", "Larsen 234"],
+      updatedAt: new Date().toISOString()
+    });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "minimal-officer", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" });
+  });
+
+  const currentEvents = page.getByLabel("Current officer events");
+  await expect(currentEvents.locator(".officer-event-card")).toHaveCount(4);
+  await page.getByRole("button", { name: "Show all 6 events" }).click();
+  await expect(page.getByLabel("Current officer events").locator(".officer-event-card")).toHaveCount(6);
+
+  const completedGroup = page.locator(".completed-events-group");
+  await expect(completedGroup.getByText("Completed Workshop")).toBeHidden();
+  await completedGroup.getByText("Completed Events", { exact: true }).click();
+  await expect(completedGroup.getByText("Completed Workshop")).toBeVisible();
+
+  const footer = page.locator(".officer-event-footer");
+  await expect(footer.getByText("Add Event", { exact: true })).toBeVisible();
+  await expect(footer.getByRole("link", { name: "Open Google Sheet" })).toBeVisible();
+  await expect(page.locator(".officer-operations + .officer-budget-card")).toBeVisible();
+  await expect(page.locator(".officer-resource-copy p")).toHaveCount(0);
 });
 
 test("officers control the club-wide two-mile check-in setting", async ({ page }) => {
@@ -511,7 +571,7 @@ test("keeps event money, notes, RSVPs, creation, and check-in inside each office
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-ops", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
-  await expect(page.getByRole("heading", { name: "Event Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Events", exact: true })).toBeVisible();
   await expect(page.getByText("Member Activity", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Display name")).toHaveCount(0);
   await expect(page.getByText("Passkeys & Face ID", { exact: true })).toHaveCount(0);
