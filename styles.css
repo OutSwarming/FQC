@@ -14,6 +14,8 @@
   --cyan: #64dcef;
   --success: #13865f;
   --success-soft: #ddf7ec;
+  --working: #9a6800;
+  --working-soft: #fff2bd;
   --danger: #d45151;
   --danger-soft: #fff0f0;
   --shadow: 0 18px 50px rgba(28, 48, 88, 0.12);
@@ -39,6 +41,8 @@
   --cyan: #6bdff1;
   --success: #51d6a5;
   --success-soft: #123a31;
+  --working: #ffd166;
+  --working-soft: #3b3016;
   --danger: #ef7373;
   --danger-soft: #3a2026;
   --shadow: 0 22px 60px rgba(0, 0, 0, 0.38);
@@ -838,6 +842,24 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
   box-shadow: none;
 }
 
+.primary-button.is-working,
+.secondary-button.is-working {
+  color: var(--working);
+  border-color: color-mix(in srgb, var(--working) 45%, var(--line));
+  background: var(--working-soft);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--working) 18%, transparent);
+  opacity: 1;
+  cursor: wait;
+}
+
+.primary-button.is-confirmed,
+.secondary-button.is-confirmed {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+  background: var(--success-soft);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
 .secondary-button,
 .chip-button {
   color: var(--ink);
@@ -1038,6 +1060,10 @@ body.signup-modal-open { overflow: hidden; }
 }
 .signup-modal-heading h2 { margin: 2px 0 5px; font-size: clamp(1.55rem, 5vw, 2rem); }
 .signup-modal-heading p:last-child { margin: 0; color: var(--muted); }
+.auth-prompt-modal { width: min(100%, 510px); overflow: hidden; }
+.auth-prompt-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.auth-prompt-actions .primary-button,
+.auth-prompt-actions .secondary-button { min-height: 50px; }
 @keyframes signup-backdrop-in { from { opacity: 0; } }
 @keyframes signup-modal-in { from { opacity: 0; transform: translateY(18px) scale(0.985); } }
 .signup-progress {
@@ -1280,6 +1306,35 @@ body.signup-modal-open { overflow: hidden; }
 .auth-feedback p { margin: 12px 0 0; }
 .form-success { color: var(--success); font-size: 0.78rem; font-weight: 800; }
 .auth-privacy { margin: 16px 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.5; text-align: center; }
+
+.action-feedback {
+  position: fixed;
+  left: 50%;
+  bottom: calc(90px + var(--safe-bottom));
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: min(calc(100vw - 28px), 520px);
+  min-height: 48px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  box-shadow: 0 16px 42px rgba(7, 12, 25, 0.24);
+  font-size: 0.82rem;
+  font-weight: 850;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 14px);
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.2, 0.9, 0.25, 1), background-color 180ms ease;
+}
+.action-feedback.visible { opacity: 1; transform: translate(-50%, 0); }
+.action-feedback.working { color: var(--working); border-color: color-mix(in srgb, var(--working) 35%, var(--line)); background: var(--working-soft); }
+.action-feedback.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--line)); background: var(--success-soft); }
+.action-feedback.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); background: var(--danger-soft); }
+.action-feedback.working .auth-spinner { width: 18px; height: 18px; border-color: color-mix(in srgb, var(--working) 28%, transparent); border-top-color: var(--working); }
+.action-feedback-icon { display: grid; width: 21px; height: 21px; flex: 0 0 auto; place-items: center; border: 2px solid currentColor; border-radius: 50%; font-size: 0.72rem; }
 
 .passkey-card .section-header { align-items: center; }
 .passkey-count {
