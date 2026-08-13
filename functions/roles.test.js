@@ -13,7 +13,8 @@ import {
   parseCsv,
   pointsForEvents,
   resolvedAccess,
-  sheetColumnLetter
+  sheetColumnLetter,
+  usernameForInput
 } from "./index.js";
 
 test("CSV parsing preserves quoted officer titles", () => {
@@ -128,4 +129,12 @@ test("member attendance uses stable private keys and spreadsheet columns", () =>
     { lat: 29.64631, lng: -82.34788 },
     { lat: 29.70, lng: -82.35 }
   ) > 2);
+});
+
+test("usernames are normalized, constrained, and reserve trusted club names", () => {
+  assert.equal(usernameForInput(" Quantum.Gator "), "quantum.gator");
+  assert.equal(usernameForInput("two"), "two");
+  assert.equal(usernameForInput("no spaces"), "");
+  assert.equal(usernameForInput("admin"), "");
+  assert.equal(usernameForInput("a"), "");
 });

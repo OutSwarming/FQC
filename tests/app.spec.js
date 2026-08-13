@@ -1,10 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
-const finishMemberSetup = async (page, ufid = "00000000") => {
-  await expect(page.getByRole("heading", { name: "Enter your UFID" })).toBeVisible();
-  await page.getByLabel("Eight-digit UFID").fill(ufid);
-  await page.getByRole("button", { name: "Finish Account Setup" }).click();
+const createThreeStepAccount = async (page, { email = "new.gator@ufl.edu", username = "newgator", ufid = "00000000", method = "passkey" } = {}) => {
+  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.getByLabel("UF email").fill(email);
+  await page.getByRole("button", { name: "Next: choose a username" }).click();
+  await page.getByLabel("Username", { exact: true }).fill(username);
+  await page.getByRole("button", { name: "Check username" }).click();
+  await page.getByLabel("UFID verification").fill(ufid);
+  if (method === "password") {
+    await page.getByRole("radio", { name: /Private password/ }).check();
+    await page.locator("#signup-password").fill("quantum-safe-password");
+    await page.getByRole("button", { name: "Create account", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "Create with passkey" }).click();
+  }
 };
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
@@ -395,7 +405,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.5.1 · Current")).toBeVisible();
+  await expect(page.getByText("v2.6.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -510,8 +520,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
   await page.getByRole("button", { name: "Open Profile Login" }).click();
-  await page.getByRole("button", { name: "Continue with Google" }).click();
-  await finishMemberSetup(page);
+  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
   await expect(page.getByText("All Officer Documents", { exact: true })).toHaveCount(0);
@@ -519,7 +528,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await navButton(page, "Check In").click();
   await page.getByRole("button", { name: "I’m Here" }).click();
   await expect(page.getByRole("button", { name: "Checked In" })).toBeDisabled();
-  await expect(page.getByText("Attendance recorded for Google Member.")).toBeVisible();
+  await expect(page.getByText("Attendance recorded for Passkey Member.")).toBeVisible();
 
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Open settings" }).click();
@@ -569,40 +578,46 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await expect(page.locator(".leader-card.current-user")).toContainText("2 PTS");
 });
 
-test("login and account creation are separate and creation includes UFID", async ({ page }) => {
+test("account creation is an inviting three-step UF email, username, and security flow", async ({ page }) => {
   await navButton(page, "Profile").click();
   await expect(page.getByRole("tab", { name: "Log In" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByLabel("Email")).toBeVisible();
-  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel("Username or UF email")).toBeVisible();
+  await expect(page.getByLabel("Private password", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue with Apple" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /passkey/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue with Apple" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
   await expect(page.getByText(/officer code/i)).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Create Account" }).click();
   await expect(page.getByRole("tab", { name: "Create Account" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByLabel("Name")).toBeVisible();
-  await expect(page.getByLabel("UFID", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Continue with Apple" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /passkey/i })).toHaveCount(0);
-  await page.getByLabel("Name").fill("New Gator");
-  await page.getByLabel("Email").fill("new.gator@ufl.edu");
-  await page.getByLabel("Password").fill("quantum-safe-password");
-  await page.getByLabel("UFID", { exact: true }).fill("00000000");
-  await page.getByRole("button", { name: "Create Account", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "New Gator" })).toBeVisible();
+  await expect(page.getByText("Step 1 of 3")).toBeVisible();
+  await page.getByLabel("UF email").fill("new.gator@ufl.edu");
+  await page.getByRole("button", { name: "Next: choose a username" }).click();
+  await expect(page.getByText("Step 2 of 3")).toBeVisible();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "taken@ufl.edu" }));
+  await page.getByLabel("Username", { exact: true }).fill("taken");
+  await page.getByRole("button", { name: "Check username" }).click();
+  await expect(page.getByText("That username is already taken. Try another.")).toBeVisible();
+  await page.getByLabel("Username", { exact: true }).fill("newgator");
+  await page.getByRole("button", { name: "Check username" }).click();
+  await expect(page.getByText("Step 3 of 3")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Passkey/ })).toBeChecked();
+  await page.getByLabel("UFID verification").fill("00000000");
+  await page.getByRole("radio", { name: /Private password/ }).check();
+  await page.locator("#signup-password").fill("quantum-safe-password");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "newgator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
 });
 
-test("forgot password requires an email then sends a reset", async ({ page }) => {
+test("forgot password accepts a username or UF email", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Forgot password?" }).click();
-  await expect(page.getByText("Enter your email first, then choose Forgot password.")).toBeVisible();
-  await page.getByLabel("Email").fill("member@ufl.edu");
+  await expect(page.getByText("Enter your username or UF email first, then choose Forgot password.")).toBeVisible();
+  await page.getByLabel("Username or UF email").fill("member@ufl.edu");
   await page.getByRole("button", { name: "Forgot password?" }).click();
-  await expect(page.getByText("Password reset email sent to member@ufl.edu.")).toBeVisible();
+  await expect(page.getByText("Password reset email sent to your UF inbox.")).toBeVisible();
 });
 
 test("a current officer can recommend a member but cannot directly change roles", async ({ page }) => {
@@ -678,8 +693,7 @@ test("a matching UFID assigns the spreadsheet officer title during account creat
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUfidDirectory({
     "12345678": { officerTitle: "President" }
   }));
-  await page.getByRole("button", { name: "Continue with Google" }).click();
-  await finishMemberSetup(page, "12345678");
+  await createThreeStepAccount(page, { email: "president@ufl.edu", username: "fqcprez", ufid: "12345678" });
   await expect(page.locator(".profile-role-line").getByText("President", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Management" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open settings" }).click();
@@ -688,8 +702,7 @@ test("a matching UFID assigns the spreadsheet officer title during account creat
 
 test("a signed-in member can add a device passkey", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.getByRole("button", { name: "Continue with Google" }).click();
-  await finishMemberSetup(page);
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-passkey", displayName: "Member", username: "member", email: "member@ufl.edu", role: "member", ufidStatus: "member", passkeyCount: 0 }));
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("0 passkeys")).toBeVisible();
   await page.getByText("Passkeys & Face ID", { exact: true }).click();
@@ -700,9 +713,8 @@ test("a signed-in member can add a device passkey", async ({ page }) => {
 
 test("nukes local app data and reloads a fresh events home", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.getByRole("button", { name: "Continue with Google" }).click();
-  await finishMemberSetup(page);
-  await expect(page.getByRole("heading", { name: "Google Member", level: 2 })).toBeVisible();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-nuke", displayName: "Nuke Member", username: "nukemember", email: "nuke@ufl.edu", role: "member", ufidStatus: "member" }));
+  await expect(page.getByRole("heading", { name: "Nuke Member", level: 2 })).toBeVisible();
 
   await page.getByRole("button", { name: "Open settings" }).click();
   await page.getByText("Advanced settings", { exact: true }).click();

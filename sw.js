@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v251-secure-leadership-linking";
+const CACHE_NAME = "fqc-app-v260-three-step-signup";
 const ASSETS = [
   "/assets/fqc-badge.png?v=250"
 ];

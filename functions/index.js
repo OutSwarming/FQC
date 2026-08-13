@@ -81,6 +81,14 @@ function cleanText(value, maxLength = 120) {
   return String(value || "").trim().slice(0, maxLength);
 }
 
+const reservedUsernames = new Set(["admin", "administrator", "fqc", "officer", "president", "support", "treasurer"]);
+
+export function usernameForInput(value) {
+  const username = cleanText(value, 24).toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)) return "";
+  return reservedUsernames.has(username) ? "" : username;
+}
+
 function profileRole(value) {
   return value === "officer" ? "officer" : "member";
 }
@@ -127,6 +135,7 @@ function leaderboardEntry(uid, data = {}) {
   const checkedInEvents = uniqueEventIds(data.checkedInEvents);
   return {
     uid,
+    username: usernameForInput(data.username),
     displayName: cleanText(data.displayName || "FQC Member", 80),
     points: pointsForEvents(checkedInEvents),
     role: profileRole(data.role)
@@ -821,6 +830,7 @@ async function ensureProfileForUser(userRecord) {
   const rosterEntry = roster.find((entry) => entry.fingerprint === existing.ufidFingerprint) || null;
   const access = resolvedAccess(existing, rosterEntry);
   const data = {
+    username: usernameForInput(existing.username),
     displayName: cleanText(existing.displayName || userRecord.displayName || userRecord.email?.split("@")[0] || "FQC Member", 80),
     email: cleanText(userRecord.email, 180),
     photoURL: cleanText(userRecord.photoURL, 500),
@@ -844,6 +854,49 @@ export const ensureUserProfile = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
   const userRecord = await auth.getUser(caller.uid);
   return ensureProfileForUser(userRecord);
+});
+
+export const checkUsernameAvailability = onCall(callableOptions, async (request) => {
+  const username = usernameForInput(request.data?.username);
+  if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
+  const snapshot = await db.collection("usernameDirectory").doc(username).get();
+  return { username, available: !snapshot.exists };
+});
+
+export const claimUsername = onCall(callableOptions, async (request) => {
+  const caller = requireAuth(request);
+  const username = usernameForInput(request.data?.username);
+  if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
+  const usernameRef = db.collection("usernameDirectory").doc(username);
+  const userRef = db.collection("users").doc(caller.uid);
+  await db.runTransaction(async (transaction) => {
+    const [usernameSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(usernameRef),
+      transaction.get(userRef)
+    ]);
+    if (usernameSnapshot.exists && usernameSnapshot.data()?.uid !== caller.uid) {
+      throw new HttpsError("already-exists", "That username is already taken.");
+    }
+    const previous = usernameForInput(userSnapshot.data()?.username);
+    if (previous && previous !== username) transaction.delete(db.collection("usernameDirectory").doc(previous));
+    transaction.set(usernameRef, { uid: caller.uid, updatedAt: FieldValue.serverTimestamp() });
+    transaction.set(userRef, { username, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+  await auth.updateUser(caller.uid, { displayName: username });
+  return { username };
+});
+
+export const resolveLoginIdentifier = onCall(callableOptions, async (request) => {
+  const identifier = cleanText(request.data?.identifier, 180).toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) return { email: identifier };
+  const username = usernameForInput(identifier);
+  if (!username) throw new HttpsError("not-found", "The username or password is incorrect.");
+  const snapshot = await db.collection("usernameDirectory").doc(username).get();
+  const uid = cleanText(snapshot.data()?.uid, 160);
+  if (!uid) throw new HttpsError("not-found", "The username or password is incorrect.");
+  const userRecord = await auth.getUser(uid);
+  if (!userRecord.email) throw new HttpsError("not-found", "The username or password is incorrect.");
+  return { email: userRecord.email };
 });
 
 export const claimUfidRole = onCall(ufidCallableOptions, async (request) => {

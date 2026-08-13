@@ -984,6 +984,83 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
 .email-auth-form { display: grid; gap: 12px; }
 .email-auth-form .form-row { margin: 0; }
 .email-auth-submit { width: 100%; margin-top: 2px; }
+.signup-progress {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 2px 0 20px;
+}
+.signup-progress-step {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+.signup-progress-step::before {
+  content: "";
+  width: 100%;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--line);
+}
+.signup-progress-step span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin-top: -1px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-soft);
+  font-weight: 900;
+}
+.signup-progress-step.active,
+.signup-progress-step.complete { color: var(--accent); }
+.signup-progress-step.active::before,
+.signup-progress-step.complete::before { background: var(--accent); }
+.signup-progress-step.active span,
+.signup-progress-step.complete span { border-color: var(--accent); background: var(--accent-soft); }
+.signup-step { animation: auth-step-in 220ms ease both; }
+@keyframes auth-step-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+.signup-step-copy { margin-bottom: 4px; }
+.signup-step-copy h3 { margin: 2px 0 5px; font-size: clamp(1.35rem, 4vw, 1.75rem); }
+.signup-step-copy p:last-child { margin: 0; color: var(--muted); }
+.signup-actions { display: grid; grid-template-columns: minmax(96px, 0.36fr) 1fr; gap: 10px; margin-top: 4px; }
+.signup-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.signup-summary strong { color: var(--accent); }
+.signup-methods { display: grid; gap: 9px; padding: 0; border: 0; }
+.signup-methods legend { margin-bottom: 8px; font-weight: 900; }
+.signup-method {
+  display: grid;
+  grid-template-columns: auto 28px 1fr;
+  align-items: center;
+  gap: 11px;
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+.signup-method.selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.signup-method.unavailable { opacity: 0.48; cursor: not-allowed; }
+.signup-method input { width: 18px; height: 18px; accent-color: var(--accent); }
+.signup-method svg { width: 25px; height: 25px; color: var(--accent); }
+.signup-method span { display: grid; gap: 3px; }
+.signup-method small { color: var(--muted); font-size: 0.72rem; }
 .text-button {
   justify-self: center;
   border: 0;

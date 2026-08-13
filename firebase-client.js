@@ -1,18 +1,14 @@
 import { initializeApp } from "firebase/app";
 import {
-  GoogleAuthProvider,
-  OAuthProvider,
   browserLocalPersistence,
   createUserWithEmailAndPassword,
+  deleteUser,
   getAuth,
-  getRedirectResult,
   onAuthStateChanged,
   sendPasswordResetEmail,
   setPersistence,
   signInWithCustomToken,
   signInWithEmailAndPassword,
-  signInWithPopup,
-  signInWithRedirect,
   signOut,
   updateProfile
 } from "firebase/auth";
@@ -71,7 +67,7 @@ let mockOfficerEventOperations = {
   updatedAt: new Date().toISOString()
 };
 let mockUfidDirectory = new Map();
-let redirectResultChecked = false;
+let mockUsernameDirectory = new Map();
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
@@ -94,6 +90,7 @@ function normalizedProfile(profile = {}) {
   const checkedInEvents = normalizedEventIds(profile.checkedInEvents);
   return {
     uid: String(profile.uid || ""),
+    username: String(profile.username || ""),
     displayName: String(profile.displayName || "FQC Member"),
     email: String(profile.email || ""),
     photoURL: String(profile.photoURL || ""),
@@ -120,6 +117,7 @@ function emitMockCheckIn() {
 function mockSignIn(profile = {}) {
   mockProfile = normalizedProfile({
     uid: profile.uid || "test-user",
+    username: profile.username || "",
     displayName: profile.displayName || "Alex",
     email: profile.email || "alex@ufl.edu",
     role: profile.role || "member",
@@ -165,7 +163,8 @@ if (testMode) {
     setOfficerEventOperations: (operations) => { mockOfficerEventOperations = structuredClone(operations); },
     getLeaderboardReads: () => mockLeaderboardReads,
     resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
-    setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); }
+    setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); },
+    setUsernameDirectory: (entries) => { mockUsernameDirectory = new Map(Object.entries(entries || {})); }
   };
 }
 
@@ -178,11 +177,6 @@ export function observeSession(callback, onError = () => {}) {
     mockSessionObserver = callback;
     emitMockSession();
     return () => { mockSessionObserver = null; };
-  }
-
-  if (!redirectResultChecked) {
-    redirectResultChecked = true;
-    getRedirectResult(auth).catch(onError);
   }
 
   return onAuthStateChanged(auth, async (user) => {
@@ -216,58 +210,69 @@ export function observeCheckIn(callback, onError = () => {}) {
   }, onError);
 }
 
-async function socialSignIn(provider) {
+async function emailForLoginIdentifier(identifier) {
+  const value = String(identifier || "").trim().toLowerCase();
+  if (value.includes("@")) return value;
+  if (testMode) return String(mockUsernameDirectory.get(value) || "");
+  const result = await callable("resolveLoginIdentifier")({ identifier: value });
+  return String(result.data?.email || "");
+}
+
+export async function checkUsername(username) {
+  const normalized = String(username || "").trim().toLowerCase();
+  if (testMode) return { username: normalized, available: !mockUsernameDirectory.has(normalized) };
+  const result = await callable("checkUsernameAvailability")({ username: normalized });
+  return result.data;
+}
+
+export async function signInWithEmail(identifier, password) {
+  const email = await emailForLoginIdentifier(identifier);
+  if (!email) throw new Error("The username or password is incorrect.");
   if (testMode) {
-    mockSignIn({
-      uid: provider.providerId === "apple.com" ? "apple-user" : "google-user",
-      displayName: provider.providerId === "apple.com" ? "Apple Member" : "Google Member",
-      email: provider.providerId === "apple.com" ? "apple@privaterelay.appleid.com" : "member@ufl.edu",
-      ufidStatus: "required"
-    });
-    return;
-  }
-  const prefersRedirect = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    || globalThis.matchMedia?.("(max-width: 680px)")?.matches;
-  if (prefersRedirect) {
-    await signInWithRedirect(auth, provider);
-    return;
-  }
-  await signInWithPopup(auth, provider);
-}
-
-export function signInWithGoogle() {
-  const provider = new GoogleAuthProvider();
-  provider.setCustomParameters({ prompt: "select_account" });
-  return socialSignIn(provider);
-}
-
-export function signInWithApple() {
-  const provider = new OAuthProvider("apple.com");
-  provider.addScope("email");
-  provider.addScope("name");
-  return socialSignIn(provider);
-}
-
-export async function signInWithEmail(email, password) {
-  if (testMode) {
-    mockSignIn({ uid: "email-user", displayName: "Email Member", email, ufidStatus: "member" });
+    const username = String(identifier).includes("@") ? "" : String(identifier).trim().toLowerCase();
+    mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email, ufidStatus: "member" });
     return;
   }
   await signInWithEmailAndPassword(auth, email, password);
 }
 
-export async function createEmailAccount({ displayName, email, password, ufid }) {
-  if (testMode) {
-    mockSignIn({ uid: "new-email-user", displayName, email, ufidStatus: "required" });
-    return verifyUfid(ufid);
-  }
-  const credential = await createUserWithEmailAndPassword(auth, email, password);
-  await updateProfile(credential.user, { displayName });
-  await callable("ensureUserProfile")();
-  return verifyUfid(ufid);
+function generatedAccountPassword() {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export async function requestPasswordReset(email) {
+export async function createEmailAccount({ username, email, password, ufid, method = "password" }) {
+  const normalizedUsername = String(username || "").trim().toLowerCase();
+  if (testMode) {
+    if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
+    mockUsernameDirectory.set(normalizedUsername, email);
+    mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email, ufidStatus: "required" });
+    const profile = await verifyUfid(ufid);
+    if (method === "passkey") {
+      mockProfile = normalizedProfile({ ...profile, passkeyCount: 1 });
+      emitMockSession();
+      return mockProfile;
+    }
+    return profile;
+  }
+  const accountPassword = method === "passkey" ? generatedAccountPassword() : password;
+  const credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
+  try {
+    await callable("claimUsername")({ username: normalizedUsername });
+  } catch (error) {
+    await deleteUser(credential.user).catch(() => {});
+    throw error;
+  }
+  await updateProfile(credential.user, { displayName: normalizedUsername });
+  await callable("ensureUserProfile")();
+  const profile = await verifyUfid(ufid);
+  return method === "passkey" ? registerPasskey() : profile;
+}
+
+export async function requestPasswordReset(identifier) {
+  const email = await emailForLoginIdentifier(identifier);
+  if (!email) throw new Error("Enter a valid username or UF email.");
   if (testMode) return { email };
   await sendPasswordResetEmail(auth, email);
   return { email };

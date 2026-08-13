@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-test("uses the registered same-origin web.app Google OAuth handler", () => {
+test("uses the registered same-origin web.app Firebase Auth domain", () => {
   const source = readFileSync(new URL("../firebase-client.js", import.meta.url), "utf8");
 
   expect(source).toContain('authDomain: "florida-quantum-computing.web.app"');

@@ -2,6 +2,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   assignLeadershipRole,
+  checkUsername,
   changeMemberRole,
   createEmailAccount,
   loadLeaderboard,
@@ -18,9 +19,7 @@ import {
   registerPasskey,
   saveOfficerBudgetItem,
   saveOfficerEvent,
-  signInWithApple,
   signInWithEmail,
-  signInWithGoogle,
   signInWithPasskey,
   supportsPasskeys,
   updateActiveCheckIn,
@@ -30,9 +29,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.5.1";
+const APP_VERSION = "2.6.0";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.6.0", "Added a welcoming three-step signup, unique usernames, username-or-UF-email login, and passkey-only account setup"],
   ["2.5.1", "Added secure pending-leadership account linking and verified every officer-title permission path"],
   ["2.5.0", "Added the Master Members attendance roster and secure two-mile event check-in verification with an officer online-event switch"],
   ["2.4.1", "Moved events into a Past archive 24 hours after they begin and repaired leadership role matching"],
@@ -99,6 +99,7 @@ const state = {
   calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-03",
   selectedEventId: localStorage.getItem("fqc:selected-event") || "fqc-2026-03-03-ionq",
   memberName: localStorage.getItem("fqc:name") || "Future Member",
+  memberUsername: "",
   memberEmail: "",
   memberPhotoURL: "",
   loggedIn: false,
@@ -107,6 +108,11 @@ const state = {
   authError: "",
   authMessage: "",
   authMode: "login",
+  signupStep: 1,
+  signupEmail: "",
+  signupUsername: "",
+  signupUfid: "",
+  signupMethod: "passkey",
   authUser: null,
   memberRole: "member",
   leadership: "",
@@ -1497,6 +1503,7 @@ function profileRoleLabel(profile) {
 
 function applyMemberProfile(profile) {
   state.memberName = profile.displayName || "FQC Member";
+  state.memberUsername = profile.username || "";
   state.memberEmail = profile.email || "";
   state.memberPhotoURL = profile.photoURL || "";
   state.memberRole = profile.role === "officer" ? "officer" : "member";
@@ -2032,7 +2039,7 @@ function renderAccountSettings() {
   }
   return `
     <section class="section settings-account-summary">
-      <div class="section-header"><div><p class="section-kicker">Account management</p><h2>${escapeHtml(state.memberName)}</h2><p>${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${escapeHtml(roleLabel())}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
+      <div class="section-header"><div><p class="section-kicker">Account management</p><h2>${escapeHtml(state.memberName)}</h2><p>${state.memberUsername ? `@${escapeHtml(state.memberUsername)} · ` : ""}${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${escapeHtml(roleLabel())}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
       <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
       <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
       ${renderAuthFeedback()}
@@ -2153,6 +2160,79 @@ function renderLeaderboard() {
   `;
 }
 
+function signupProgress() {
+  return `
+    <div class="signup-progress" aria-label="Account creation progress">
+      ${["UF email", "Username", "Secure it"].map((label, index) => {
+        const step = index + 1;
+        return `<div class="signup-progress-step${state.signupStep === step ? " active" : ""}${state.signupStep > step ? " complete" : ""}"><span>${state.signupStep > step ? "✓" : step}</span><strong>${label}</strong></div>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderSignupWizard() {
+  if (state.signupStep === 1) {
+    return `
+      ${signupProgress()}
+      <form class="email-auth-form signup-step" id="signup-email-form">
+        <div class="signup-step-copy"><p class="section-kicker">Step 1 of 3</p><h3>Start with your UF email</h3><p>This keeps the FQC community connected to UF.</p></div>
+        <div class="form-row">
+          <label for="signup-email">UF email</label>
+          <input id="signup-email" type="email" inputmode="email" autocomplete="email" value="${escapeHtml(state.signupEmail)}" placeholder="you@ufl.edu" required autofocus />
+        </div>
+        <button class="primary-button email-auth-submit" type="submit"><span>Next: choose a username</span></button>
+      </form>
+    `;
+  }
+  if (state.signupStep === 2) {
+    return `
+      ${signupProgress()}
+      <form class="email-auth-form signup-step" id="signup-username-form">
+        <div class="signup-step-copy"><p class="section-kicker">Step 2 of 3</p><h3>Choose your FQC username</h3><p>This is what members will see. You can also use it to log in.</p></div>
+        <div class="form-row">
+          <label for="signup-username">Username</label>
+          <input id="signup-username" type="text" inputmode="text" autocomplete="username" value="${escapeHtml(state.signupUsername)}" minlength="3" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9._]{1,22}[A-Za-z0-9]" placeholder="quantumgator" required autofocus />
+          <small>3–24 letters, numbers, periods, or underscores.</small>
+        </div>
+        <div class="signup-actions"><button class="secondary-button" id="signup-back-email" type="button">Back</button><button class="primary-button" type="submit" ${state.authBusy ? "disabled" : ""}>Check username</button></div>
+      </form>
+    `;
+  }
+  const passkeyAvailable = supportsPasskeys();
+  if (!passkeyAvailable && state.signupMethod === "passkey") state.signupMethod = "password";
+  return `
+    ${signupProgress()}
+    <form class="email-auth-form signup-step" id="signup-security-form">
+      <div class="signup-step-copy"><p class="section-kicker">Step 3 of 3</p><h3>Secure your account</h3><p>Use a passkey for Face ID, Touch ID, or your device lock—or create a private password.</p></div>
+      <div class="signup-summary"><span>${escapeHtml(state.signupEmail)}</span><strong>@${escapeHtml(state.signupUsername)}</strong></div>
+      <div class="form-row">
+        <label for="signup-ufid">UFID verification</label>
+        <input id="signup-ufid" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{8}" maxlength="8" value="${escapeHtml(state.signupUfid)}" placeholder="8-digit UFID" required />
+        <small>Used once to match your club role; it is not your password.</small>
+      </div>
+      <fieldset class="signup-methods">
+        <legend>Choose one sign-in method</legend>
+        <label class="signup-method${state.signupMethod === "passkey" ? " selected" : ""}${passkeyAvailable ? "" : " unavailable"}">
+          <input type="radio" name="signup-method" value="passkey" ${state.signupMethod === "passkey" ? "checked" : ""} ${passkeyAvailable ? "" : "disabled"} />
+          <svg><use href="#icon-lock"></use></svg><span><strong>Passkey</strong><small>${passkeyAvailable ? "Fastest · Face ID, Touch ID, or device lock" : "Unavailable on this device"}</small></span>
+        </label>
+        <label class="signup-method${state.signupMethod === "password" ? " selected" : ""}">
+          <input type="radio" name="signup-method" value="password" ${state.signupMethod === "password" ? "checked" : ""} />
+          <svg><use href="#icon-profile"></use></svg><span><strong>Private password</strong><small>Use with your username or UF email</small></span>
+        </label>
+      </fieldset>
+      ${state.signupMethod === "password" ? `
+        <div class="form-row">
+          <label for="signup-password">Private password</label>
+          <input id="signup-password" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required />
+        </div>
+      ` : ""}
+      <div class="signup-actions"><button class="secondary-button" id="signup-back-username" type="button">Back</button><button class="primary-button" type="submit" ${state.authBusy ? "disabled" : ""}>${state.signupMethod === "passkey" ? "Create with passkey" : "Create account"}</button></div>
+    </form>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
@@ -2165,49 +2245,28 @@ function renderProfile() {
             <div>
               <p class="section-kicker">One secure FQC account</p>
               <h2>${creating ? "Create your FQC account" : "Welcome back"}</h2>
-              <p>${creating ? "Create your account with your email, password, and UFID." : "Log in with your email and password, Google, Apple, or a passkey."}</p>
+              <p>${creating ? "Three quick steps. Choose a passkey or private password—never both." : "Use your username or UF email with your private password, or use a passkey."}</p>
             </div>
           </div>
           <div class="auth-mode-tabs" role="tablist" aria-label="Account access">
             <button id="auth-mode-login" role="tab" aria-selected="${creating ? "false" : "true"}" type="button">Log In</button>
             <button id="auth-mode-create" role="tab" aria-selected="${creating ? "true" : "false"}" type="button">Create Account</button>
           </div>
-          <form class="email-auth-form" id="email-auth-form">
-            ${creating ? `
+          ${creating ? renderSignupWizard() : `
+            <form class="email-auth-form" id="email-auth-form">
               <div class="form-row">
-                <label for="auth-name">Name</label>
-                <input id="auth-name" name="name" autocomplete="name" maxlength="80" placeholder="Your name" required />
+                <label for="auth-identifier">Username or UF email</label>
+                <input id="auth-identifier" name="identifier" type="text" inputmode="email" autocomplete="username" placeholder="quantumgator or you@ufl.edu" required />
               </div>
-            ` : ""}
-            <div class="form-row">
-              <label for="auth-email">Email</label>
-              <input id="auth-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@ufl.edu" required />
-            </div>
-            <div class="form-row">
-              <label for="auth-password">Password</label>
-              <input id="auth-password" name="password" type="password" autocomplete="${creating ? "new-password" : "current-password"}" minlength="8" placeholder="At least 8 characters" required />
-            </div>
-            ${creating ? `
-              <div class="form-row ufid-create-field">
-                <label for="auth-ufid">UFID</label>
-                <input id="auth-ufid" name="ufid" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{8}" maxlength="8" placeholder="8-digit UFID" required />
-                <small>Used once to assign your current FQC role. Your raw UFID is never stored.</small>
+              <div class="form-row">
+                <label for="auth-password">Private password</label>
+                <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="10" placeholder="Your private password" required />
               </div>
-            ` : ""}
-            <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}>
-              <svg><use href="#icon-lock"></use></svg><span>${creating ? "Create Account" : "Log In"}</span>
-            </button>
-            ${creating ? "" : '<button class="text-button" id="forgot-password" type="button">Forgot password?</button>'}
-          </form>
-          ${creating ? "" : `
+              <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>Log In</span></button>
+              <button class="text-button" id="forgot-password" type="button">Forgot password?</button>
+            </form>
             <div class="auth-divider"><span>or</span></div>
             <div class="auth-provider-list">
-              <button class="auth-provider-button google" id="sign-in-google" type="button" ${state.authBusy ? "disabled" : ""}>
-                <span class="provider-mark" aria-hidden="true">G</span><span>Continue with Google</span>
-              </button>
-              <button class="auth-provider-button apple" id="sign-in-apple" type="button" ${state.authBusy ? "disabled" : ""}>
-                <span class="provider-mark apple-mark" aria-hidden="true"></span><span>Continue with Apple</span>
-              </button>
               <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
                 <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
               </button>
@@ -2215,7 +2274,7 @@ function renderProfile() {
           `}
           ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
           ${renderAuthFeedback()}
-          <p class="auth-privacy">Firebase Authentication protects passwords and sign-in sessions. FQC never stores your password or raw UFID.</p>
+          <p class="auth-privacy">Firebase Authentication protects sign-in sessions. Passwords stay private, and UFIDs are one-time verification—not login credentials.</p>
         </section>
       </section>
     `;
@@ -2277,48 +2336,107 @@ function bindViewEvents() {
   });
   document.querySelector("#auth-mode-create")?.addEventListener("click", () => {
     state.authMode = "create";
+    state.signupStep = 1;
     state.authError = "";
     state.authMessage = "";
     render();
   });
   document.querySelector("#email-auth-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const email = document.querySelector("#auth-email")?.value.trim() || "";
+    const identifier = document.querySelector("#auth-identifier")?.value.trim() || "";
     const password = document.querySelector("#auth-password")?.value || "";
-    if (state.authMode === "create") {
-      const displayName = document.querySelector("#auth-name")?.value.trim() || "";
-      const ufid = document.querySelector("#auth-ufid")?.value.trim() || "";
-      if (displayName.length < 2) {
-        state.authError = "Enter your name.";
-        render();
-        return;
-      }
-      if (!/^\d{8}$/.test(ufid)) {
-        state.authError = "Enter an eight-digit UFID.";
-        render();
-        return;
-      }
-      const profile = await runAuthAction(
-        () => createEmailAccount({ displayName, email, password, ufid }),
-        "Account created securely."
-      );
-      if (profile) applyMemberProfile(profile);
-      return;
-    }
-    await runAuthAction(() => signInWithEmail(email, password));
+    await runAuthAction(() => signInWithEmail(identifier, password));
   });
-  document.querySelector("#forgot-password")?.addEventListener("click", async () => {
-    const email = document.querySelector("#auth-email")?.value.trim() || "";
-    if (!email) {
-      state.authError = "Enter your email first, then choose Forgot password.";
+  document.querySelector("#signup-email-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const email = document.querySelector("#signup-email")?.value.trim().toLowerCase() || "";
+    if (!/^[^\s@]+@ufl\.edu$/i.test(email)) {
+      state.authError = "Use your UF email ending in @ufl.edu.";
       render();
       return;
     }
-    await runAuthAction(() => requestPasswordReset(email), `Password reset email sent to ${email}.`);
+    state.signupEmail = email;
+    state.signupStep = 2;
+    state.authError = "";
+    render();
+  });
+  document.querySelector("#signup-back-email")?.addEventListener("click", () => {
+    state.signupStep = 1;
+    state.authError = "";
+    render();
+  });
+  document.querySelector("#signup-username-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = document.querySelector("#signup-username")?.value.trim().toLowerCase() || "";
+    state.signupUsername = username;
+    if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)) {
+      state.authError = "Use 3–24 letters, numbers, periods, or underscores.";
+      render();
+      return;
+    }
+    const result = await runAuthAction(() => checkUsername(username));
+    if (!result) return;
+    if (!result.available) {
+      state.authError = "That username is already taken. Try another.";
+      render();
+      return;
+    }
+    state.signupUsername = result.username;
+    state.signupStep = 3;
+    state.authError = "";
+    render();
+  });
+  document.querySelector("#signup-back-username")?.addEventListener("click", () => {
+    state.signupUfid = document.querySelector("#signup-ufid")?.value.trim() || state.signupUfid;
+    state.signupStep = 2;
+    state.authError = "";
+    render();
+  });
+  document.querySelectorAll('input[name="signup-method"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      state.signupUfid = document.querySelector("#signup-ufid")?.value.trim() || "";
+      state.signupMethod = input.value;
+      state.authError = "";
+      render();
+    });
+  });
+  document.querySelector("#signup-security-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const ufid = document.querySelector("#signup-ufid")?.value.trim() || "";
+    const password = document.querySelector("#signup-password")?.value || "";
+    state.signupUfid = ufid;
+    if (!/^\d{8}$/.test(ufid)) {
+      state.authError = "Enter an eight-digit UFID for one-time role verification.";
+      render();
+      return;
+    }
+    if (state.signupMethod === "password" && password.length < 10) {
+      state.authError = "Use a private password with at least 10 characters.";
+      render();
+      return;
+    }
+    const profile = await runAuthAction(
+      () => createEmailAccount({ username: state.signupUsername, email: state.signupEmail, password, ufid, method: state.signupMethod }),
+      state.signupMethod === "passkey" ? "Account and passkey created." : "Account created securely."
+    );
+    if (profile) {
+      applyMemberProfile(profile);
+      state.signupStep = 1;
+      state.signupEmail = "";
+      state.signupUsername = "";
+      state.signupUfid = "";
+    }
+  });
+  document.querySelector("#forgot-password")?.addEventListener("click", async () => {
+    const identifier = document.querySelector("#auth-identifier")?.value.trim() || "";
+    if (!identifier) {
+      state.authError = "Enter your username or UF email first, then choose Forgot password.";
+      render();
+      return;
+    }
+    await runAuthAction(() => requestPasswordReset(identifier), "Password reset email sent to your UF inbox.");
   });
 
-  document.querySelector("#sign-in-google")?.addEventListener("click", () => runAuthAction(signInWithGoogle));
-  document.querySelector("#sign-in-apple")?.addEventListener("click", () => runAuthAction(signInWithApple));
   document.querySelector("#sign-in-passkey")?.addEventListener("click", () => runAuthAction(signInWithPasskey));
   document.querySelector("#profile-logout")?.addEventListener("click", () => runAuthAction(logOut));
   document.querySelector("#verify-ufid")?.addEventListener("click", async () => {
@@ -2504,6 +2622,7 @@ observeSession((session) => {
     applyMemberProfile(session.profile);
   } else {
     state.memberName = "Future Member";
+    state.memberUsername = "";
     state.memberEmail = "";
     state.memberPhotoURL = "";
     state.memberRole = "member";
