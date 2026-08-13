@@ -23,9 +23,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.2.0";
+const APP_VERSION = "2.2.1";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.2.1", "Consolidated events, treasury, UF locations, and current leadership into one canonical workbook"],
   ["2.2.0", "Added live officer event budgets, itemized purchase plans, and verified FQC funding totals"],
   ["2.1.0", "Added a one-read live leaderboard with one point per unique event check-in"],
   ["2.0.4", "Simplified account creation to email, password, and UFID only"],
@@ -42,6 +43,9 @@ const RELEASE_HISTORY = [
 const allowedViews = new Set(["home", "checkin", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
+const EVENTS_SHEET_NAME = "Events";
+const TREASURER_SHEET_NAME = "Treasurer Breakdown";
+const UF_LOCATIONS_SHEET_NAME = "UF Locations";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EVENT_DATA_CACHE_KEY = "fqc:event-data";
 const EVENT_BUDGET_CACHE_KEY = "fqc:event-budget";
@@ -538,9 +542,9 @@ async function refreshEventData(reason = "scheduled refresh") {
   if (eventRefreshInFlight) return eventRefreshInFlight;
 
   eventRefreshInFlight = Promise.all([
-    fetch(sheetCsvUrl("Events"), { cache: "no-store" }),
-    fetch(sheetCsvUrl("UF Locations"), { cache: "no-store" }),
-    fetch(sheetCsvUrl("Event Budget"), { cache: "no-store" })
+    fetch(sheetCsvUrl(EVENTS_SHEET_NAME), { cache: "no-store" }),
+    fetch(sheetCsvUrl(UF_LOCATIONS_SHEET_NAME), { cache: "no-store" }),
+    fetch(sheetCsvUrl(TREASURER_SHEET_NAME), { cache: "no-store" })
   ])
     .then(async ([eventsResponse, locationsResponse, budgetResponse]) => {
       if (!eventsResponse.ok || !locationsResponse.ok || !budgetResponse.ok) {

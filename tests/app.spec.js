@@ -55,7 +55,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       status: 200,
       contentType: "text/csv; charset=utf-8",
-      body: sheetName === "UF Locations" ? locationsCsv : sheetName === "Event Budget" ? budgetCsv : eventsCsv
+      body: sheetName === "UF Locations" ? locationsCsv : sheetName === "Treasurer Breakdown" ? budgetCsv : eventsCsv
     });
   });
   await page.goto("/");
@@ -94,7 +94,7 @@ test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", a
     await route.fulfill({
       status: 200,
       contentType: "text/csv; charset=utf-8",
-      body: sheetName === "UF Locations" ? logisticsLocationsCsv : sheetName === "Event Budget" ? budgetCsv : logisticsEventsCsv
+      body: sheetName === "UF Locations" ? logisticsLocationsCsv : sheetName === "Treasurer Breakdown" ? budgetCsv : logisticsEventsCsv
     });
   });
   await page.evaluate(() => {
@@ -352,7 +352,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.2.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.2.1 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
