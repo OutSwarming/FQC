@@ -1,6 +1,7 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
+  assignLeadershipRole,
   changeMemberRole,
   createEmailAccount,
   loadLeaderboard,
@@ -29,9 +30,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.5.0";
+const APP_VERSION = "2.5.1";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.5.1", "Added secure pending-leadership account linking and verified every officer-title permission path"],
   ["2.5.0", "Added the Master Members attendance roster and secure two-mile event check-in verification with an officer online-event switch"],
   ["2.4.1", "Moved events into a Past archive 24 hours after they begin and repaired leadership role matching"],
   ["2.4.0", "Cleaned up Profile and added one Sheet-synced event operations workspace for officers"],
@@ -113,6 +115,7 @@ const state = {
   ufidStatus: "",
   passkeyCount: 0,
   members: [],
+  leadershipSlots: [],
   membersLoading: false,
   officerResources: [],
   officerResourcesLoaded: false,
@@ -1576,7 +1579,9 @@ async function refreshMemberDirectory() {
   state.membersLoading = true;
   render();
   try {
-    state.members = await loadMembers();
+    const directory = await loadMembers();
+    state.members = directory.members;
+    state.leadershipSlots = directory.leadershipSlots;
     state.authError = "";
   } catch (error) {
     state.authError = readableAuthError(error);
@@ -1946,6 +1951,31 @@ function renderRoleWorkspace() {
         </div>
         <button class="secondary-button" id="refresh-members" type="button" ${state.membersLoading ? "disabled" : ""}>${state.membersLoading ? "Loading…" : "Refresh"}</button>
       </div>
+      ${state.canManageOfficers && state.leadershipSlots.length ? `
+        <div class="member-roster leadership-slot-roster" aria-label="Pending leadership matches">
+          <h3>Pending leadership matches</h3>
+          <p>These Sheet rows are waiting for a secure UFID match. Choose the account only after that person finishes UFID setup.</p>
+          ${state.leadershipSlots.map((slot) => {
+            const eligible = state.members.filter((member) => member.role === "member" && member.ufidStatus !== "required");
+            return `
+              <article class="member-role-row" data-leadership-row="${slot.row}">
+                <div class="member-identity">
+                  <strong>${escapeHtml(slot.name)}</strong>
+                  <span>${escapeHtml(slot.title)} · Waiting for account match</span>
+                </div>
+                <label>
+                  <span class="sr-only">Account for ${escapeHtml(slot.name)}</span>
+                  <select data-leadership-member="${slot.row}" ${eligible.length ? "" : "disabled"}>
+                    <option value="">Choose signed-in member</option>
+                    ${eligible.map((member) => `<option value="${escapeHtml(member.uid)}">${escapeHtml(member.displayName)} (${escapeHtml(member.email || "no email")})</option>`).join("")}
+                  </select>
+                </label>
+                <button class="secondary-button" data-assign-leadership="${slot.row}" type="button" ${eligible.length ? "" : "disabled"}>Link role</button>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
       <div class="member-roster" aria-live="polite">
         ${state.membersLoading && !state.members.length ? '<p class="empty-state">Loading FQC accounts…</p>' : state.members.length ? state.members.map((member) => `
           <article class="member-role-row" data-member-id="${escapeHtml(member.uid)}">
@@ -2409,6 +2439,19 @@ function bindViewEvents() {
       const uid = button.dataset.saveMemberRole;
       const role = document.querySelector(`[data-member-role="${CSS.escape(uid)}"]`)?.value || "member";
       const updated = await runAuthAction(() => changeMemberRole(uid, role), "Member role updated.");
+      if (updated) await refreshMemberDirectory();
+    });
+  });
+  document.querySelectorAll("[data-assign-leadership]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const row = Number(button.dataset.assignLeadership);
+      const uid = document.querySelector(`[data-leadership-member="${row}"]`)?.value || "";
+      if (!uid) {
+        state.authError = "Choose the signed-in member account for that leadership role.";
+        render();
+        return;
+      }
+      const updated = await runAuthAction(() => assignLeadershipRole(uid, row), "Leadership role securely linked to the UFID roster.");
       if (updated) await refreshMemberDirectory();
     });
   });

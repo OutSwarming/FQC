@@ -710,6 +710,29 @@ async function loadOfficerRoster() {
   return entries;
 }
 
+export function leadershipRowsFromValues(values = []) {
+  const [headers = [], ...rows] = values;
+  const headerIndex = Object.fromEntries(headers.map((header, index) => [cleanText(header, 80).toLowerCase(), index]));
+  return rows.map((row, index) => ({
+    row: index + 2,
+    name: cleanText(row[headerIndex["officer name"]], 80),
+    title: cleanText(row[headerIndex.title] ?? row[headerIndex.role], 80),
+    fingerprint: cleanText(row[headerIndex["ufid fingerprint"]], 64).toLowerCase(),
+    active: /^(yes|true|1|active)$/i.test(cleanText(row[headerIndex.active], 12)),
+    note: cleanText(row[headerIndex["security note"]], 160)
+  })).filter((entry) => entry.name && entry.title);
+}
+
+async function loadLeadershipRows() {
+  return leadershipRowsFromValues(await getSheetValues(`'${officerRosterSheetName}'!A1:E250`));
+}
+
+function pendingLeadershipSlots(rows = []) {
+  return rows
+    .filter((entry) => !entry.active && !/^[a-f0-9]{64}$/.test(entry.fingerprint))
+    .map(({ row, name, title }) => ({ row, name, title }));
+}
+
 export function resolvedAccess(existing = {}, rosterEntry = null) {
   const rosterLeadership = leadershipForRole(rosterEntry?.role);
   if (rosterLeadership) {
@@ -888,16 +911,18 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
 
 export const listMembers = onCall(callableOptions, async (request) => {
   requireOfficer(request);
-  const [snapshot, nominations] = await Promise.all([
+  const [snapshot, nominations, leadershipRows] = await Promise.all([
     db.collection("users").orderBy("displayName").limit(250).get(),
-    db.collection("officerNominations").where("status", "==", "pending").limit(250).get()
+    db.collection("officerNominations").where("status", "==", "pending").limit(250).get(),
+    loadLeadershipRows()
   ]);
   const nominated = new Set(nominations.docs.map((doc) => doc.id));
   return {
     members: snapshot.docs.map((doc) => publicProfile(doc.id, {
       ...doc.data(),
       officerNomination: nominated.has(doc.id) ? "pending" : ""
-    }))
+    })),
+    leadershipSlots: pendingLeadershipSlots(leadershipRows)
   };
 });
 
@@ -1178,6 +1203,70 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
     console.error("Master Members officer title sync failed", error);
   }
   return { uid, role, leadership: "", canManageOfficers: false };
+});
+
+export const assignMemberLeadership = onCall(callableOptions, async (request) => {
+  const caller = requireOfficerManager(request);
+  const uid = cleanText(request.data?.uid, 160);
+  const row = Number(request.data?.row);
+  if (!uid || !Number.isInteger(row) || row < 2 || row > 250) {
+    throw new HttpsError("invalid-argument", "Choose a pending leadership role and a member account.");
+  }
+
+  const [targetUser, targetSnapshot, leadershipRows] = await Promise.all([
+    auth.getUser(uid),
+    db.collection("users").doc(uid).get(),
+    loadLeadershipRows()
+  ]);
+  const targetData = targetSnapshot.data() || {};
+  const fingerprint = cleanText(targetData.ufidFingerprint, 64).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+    throw new HttpsError("failed-precondition", "That member must finish UFID setup before being linked to an officer role.");
+  }
+  const slot = leadershipRows.find((entry) => entry.row === row);
+  if (!slot || slot.active || /^[a-f0-9]{64}$/.test(slot.fingerprint)) {
+    throw new HttpsError("failed-precondition", "That leadership role is no longer pending. Refresh the roster.");
+  }
+  if (leadershipRows.some((entry) => entry.row !== row && entry.fingerprint === fingerprint)) {
+    throw new HttpsError("already-exists", "That UFID is already linked to another leadership role.");
+  }
+
+  const access = resolvedAccess({}, { role: slot.title });
+  await updateSheetValues([
+    { range: `'${officerRosterSheetName}'!B${row}`, values: [[fingerprint]] },
+    { range: `'${officerRosterSheetName}'!D${row}:E${row}`, values: [["Yes", "Verified through secure officer management"]] }
+  ]);
+  officerRosterCache = { expiresAt: 0, entries: [] };
+
+  const updatedProfile = {
+    ...targetData,
+    ...access,
+    ufidMatched: true,
+    roleOverride: FieldValue.delete(),
+    roleUpdatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  };
+  await Promise.all([
+    db.collection("users").doc(uid).set(updatedProfile, { merge: true }),
+    setAccessClaims(targetUser, access)
+  ]);
+  const synchronizedProfile = { ...targetData, ...access, ufidMatched: true };
+  await syncLeaderboardProfile(uid, synchronizedProfile);
+  try {
+    await syncExistingMasterMemberProfile(uid, synchronizedProfile);
+  } catch (error) {
+    console.error("Master Members leadership sync failed", error);
+  }
+  await db.collection("officerRosterAudit").add({
+    action: "leadership-slot-linked",
+    targetUid: uid,
+    leadershipRow: row,
+    officerName: slot.name,
+    officerTitle: slot.title,
+    updatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { profile: publicProfile(uid, synchronizedProfile), slot: { row, name: slot.name, title: slot.title } };
 });
 
 export const nominateOfficer = onCall(callableOptions, async (request) => {

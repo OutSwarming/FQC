@@ -5,6 +5,7 @@ import {
   canManageOfficerRoles,
   distanceMilesBetween,
   leadershipForRole,
+  leadershipRowsFromValues,
   masterMemberKey,
   normalizedEventStatus,
   officerResourceCatalog,
@@ -61,6 +62,35 @@ test("spreadsheet roles and protected leadership resolve predictably", () => {
     officerTitle: "Vice President",
     canManageOfficers: false
   });
+});
+
+test("every current e-board title resolves to the correct access level", () => {
+  const expectations = [
+    ["President", "president", true],
+    ["Vice President", "vice_president", false],
+    ["Treasurer", "treasurer", true],
+    ["Additional Officer", "", false]
+  ];
+  for (const [title, leadership, canManageOfficers] of expectations) {
+    assert.deepEqual(resolvedAccess({}, { role: title }), {
+      role: "officer",
+      leadership,
+      officerTitle: title,
+      canManageOfficers
+    });
+  }
+});
+
+test("leadership sheet parsing keeps every officer row and secure fingerprint state", () => {
+  const fingerprint = "a".repeat(64);
+  assert.deepEqual(leadershipRowsFromValues([
+    ["Officer Name", "UFID Fingerprint", "Title", "Active", "Security Note"],
+    ["Alex", fingerprint, "President", "Yes", "Matched"],
+    ["Sidney", "", "Vice President", "No", "Pending"]
+  ]), [
+    { row: 2, name: "Alex", title: "President", fingerprint, active: true, note: "Matched" },
+    { row: 3, name: "Sidney", title: "Vice President", fingerprint: "", active: false, note: "Pending" }
+  ]);
 });
 
 test("leaderboard points are one per unique event and server-ranked", () => {
