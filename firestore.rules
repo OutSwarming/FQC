@@ -32,6 +32,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /system/leaderboardData {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /events/{eventId}/checkins/{uid} {
       allow read: if isSelf(uid) || isOfficer();
       allow write: if false;

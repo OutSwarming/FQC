@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildLeaderboardEntries,
   canManageOfficerRoles,
   leadershipForRole,
   parseCsv,
+  pointsForEvents,
   resolvedAccess
 } from "./index.js";
 
@@ -41,4 +43,19 @@ test("spreadsheet roles and protected leadership resolve predictably", () => {
     officerTitle: "Vice President",
     canManageOfficers: false
   });
+});
+
+test("leaderboard points are one per unique event and server-ranked", () => {
+  assert.equal(pointsForEvents(["gbm-1", "gbm-1", "workshop-1", ""]), 2);
+  assert.equal(pointsForEvents([]), 0);
+
+  const entries = buildLeaderboardEntries([
+    { uid: "a", displayName: "Alex", points: 1, role: "member" },
+    { uid: "b", displayName: "Bailey", points: 3, role: "officer" }
+  ], { uid: "a", displayName: "Alex Q", points: 4, role: "member" });
+
+  assert.deepEqual(entries, [
+    { uid: "a", displayName: "Alex Q", points: 4, role: "member" },
+    { uid: "b", displayName: "Bailey", points: 3, role: "officer" }
+  ]);
 });

@@ -24,6 +24,9 @@ beforeEach(async () => {
     await setDoc(doc(database, "users", "member-1"), { displayName: "Member", role: "member" });
     await setDoc(doc(database, "users", "member-2"), { displayName: "Other Member", role: "member" });
     await setDoc(doc(database, "settings", "checkin"), { eventId: "gbm-1", open: true });
+    await setDoc(doc(database, "system", "leaderboardData"), {
+      entries: [{ uid: "member-1", displayName: "Member", points: 1 }]
+    });
     await setDoc(doc(database, "events", "gbm-1", "checkins", "member-1"), { uid: "member-1" });
     await setDoc(doc(database, "passkeyCredentials", "credential-1"), { uid: "member-1" });
   });
@@ -56,6 +59,16 @@ test("check-in state is public while mutations remain server-only", async () => 
   const publicDatabase = testEnvironment.unauthenticatedContext().firestore();
   await assertSucceeds(getDoc(doc(publicDatabase, "settings", "checkin")));
   await assertFails(setDoc(doc(publicDatabase, "settings", "checkin"), { open: false }, { merge: true }));
+});
+
+test("the aggregate leaderboard costs one signed-in document read and remains server-written", async () => {
+  const publicDatabase = testEnvironment.unauthenticatedContext().firestore();
+  const memberDatabase = testEnvironment.authenticatedContext("member-1", { role: "member" }).firestore();
+  const leaderboard = await assertSucceeds(getDoc(doc(memberDatabase, "system", "leaderboardData")));
+  assert.equal(leaderboard.data().entries.length, 1);
+  await assertFails(getDoc(doc(publicDatabase, "system", "leaderboardData")));
+  await assertFails(setDoc(doc(memberDatabase, "system", "leaderboardData"), { entries: [] }, { merge: true }));
+  await assertFails(getDoc(doc(publicDatabase, "users", "member-1")));
 });
 
 test("members read their own attendance and officers can read attendance", async () => {

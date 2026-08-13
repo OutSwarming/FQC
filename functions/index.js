@@ -19,6 +19,7 @@ const auth = getAuth();
 const region = "us-central1";
 const rpName = "Florida Quantum Computing";
 const challengeLifetimeMs = 5 * 60 * 1000;
+const maxLeaderboardEntries = 100;
 const officerRosterSpreadsheetId = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const officerRosterSheetName = "Officer Access";
 const officerRosterCacheMs = 5 * 60 * 1000;
@@ -49,6 +50,73 @@ function cleanText(value, maxLength = 120) {
 
 function profileRole(value) {
   return value === "officer" ? "officer" : "member";
+}
+
+export function uniqueEventIds(eventIds = []) {
+  return [...new Set((Array.isArray(eventIds) ? eventIds : [])
+    .map((eventId) => cleanText(eventId, 100))
+    .filter(Boolean))].slice(0, 250);
+}
+
+export function pointsForEvents(eventIds = []) {
+  return uniqueEventIds(eventIds).length;
+}
+
+export function buildLeaderboardEntries(entries = [], nextEntry = {}, limit = maxLeaderboardEntries) {
+  const byUid = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const uid = cleanText(entry?.uid, 160);
+    if (!uid) continue;
+    byUid.set(uid, {
+      uid,
+      displayName: cleanText(entry.displayName || "FQC Member", 80),
+      points: Math.max(0, Math.trunc(Number(entry.points) || 0)),
+      role: profileRole(entry.role)
+    });
+  }
+
+  const uid = cleanText(nextEntry?.uid, 160);
+  if (uid) {
+    byUid.set(uid, {
+      uid,
+      displayName: cleanText(nextEntry.displayName || "FQC Member", 80),
+      points: Math.max(0, Math.trunc(Number(nextEntry.points) || 0)),
+      role: profileRole(nextEntry.role)
+    });
+  }
+
+  return [...byUid.values()]
+    .sort((a, b) => b.points - a.points || a.displayName.localeCompare(b.displayName) || a.uid.localeCompare(b.uid))
+    .slice(0, Math.max(1, Math.min(maxLeaderboardEntries, Number(limit) || maxLeaderboardEntries)));
+}
+
+function leaderboardEntry(uid, data = {}) {
+  const checkedInEvents = uniqueEventIds(data.checkedInEvents);
+  return {
+    uid,
+    displayName: cleanText(data.displayName || "FQC Member", 80),
+    points: pointsForEvents(checkedInEvents),
+    role: profileRole(data.role)
+  };
+}
+
+async function syncLeaderboardProfile(uid, data = {}) {
+  const snapshotRef = db.collection("system").doc("leaderboardData");
+  const entry = leaderboardEntry(uid, data);
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(snapshotRef);
+    const currentEntries = snapshot.data()?.entries || [];
+    const entries = buildLeaderboardEntries(currentEntries, entry);
+    if (JSON.stringify(entries) !== JSON.stringify(currentEntries)) {
+      transaction.set(snapshotRef, {
+        entries,
+        participantCount: entries.length,
+        scoring: "one-point-per-event",
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+    return { entries, participantCount: entries.length };
+  });
 }
 
 export function leadershipForRole(role) {
@@ -185,6 +253,7 @@ function relyingParty(request) {
 }
 
 function publicProfile(uid, data = {}) {
+  const checkedInEvents = uniqueEventIds(data.checkedInEvents);
   return {
     uid,
     displayName: cleanText(data.displayName || "FQC Member", 80),
@@ -195,7 +264,8 @@ function publicProfile(uid, data = {}) {
     officerTitle: cleanText(data.officerTitle, 80),
     canManageOfficers: data.canManageOfficers === true,
     ufidStatus: !data.ufidFingerprint ? "required" : data.ufidMatched === true ? "matched" : "member",
-    checkedInEvents: Array.isArray(data.checkedInEvents) ? data.checkedInEvents.slice(0, 250) : [],
+    checkedInEvents,
+    points: pointsForEvents(checkedInEvents),
     passkeyCount: Number(data.passkeyCount) || 0,
     officerNomination: data.officerNomination === "pending" ? "pending" : ""
   };
@@ -215,7 +285,8 @@ async function ensureProfileForUser(userRecord) {
     ...access,
     ufidFingerprint: existing.ufidFingerprint || "",
     ufidMatched: Boolean(rosterEntry),
-    checkedInEvents: Array.isArray(existing.checkedInEvents) ? existing.checkedInEvents : [],
+    checkedInEvents: uniqueEventIds(existing.checkedInEvents),
+    points: pointsForEvents(existing.checkedInEvents),
     passkeyCount: Number(existing.passkeyCount) || 0,
     createdAt: existing.createdAt || FieldValue.serverTimestamp(),
     lastLoginAt: FieldValue.serverTimestamp()
@@ -223,6 +294,7 @@ async function ensureProfileForUser(userRecord) {
 
   await userRef.set(data, { merge: true });
   await setAccessClaims(userRecord, access);
+  await syncLeaderboardProfile(userRecord.uid, data);
   return publicProfile(userRecord.uid, data);
 }
 
@@ -267,6 +339,7 @@ export const claimUfidRole = onCall(ufidCallableOptions, async (request) => {
     updatedAt: FieldValue.serverTimestamp()
   };
   await Promise.all([userRef.set(data, { merge: true }), setAccessClaims(userRecord, access)]);
+  await syncLeaderboardProfile(caller.uid, { ...existing, ...data });
   return publicProfile(caller.uid, { ...existing, ...data });
 });
 
@@ -279,7 +352,9 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
     db.collection("users").doc(caller.uid).set({ displayName, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
   ]);
   const snapshot = await db.collection("users").doc(caller.uid).get();
-  return publicProfile(caller.uid, snapshot.data());
+  const profile = snapshot.data() || {};
+  await syncLeaderboardProfile(caller.uid, profile);
+  return publicProfile(caller.uid, profile);
 });
 
 export const listMembers = onCall(callableOptions, async (request) => {
@@ -329,6 +404,7 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   }, { merge: true });
   batch.delete(db.collection("officerNominations").doc(uid));
   await Promise.all([auth.setCustomUserClaims(uid, claims), batch.commit()]);
+  await syncLeaderboardProfile(uid, { ...targetData, role, officerTitle: role === "officer" ? "Officer" : "" });
   return { uid, role, leadership: "", canManageOfficers: false };
 });
 
@@ -373,25 +449,69 @@ export const setActiveCheckIn = onCall(callableOptions, async (request) => {
 export const recordEventCheckIn = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
   const settingRef = db.collection("settings").doc("checkin");
-  const setting = await settingRef.get();
-  const checkIn = setting.data() || {};
-  if (checkIn.open !== true || !checkIn.eventId) {
-    throw new HttpsError("failed-precondition", "Event check-in is not open.");
-  }
-
-  const eventId = cleanText(checkIn.eventId, 100);
-  const checkInRef = db.collection("events").doc(eventId).collection("checkins").doc(caller.uid);
   const userRef = db.collection("users").doc(caller.uid);
-  const batch = db.batch();
-  batch.set(checkInRef, {
-    uid: caller.uid,
-    displayName: cleanText(caller.token.name || caller.token.email || "FQC Member", 80),
-    email: cleanText(caller.token.email, 180),
-    checkedInAt: FieldValue.serverTimestamp()
-  }, { merge: true });
-  batch.set(userRef, { checkedInEvents: FieldValue.arrayUnion(eventId), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-  await batch.commit();
-  return { eventId };
+  const leaderboardRef = db.collection("system").doc("leaderboardData");
+
+  return db.runTransaction(async (transaction) => {
+    const setting = await transaction.get(settingRef);
+    const checkIn = setting.data() || {};
+    if (checkIn.open !== true || !checkIn.eventId) {
+      throw new HttpsError("failed-precondition", "Event check-in is not open.");
+    }
+
+    const eventId = cleanText(checkIn.eventId, 100);
+    const checkInRef = db.collection("events").doc(eventId).collection("checkins").doc(caller.uid);
+    const checkInSnapshot = await transaction.get(checkInRef);
+    const userSnapshot = await transaction.get(userRef);
+    const leaderboardSnapshot = await transaction.get(leaderboardRef);
+    const userData = userSnapshot.data() || {};
+    const currentEvents = uniqueEventIds(userData.checkedInEvents);
+    const alreadyEarned = currentEvents.includes(eventId);
+    const checkedInEvents = alreadyEarned ? currentEvents : [...currentEvents, eventId];
+    const points = pointsForEvents(checkedInEvents);
+    const displayName = cleanText(userData.displayName || caller.token.name || caller.token.email || "FQC Member", 80);
+    const role = profileRole(userData.role || caller.token.role);
+    const entries = buildLeaderboardEntries(leaderboardSnapshot.data()?.entries, {
+      uid: caller.uid,
+      displayName,
+      points,
+      role
+    });
+
+    if (!checkInSnapshot.exists) {
+      transaction.set(checkInRef, {
+        uid: caller.uid,
+        displayName,
+        email: cleanText(caller.token.email, 180),
+        pointsAwarded: alreadyEarned ? 0 : 1,
+        checkedInAt: FieldValue.serverTimestamp()
+      });
+    }
+
+    if (!alreadyEarned || Number(userData.points) !== points) {
+      transaction.set(userRef, {
+        checkedInEvents,
+        points,
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+
+    if (JSON.stringify(entries) !== JSON.stringify(leaderboardSnapshot.data()?.entries || [])) {
+      transaction.set(leaderboardRef, {
+        entries,
+        participantCount: entries.length,
+        scoring: "one-point-per-event",
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+
+    return {
+      eventId,
+      awarded: !alreadyEarned,
+      points,
+      leaderboard: { entries, participantCount: entries.length }
+    };
+  });
 });
 
 export const beginPasskeyRegistration = onCall(callableOptions, async (request) => {

@@ -3,6 +3,7 @@ import "leaflet/dist/leaflet.css";
 import {
   changeMemberRole,
   createEmailAccount,
+  loadLeaderboard,
   loadMembers,
   logOut,
   observeCheckIn,
@@ -22,9 +23,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.1.0";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.1.0", "Added a one-read live leaderboard with one point per unique event check-in"],
   ["2.0.4", "Simplified account creation to email, password, and UFID only"],
   ["2.0.3", "Restored the circular FQC seal as the installed app icon and favicon"],
   ["2.0.2", "Restored durable FQC branding and same-origin web.app Google sign-in"],
@@ -97,6 +99,12 @@ const state = {
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
   checkedInEvents: [],
+  memberPoints: 0,
+  leaderboardEntries: [],
+  leaderboardParticipantCount: 0,
+  leaderboardLoaded: false,
+  leaderboardLoading: false,
+  leaderboardError: "",
   rsvps: readJson("fqc:rsvps", []),
   notes: readJson("fqc:notes", [])
 };
@@ -470,13 +478,6 @@ const tasks = [
   ["Socials", "Choose October mixer format", "Vote"]
 ];
 
-const leaders = [
-  ["Maya", "Circuit Builder", 1280],
-  ["Alex", "Event Captain", 1145],
-  ["Jordan", "Quantum Explorer", 980],
-  ["Sam", "Lab Helper", 840]
-];
-
 const titles = {
   home: "Events",
   checkin: "Check In",
@@ -608,6 +609,7 @@ function setView(view) {
   state.view = allowedViews.has(view) ? view : "home";
   saveState();
   render();
+  if (state.view === "profile" && state.loggedIn) queueMicrotask(() => refreshLeaderboard());
 }
 
 function render() {
@@ -1291,7 +1293,27 @@ function applyMemberProfile(profile) {
   state.ufidStatus = ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member";
   state.passkeyCount = Number(profile.passkeyCount) || 0;
   state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
+  state.memberPoints = state.checkedInEvents.length;
   localStorage.setItem("fqc:name", state.memberName);
+}
+
+async function refreshLeaderboard(force = false) {
+  if (!state.loggedIn || state.ufidStatus === "required" || state.leaderboardLoading) return;
+  if (state.leaderboardLoaded && !force) return;
+  state.leaderboardLoading = true;
+  state.leaderboardError = "";
+  if (state.view === "profile") render();
+  try {
+    const leaderboard = await loadLeaderboard();
+    state.leaderboardEntries = leaderboard.entries;
+    state.leaderboardParticipantCount = leaderboard.participantCount;
+    state.leaderboardLoaded = true;
+  } catch (error) {
+    state.leaderboardError = readableAuthError(error);
+  } finally {
+    state.leaderboardLoading = false;
+    if (state.view === "profile") render();
+  }
 }
 
 async function runAuthAction(action, successMessage = "") {
@@ -1559,6 +1581,52 @@ function renderSettings() {
   `;
 }
 
+function renderLeaderboard() {
+  if (state.leaderboardLoading && !state.leaderboardLoaded) {
+    return `
+      <section class="section leaderboard-section" aria-labelledby="leaderboard-title">
+        <div class="section-header"><div><p class="section-kicker">Club standings</p><h2 id="leaderboard-title">Leaderboard</h2><p>Loading verified event standings…</p></div><span class="auth-spinner" aria-hidden="true"></span></div>
+      </section>
+    `;
+  }
+
+  if (state.leaderboardError && !state.leaderboardEntries.length) {
+    return `
+      <section class="section leaderboard-section" aria-labelledby="leaderboard-title">
+        <div class="section-header"><div><p class="section-kicker">Club standings</p><h2 id="leaderboard-title">Leaderboard</h2><p>${escapeHtml(state.leaderboardError)}</p></div><button class="secondary-button" id="refresh-leaderboard" type="button">Try Again</button></div>
+      </section>
+    `;
+  }
+
+  const currentUid = state.authUser?.uid || "";
+  const entries = state.leaderboardEntries;
+  return `
+    <section class="section leaderboard-section" aria-labelledby="leaderboard-title">
+      <div class="section-header">
+        <div><p class="section-kicker">Club standings</p><h2 id="leaderboard-title">Leaderboard</h2><p>${state.leaderboardParticipantCount || entries.length} participant${(state.leaderboardParticipantCount || entries.length) === 1 ? "" : "s"} · verified event check-ins</p></div>
+        <button class="secondary-button leaderboard-refresh" id="refresh-leaderboard" type="button" ${state.leaderboardLoading ? "disabled" : ""}>${state.leaderboardLoading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      ${entries.length ? `<div class="leaderboard">${entries.map((entry, index) => {
+        const rank = index + 1;
+        const isCurrentUser = entry.uid === currentUid;
+        const previous = index > 0 ? entries[index - 1] : null;
+        const pointsToOvertake = isCurrentUser && previous ? Math.max(1, previous.points - entry.points + 1) : 0;
+        return `
+          <article class="leader-card rank-${Math.min(rank, 4)}${isCurrentUser ? " current-user" : ""}">
+            <span class="leader-rank" aria-label="Rank ${rank}">${rank === 1 ? "♛" : rank}</span>
+            <div class="leader-identity">
+              <h3>${isCurrentUser ? "You" : escapeHtml(entry.displayName)}</h3>
+              <p>${entry.role === "officer" ? "Officer" : "Member"} · ${entry.points} event${entry.points === 1 ? "" : "s"} attended</p>
+              ${pointsToOvertake ? `<small>${pointsToOvertake} ${pointsToOvertake === 1 ? "point" : "points"} to move ahead</small>` : ""}
+            </div>
+            <strong class="leader-points">${entry.points} <span>PT${entry.points === 1 ? "" : "S"}</span></strong>
+          </article>
+        `;
+      }).join("")}</div>` : '<p class="empty-state">No ranked members yet. The first event check-in starts the standings.</p>'}
+    </section>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
@@ -1631,13 +1699,13 @@ function renderProfile() {
     return `<section class="view" data-screen="profile">${renderUfidForm(true)}</section>`;
   }
 
-  const points = 730 + state.rsvps.length * 50;
+  const points = state.memberPoints;
   return `
     <section class="view" data-screen="profile">
       <section class="section">
         <div class="profile-summary">
           <div class="avatar">${profileInitial.textContent}</div>
-          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${state.memberRole === "officer" ? `${escapeHtml(roleLabel())} workspace` : `${points} points earned`}</p>${state.memberRole === "member" ? `<div class="progress" aria-label="Progress to next badge"><span style="width: ${Math.min(92, 48 + state.rsvps.length * 12)}%"></span></div>` : ""}</div>
+          <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${points} ${points === 1 ? "point" : "points"} earned · ${escapeHtml(roleLabel())}</p><div class="progress" aria-label="Event attendance progress"><span style="width: ${Math.min(100, points * 20)}%"></span></div></div>
         </div>
       </section>
       <section class="section">
@@ -1651,16 +1719,12 @@ function renderProfile() {
         <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
       </section>
       ${renderUfidForm(false)}
-      ${state.memberRole === "officer" ? renderOfficerWorkspace() : `
-        <section class="section">
-          <h2>Member Activity</h2>
-          <p>${state.checkedInEvents.length} event ${state.checkedInEvents.length === 1 ? "check-in" : "check-ins"} and ${state.rsvps.length} active ${state.rsvps.length === 1 ? "RSVP" : "RSVPs"}.</p>
-        </section>
-        <section class="section">
-          <h2>Leaderboard</h2>
-          <div class="leaderboard">${leaders.map(([name, badge, score], index) => `<article class="leader-card"><span class="leader-rank">${index + 1}</span><div><h3>${name}</h3><p>${badge}</p></div><strong>${score}</strong></article>`).join("")}</div>
-        </section>
-      `}
+      <section class="section">
+        <h2>Member Activity</h2>
+        <p>${state.checkedInEvents.length} event ${state.checkedInEvents.length === 1 ? "check-in" : "check-ins"}, ${points} ${points === 1 ? "point" : "points"}, and ${state.rsvps.length} active ${state.rsvps.length === 1 ? "RSVP" : "RSVPs"}. Each unique event check-in earns exactly one point.</p>
+      </section>
+      ${renderLeaderboard()}
+      ${state.memberRole === "officer" ? renderOfficerWorkspace() : ""}
       ${renderRoleWorkspace()}
     </section>
   `;
@@ -1680,6 +1744,7 @@ function bindViewEvents() {
   document.querySelector("#go-to-login")?.addEventListener("click", () => setView("profile"));
   document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
+  document.querySelector("#refresh-leaderboard")?.addEventListener("click", () => refreshLeaderboard(true));
 
   document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
     state.authMode = "login";
@@ -1746,7 +1811,9 @@ function bindViewEvents() {
       if (input) input.value = "";
       applyMemberProfile(profile);
       state.members = [];
+      state.leaderboardLoaded = false;
       render();
+      queueMicrotask(() => refreshLeaderboard());
       if (state.memberRole === "officer") queueMicrotask(refreshMemberDirectory);
     }
   });
@@ -1763,6 +1830,14 @@ function bindViewEvents() {
     const result = await runAuthAction(recordCheckIn);
     if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
       state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
+    }
+    if (result?.eventId) {
+      state.memberPoints = Number(result.points) || state.checkedInEvents.length;
+      if (result.leaderboard) {
+        state.leaderboardEntries = result.leaderboard.entries || [];
+        state.leaderboardParticipantCount = result.leaderboard.participantCount || state.leaderboardEntries.length;
+        state.leaderboardLoaded = true;
+      }
       render();
     }
   });
@@ -1797,7 +1872,9 @@ function bindViewEvents() {
     const profile = await runAuthAction(() => updateProfileName(name), "Profile saved.");
     if (profile) {
       applyMemberProfile(profile);
+      state.leaderboardLoaded = false;
       render();
+      queueMicrotask(() => refreshLeaderboard());
     }
   });
 
@@ -1859,10 +1936,17 @@ observeSession((session) => {
     state.ufidStatus = "";
     state.passkeyCount = 0;
     state.checkedInEvents = [];
+    state.memberPoints = 0;
+    state.leaderboardEntries = [];
+    state.leaderboardParticipantCount = 0;
+    state.leaderboardLoaded = false;
+    state.leaderboardLoading = false;
+    state.leaderboardError = "";
     state.members = [];
     localStorage.removeItem("fqc:name");
   }
   render();
+  if (state.view === "profile" && state.loggedIn && state.ufidStatus !== "required") queueMicrotask(() => refreshLeaderboard());
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
 }, (error) => {
   state.authReady = true;

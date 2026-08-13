@@ -16,7 +16,7 @@ import {
   signOut,
   updateProfile
 } from "firebase/auth";
-import { doc, getFirestore, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 
@@ -38,6 +38,8 @@ let mockCheckInObserver = null;
 let mockProfile = null;
 let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true };
 let mockMembers = [];
+let mockLeaderboard = { entries: [], participantCount: 0 };
+let mockLeaderboardReads = 0;
 let mockUfidDirectory = new Map();
 let redirectResultChecked = false;
 
@@ -53,8 +55,13 @@ function callable(name) {
   return httpsCallable(functions, name);
 }
 
+function normalizedEventIds(eventIds = []) {
+  return [...new Set(Array.isArray(eventIds) ? eventIds.map(String).filter(Boolean) : [])].slice(0, 250);
+}
+
 function normalizedProfile(profile = {}) {
   const leadership = ["president", "vice_president", "treasurer"].includes(profile.leadership) ? profile.leadership : "";
+  const checkedInEvents = normalizedEventIds(profile.checkedInEvents);
   return {
     uid: String(profile.uid || ""),
     displayName: String(profile.displayName || "FQC Member"),
@@ -65,7 +72,8 @@ function normalizedProfile(profile = {}) {
     officerTitle: String(profile.officerTitle || ""),
     canManageOfficers: profile.canManageOfficers === true || leadership === "president" || leadership === "treasurer",
     ufidStatus: ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member",
-    checkedInEvents: Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [],
+    checkedInEvents,
+    points: checkedInEvents.length,
     passkeyCount: Number(profile.passkeyCount) || 0,
     officerNomination: profile.officerNomination === "pending" ? "pending" : ""
   };
@@ -90,10 +98,29 @@ function mockSignIn(profile = {}) {
     canManageOfficers: profile.canManageOfficers === true,
     ufidStatus: profile.ufidStatus || (profile.role === "officer" ? "matched" : "member"),
     checkedInEvents: profile.checkedInEvents || [],
+    points: profile.points,
     passkeyCount: profile.passkeyCount || 0
   });
   if (!mockMembers.some((member) => member.uid === mockProfile.uid)) mockMembers.push(mockProfile);
+  const entries = mockLeaderboard.entries.filter((entry) => entry.uid !== mockProfile.uid);
+  entries.push({ uid: mockProfile.uid, displayName: mockProfile.displayName, points: mockProfile.points, role: mockProfile.role });
+  mockLeaderboard = normalizedLeaderboard({ entries });
   emitMockSession();
+}
+
+function normalizedLeaderboard(snapshot = {}) {
+  const seen = new Set();
+  const entries = (Array.isArray(snapshot.entries) ? snapshot.entries : [])
+    .map((entry) => ({
+      uid: String(entry?.uid || ""),
+      displayName: String(entry?.displayName || "FQC Member").slice(0, 80),
+      points: Math.max(0, Math.trunc(Number(entry?.points) || 0)),
+      role: entry?.role === "officer" ? "officer" : "member"
+    }))
+    .filter((entry) => entry.uid && !seen.has(entry.uid) && seen.add(entry.uid))
+    .sort((a, b) => b.points - a.points || a.displayName.localeCompare(b.displayName) || a.uid.localeCompare(b.uid))
+    .slice(0, 100);
+  return { entries, participantCount: Math.max(entries.length, Number(snapshot.participantCount) || 0) };
 }
 
 if (testMode) {
@@ -102,6 +129,9 @@ if (testMode) {
     signOut: () => { mockProfile = null; emitMockSession(); },
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
+    setLeaderboard: (snapshot) => { mockLeaderboard = normalizedLeaderboard(snapshot); },
+    getLeaderboardReads: () => mockLeaderboardReads,
+    resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
     setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); }
   };
 }
@@ -245,6 +275,9 @@ export async function updateProfileName(displayName) {
   if (testMode) {
     mockProfile = { ...mockProfile, displayName };
     mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
+    mockLeaderboard = normalizedLeaderboard({
+      entries: mockLeaderboard.entries.map((entry) => entry.uid === mockProfile.uid ? { ...entry, displayName } : entry)
+    });
     emitMockSession();
     return normalizedProfile(mockProfile);
   }
@@ -270,6 +303,9 @@ export async function verifyUfid(ufid) {
       ufidStatus: match ? "matched" : "member"
     });
     mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
+    mockLeaderboard = normalizedLeaderboard({
+      entries: mockLeaderboard.entries.map((entry) => entry.uid === mockProfile.uid ? { ...entry, role: mockProfile.role } : entry)
+    });
     emitMockSession();
     return mockProfile;
   }
@@ -281,12 +317,29 @@ export async function verifyUfid(ufid) {
 export async function recordCheckIn() {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
-    mockProfile = { ...mockProfile, checkedInEvents: [...new Set([...(mockProfile?.checkedInEvents || []), mockCheckIn.eventId])] };
+    const checkedInEvents = [...new Set([...(mockProfile?.checkedInEvents || []), mockCheckIn.eventId])];
+    const awarded = checkedInEvents.length > (mockProfile?.checkedInEvents || []).length;
+    mockProfile = normalizedProfile({ ...mockProfile, checkedInEvents, points: checkedInEvents.length });
+    mockLeaderboard = normalizedLeaderboard({
+      entries: [
+        ...mockLeaderboard.entries.filter((entry) => entry.uid !== mockProfile.uid),
+        { uid: mockProfile.uid, displayName: mockProfile.displayName, points: mockProfile.points, role: mockProfile.role }
+      ]
+    });
     emitMockSession();
-    return { eventId: mockCheckIn.eventId };
+    return { eventId: mockCheckIn.eventId, awarded, points: mockProfile.points, leaderboard: mockLeaderboard };
   }
   const result = await callable("recordEventCheckIn")();
   return result.data;
+}
+
+export async function loadLeaderboard() {
+  if (testMode) {
+    mockLeaderboardReads += 1;
+    return normalizedLeaderboard(mockLeaderboard);
+  }
+  const snapshot = await getDoc(doc(db, "system", "leaderboardData"));
+  return normalizedLeaderboard(snapshot.data() || {});
 }
 
 export async function updateActiveCheckIn(eventId, open) {
