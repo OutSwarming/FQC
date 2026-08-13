@@ -33,6 +33,14 @@ const logisticsEventsCsv = `"Date","Time","Type","Location","Backup Room","Atten
 "10/1/2026","5:30:00 PM","GBM 4 - Industry Speaker"`;
 const logisticsLocationsCsv = `${locationsCsv}
 "University of Florida","Gainesville, FL 32611","29.643632","-82.35493","0","11","https://campusmap.ufl.edu/"`;
+const budgetCsv = `"Event ID","Event","Date","Item","Quantity","Unit","Unit Cost","Planned Cost","Actual Cost","Funding Source","Status","Notes","Budget Summary","Amount"
+"fqc-2026-03-03-ionq","IonQ Quantum Networking Speaker Session","3/3/2026","Speaker catering","1","order","80","80","","Operational Funding","Estimate","Planning estimate","Base Funding","1050"
+"","","","","","","","","","","","","Operational Funding","2490"
+"","","","","","","","","","","","","Total Approved","3540"
+"","","","","","","","","","","","","Planned Spend","80"
+"","","","","","","","","","","","","Actual Spend","0"
+"","","","","","","","","","","","","Available After Actual","3540"
+"","","","","","","","","","","","","Uncommitted After Plan","3460"`;
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -47,7 +55,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       status: 200,
       contentType: "text/csv; charset=utf-8",
-      body: sheetName === "UF Locations" ? locationsCsv : eventsCsv
+      body: sheetName === "UF Locations" ? locationsCsv : sheetName === "Event Budget" ? budgetCsv : eventsCsv
     });
   });
   await page.goto("/");
@@ -86,7 +94,7 @@ test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", a
     await route.fulfill({
       status: 200,
       contentType: "text/csv; charset=utf-8",
-      body: sheetName === "UF Locations" ? logisticsLocationsCsv : logisticsEventsCsv
+      body: sheetName === "UF Locations" ? logisticsLocationsCsv : sheetName === "Event Budget" ? budgetCsv : logisticsEventsCsv
     });
   });
   await page.evaluate(() => {
@@ -344,7 +352,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.1.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.2.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -357,7 +365,11 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
   await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Officer metrics").getByText("$1,840")).toBeVisible();
+  await expect(page.getByLabel("Officer metrics").getByRole("article").filter({ hasText: "Total approved" }).getByText("$3,540.00")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Budget by Event" })).toBeVisible();
+  await expect(page.getByText("$1,050.00 base + $2,490.00 operational")).toBeVisible();
+  await expect(page.getByText("Speaker catering")).toBeVisible();
+  await expect(page.getByText(/updates every 5 minutes/)).toBeVisible();
 
   await page.getByLabel("Area").selectOption("Permits");
   await page.getByLabel("Note").fill("Confirm room permit owner");
