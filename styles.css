@@ -984,6 +984,62 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
 .email-auth-form { display: grid; gap: 12px; }
 .email-auth-form .form-row { margin: 0; }
 .email-auth-submit { width: 100%; margin-top: 2px; }
+body.signup-modal-open { overflow: hidden; }
+.signup-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  background: rgba(7, 12, 25, 0.58);
+  backdrop-filter: blur(7px);
+  animation: signup-backdrop-in 180ms ease both;
+}
+.signup-modal {
+  position: relative;
+  width: min(100%, 620px);
+  max-height: min(860px, calc(100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: 0 28px 90px rgba(7, 12, 25, 0.36);
+  animation: signup-modal-in 240ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+.signup-modal-close {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  margin: 0 0 -42px auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--ink);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  font-size: 1.75rem;
+  line-height: 1;
+}
+.signup-modal-close:disabled { opacity: 0.45; cursor: wait; }
+.signup-modal-heading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 14px;
+  padding-right: 48px;
+  margin-bottom: 22px;
+}
+.signup-modal-heading h2 { margin: 2px 0 5px; font-size: clamp(1.55rem, 5vw, 2rem); }
+.signup-modal-heading p:last-child { margin: 0; color: var(--muted); }
+@keyframes signup-backdrop-in { from { opacity: 0; } }
+@keyframes signup-modal-in { from { opacity: 0; transform: translateY(18px) scale(0.985); } }
 .signup-progress {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1083,6 +1139,13 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
 }
 .auth-divider::before,
 .auth-divider::after { content: ""; height: 1px; background: var(--line); }
+
+@media (max-width: 520px) {
+  .signup-modal-backdrop { place-items: end center; padding: 8px 8px max(8px, env(safe-area-inset-bottom)); }
+  .signup-modal { width: 100%; max-height: calc(100dvh - max(16px, env(safe-area-inset-top))); padding: 18px; border-radius: 24px 24px 18px 18px; }
+  .signup-modal-heading { grid-template-columns: 1fr; gap: 8px; padding-right: 48px; }
+  .signup-modal-heading .checkin-icon { width: 48px; height: 48px; }
+}
 
 .settings-view { width: min(100%, 760px); margin-inline: auto; padding-bottom: 104px; }
 .settings-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
