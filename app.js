@@ -22,9 +22,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const APP_RELEASE_DATE = "August 12, 2026";
 const RELEASE_HISTORY = [
+  ["2.0.4", "Simplified account creation to email, password, and UFID only"],
   ["2.0.3", "Restored the circular FQC seal as the installed app icon and favicon"],
   ["2.0.2", "Restored durable FQC branding and same-origin web.app Google sign-in"],
   ["2.0.1", "Repaired Google sign-in with the registered Firebase OAuth callback"],
@@ -1570,7 +1571,7 @@ function renderProfile() {
             <div>
               <p class="section-kicker">One secure FQC account</p>
               <h2>${creating ? "Create your FQC account" : "Welcome back"}</h2>
-              <p>${creating ? "Create a normal account with your UFID, or continue with Google." : "Log in with your email and password, Google, Apple, or a passkey."}</p>
+              <p>${creating ? "Create your account with your email, password, and UFID." : "Log in with your email and password, Google, Apple, or a passkey."}</p>
             </div>
           </div>
           <div class="auth-mode-tabs" role="tablist" aria-label="Account access">
@@ -1604,18 +1605,20 @@ function renderProfile() {
             </button>
             ${creating ? "" : '<button class="text-button" id="forgot-password" type="button">Forgot password?</button>'}
           </form>
-          <div class="auth-divider"><span>or</span></div>
-          <div class="auth-provider-list">
-            <button class="auth-provider-button google" id="sign-in-google" type="button" ${state.authBusy ? "disabled" : ""}>
-              <span class="provider-mark" aria-hidden="true">G</span><span>Continue with Google</span>
-            </button>
-            <button class="auth-provider-button apple" id="sign-in-apple" type="button" ${state.authBusy ? "disabled" : ""}>
-              <span class="provider-mark apple-mark" aria-hidden="true"></span><span>Continue with Apple</span>
-            </button>
-            <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
-              <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
-            </button>
-          </div>
+          ${creating ? "" : `
+            <div class="auth-divider"><span>or</span></div>
+            <div class="auth-provider-list">
+              <button class="auth-provider-button google" id="sign-in-google" type="button" ${state.authBusy ? "disabled" : ""}>
+                <span class="provider-mark" aria-hidden="true">G</span><span>Continue with Google</span>
+              </button>
+              <button class="auth-provider-button apple" id="sign-in-apple" type="button" ${state.authBusy ? "disabled" : ""}>
+                <span class="provider-mark apple-mark" aria-hidden="true"></span><span>Continue with Apple</span>
+              </button>
+              <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
+                <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
+              </button>
+            </div>
+          `}
           ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
           ${renderAuthFeedback()}
           <p class="auth-privacy">Firebase Authentication protects passwords and sign-in sessions. FQC never stores your password or raw UFID.</p>
