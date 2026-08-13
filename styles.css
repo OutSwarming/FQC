@@ -320,12 +320,23 @@ p {
 
 .event-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 0.8fr;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: var(--surface-soft);
+}
+
+.event-tab-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: 0.65rem;
 }
 
 .event-tabs button {
@@ -380,6 +391,23 @@ p {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.past-event-card { opacity: 0.88; }
+
+.event-past-label {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 0.63rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transform: translateY(-50%);
 }
 
 .event-card-select {

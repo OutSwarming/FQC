@@ -31,6 +31,7 @@ The organization-owned native Google Sheet [2026 Event Logistics](https://docs.g
 Earlier FQC spreadsheets are retained only as archives and are not read by the app or Firebase backend.
 
 - Every populated logistics row with a valid date, time, and event type appears in the app. Blank or campus-wide locations remain visible as “Location to be announced” on the UF campus map.
+- Events remain in List and Calendar for 24 hours after their scheduled start, then move automatically into the newest-first `Past` archive.
 - Use `Reitz`, `Larsen`, or `Marston` followed by the room number; the app maps the abbreviation to the correct UF building automatically.
 - Event IDs are generated consistently from the meeting date and type so RSVPs stay attached to the right event.
 - Verified officers can create events and edit each event's logistics, notes, status, and itemized budget from the app. Secure Cloud Functions write those changes directly to this workbook; spreadsheet edits return to the app on refresh and on the five-minute sync cycle.
