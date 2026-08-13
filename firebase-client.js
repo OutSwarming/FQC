@@ -38,6 +38,7 @@ let mockCheckInObserver = null;
 let mockProfile = null;
 let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true, requireLocation: false };
 let mockMembers = [];
+let mockLeadershipSlots = [];
 let mockLeaderboard = { entries: [], participantCount: 0 };
 let mockLeaderboardReads = 0;
 let mockOfficerResources = [
@@ -158,6 +159,7 @@ if (testMode) {
     signOut: () => { mockProfile = null; emitMockSession(); },
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
+    setLeadershipSlots: (slots) => { mockLeadershipSlots = slots.map((slot) => ({ ...slot, row: Number(slot.row) })); },
     setLeaderboard: (snapshot) => { mockLeaderboard = normalizedLeaderboard(snapshot); },
     setOfficerResources: (resources) => { mockOfficerResources = resources; },
     setOfficerEventOperations: (operations) => { mockOfficerEventOperations = structuredClone(operations); },
@@ -399,9 +401,12 @@ export async function updateCheckInLocationRequirement(requireLocation) {
 }
 
 export async function loadMembers() {
-  if (testMode) return mockMembers.map(normalizedProfile);
+  if (testMode) return { members: mockMembers.map(normalizedProfile), leadershipSlots: mockLeadershipSlots.map((slot) => ({ ...slot })) };
   const result = await callable("listMembers")();
-  return (result.data.members || []).map(normalizedProfile);
+  return {
+    members: (result.data.members || []).map(normalizedProfile),
+    leadershipSlots: Array.isArray(result.data.leadershipSlots) ? result.data.leadershipSlots : []
+  };
 }
 
 export async function loadOfficerResources() {
@@ -481,6 +486,33 @@ export async function changeMemberRole(uid, role) {
     return mockMembers.find((member) => member.uid === uid);
   }
   const result = await callable("setMemberRole")({ uid, role });
+  return result.data;
+}
+
+export async function assignLeadershipRole(uid, row) {
+  if (testMode) {
+    if (!mockProfile?.canManageOfficers) throw new Error("Only the President or Treasurer can change officer roles.");
+    const slot = mockLeadershipSlots.find((entry) => entry.row === Number(row));
+    const member = mockMembers.find((entry) => entry.uid === uid);
+    if (!slot || !member) throw new Error("Choose a pending leadership role and a member account.");
+    if (member.ufidStatus === "required") throw new Error("That member must finish UFID setup before being linked to an officer role.");
+    const title = String(slot.title || "Officer");
+    const leadership = /^president$/i.test(title) ? "president"
+      : /^vice[ -]?president$/i.test(title) ? "vice_president"
+        : /^treasurer$/i.test(title) ? "treasurer" : "";
+    const profile = normalizedProfile({
+      ...member,
+      role: "officer",
+      leadership,
+      officerTitle: title,
+      canManageOfficers: leadership === "president" || leadership === "treasurer",
+      ufidStatus: "matched"
+    });
+    mockMembers = mockMembers.map((entry) => entry.uid === uid ? profile : entry);
+    mockLeadershipSlots = mockLeadershipSlots.filter((entry) => entry.row !== Number(row));
+    return { profile, slot };
+  }
+  const result = await callable("assignMemberLeadership")({ uid, row: Number(row) });
   return result.data;
 }
 

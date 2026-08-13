@@ -395,7 +395,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.5.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.5.1 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -649,6 +649,28 @@ test("the Treasurer can add and remove ordinary officers while leadership stays 
   await row.locator("select").selectOption("officer");
   await row.getByRole("button", { name: "Save role" }).click();
   await expect(row.locator("select")).toHaveValue("officer");
+});
+
+test("the Treasurer can securely link a pending Sheet leadership row to a UFID-verified account", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true, ufidStatus: "matched" },
+      { uid: "sidney-1", displayName: "Sidney Brann", email: "sidney@ufl.edu", role: "member", ufidStatus: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipSlots([
+      { row: 3, name: "Sidney Brann", title: "Vice President" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true, ufidStatus: "matched" });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const slot = page.locator('[data-leadership-row="3"]');
+  await expect(slot.getByText("Vice President", { exact: false })).toBeVisible();
+  await slot.locator("select").selectOption("sidney-1");
+  await slot.getByRole("button", { name: "Link role" }).click();
+  await expect(page.locator('[data-member-id="sidney-1"]')).toContainText("Vice President");
+  await expect(page.locator('[data-leadership-row="3"]')).toHaveCount(0);
 });
 
 test("a matching UFID assigns the spreadsheet officer title during account creation", async ({ page }) => {
