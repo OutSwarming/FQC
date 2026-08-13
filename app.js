@@ -29,9 +29,10 @@ import {
   verifyUfid
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.6.0";
+const APP_VERSION = "2.6.1";
 const APP_RELEASE_DATE = "August 13, 2026";
 const RELEASE_HISTORY = [
+  ["2.6.1", "Moved three-step signup into a dismissible modal and removed the duplicate post-account UFID screen"],
   ["2.6.0", "Added a welcoming three-step signup, unique usernames, username-or-UF-email login, and passkey-only account setup"],
   ["2.5.1", "Added secure pending-leadership account linking and verified every officer-title permission path"],
   ["2.5.0", "Added the Master Members attendance roster and secure two-mile event check-in verification with an officer online-event switch"],
@@ -108,6 +109,7 @@ const state = {
   authError: "",
   authMessage: "",
   authMode: "login",
+  signupOpen: false,
   signupStep: 1,
   signupEmail: "",
   signupUsername: "",
@@ -818,6 +820,7 @@ function render() {
   const eventsScreenActive = state.view === "home";
   document.documentElement.classList.toggle("events-screen-active", eventsScreenActive);
   document.body.classList.toggle("events-screen-active", eventsScreenActive);
+  document.body.classList.toggle("signup-modal-open", state.signupOpen);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
   title.textContent = titles[state.view] || "Events";
@@ -835,7 +838,7 @@ function render() {
     settings: renderSettings
   };
 
-  app.innerHTML = views[state.view]?.() || renderHome();
+  app.innerHTML = `${views[state.view]?.() || renderHome()}${state.signupOpen ? renderSignupModal() : ""}`;
   bindViewEvents();
   app.focus({ preventScroll: true });
   if (state.view === "home") requestAnimationFrame(initEventMap);
@@ -2233,10 +2236,27 @@ function renderSignupWizard() {
   `;
 }
 
+function renderSignupModal() {
+  return `
+    <div class="signup-modal-backdrop" id="signup-modal-backdrop">
+      <section class="signup-modal" role="dialog" aria-modal="true" aria-labelledby="signup-modal-title">
+        <button class="signup-modal-close" id="close-signup-modal" type="button" aria-label="Close account creation" ${state.authBusy ? "disabled" : ""}>×</button>
+        <div class="signup-modal-heading">
+          <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
+          <div><p class="section-kicker">Join Florida Quantum Computing</p><h2 id="signup-modal-title">Create your FQC account</h2><p>Three quick steps. Choose a passkey or private password—never both.</p></div>
+        </div>
+        ${renderSignupWizard()}
+        ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Creating your account and checking your UFID once…</p>' : ""}
+        ${renderAuthFeedback()}
+        <p class="auth-privacy">Your UFID is checked once during this flow. There is no second verification screen.</p>
+      </section>
+    </div>
+  `;
+}
+
 function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
-    const creating = state.authMode === "create";
     return `
       <section class="view" data-screen="profile">
         <section class="section profile-login">
@@ -2244,16 +2264,15 @@ function renderProfile() {
             <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
             <div>
               <p class="section-kicker">One secure FQC account</p>
-              <h2>${creating ? "Create your FQC account" : "Welcome back"}</h2>
-              <p>${creating ? "Three quick steps. Choose a passkey or private password—never both." : "Use your username or UF email with your private password, or use a passkey."}</p>
+              <h2>Welcome back</h2>
+              <p>Use your username or UF email with your private password, or use a passkey.</p>
             </div>
           </div>
           <div class="auth-mode-tabs" role="tablist" aria-label="Account access">
-            <button id="auth-mode-login" role="tab" aria-selected="${creating ? "false" : "true"}" type="button">Log In</button>
-            <button id="auth-mode-create" role="tab" aria-selected="${creating ? "true" : "false"}" type="button">Create Account</button>
+            <button id="auth-mode-login" role="tab" aria-selected="true" type="button">Log In</button>
+            <button id="auth-mode-create" role="tab" aria-selected="false" type="button">Create Account</button>
           </div>
-          ${creating ? renderSignupWizard() : `
-            <form class="email-auth-form" id="email-auth-form">
+          <form class="email-auth-form" id="email-auth-form">
               <div class="form-row">
                 <label for="auth-identifier">Username or UF email</label>
                 <input id="auth-identifier" name="identifier" type="text" inputmode="email" autocomplete="username" placeholder="quantumgator or you@ufl.edu" required />
@@ -2264,24 +2283,19 @@ function renderProfile() {
               </div>
               <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>Log In</span></button>
               <button class="text-button" id="forgot-password" type="button">Forgot password?</button>
-            </form>
-            <div class="auth-divider"><span>or</span></div>
-            <div class="auth-provider-list">
-              <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
-                <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
-              </button>
-            </div>
-          `}
-          ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
-          ${renderAuthFeedback()}
+          </form>
+          <div class="auth-divider"><span>or</span></div>
+          <div class="auth-provider-list">
+            <button class="auth-provider-button passkey" id="sign-in-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}>
+              <svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Sign in with a passkey" : "Passkeys unavailable on this device"}</span>
+            </button>
+          </div>
+          ${state.authBusy && !state.signupOpen ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
+          ${state.signupOpen ? "" : renderAuthFeedback()}
           <p class="auth-privacy">Firebase Authentication protects sign-in sessions. Passwords stay private, and UFIDs are one-time verification—not login credentials.</p>
         </section>
       </section>
     `;
-  }
-
-  if (state.ufidStatus === "required") {
-    return `<section class="view" data-screen="profile">${renderUfidForm(true)}</section>`;
   }
 
   const points = state.memberPoints;
@@ -2330,16 +2344,34 @@ function bindViewEvents() {
 
   document.querySelector("#auth-mode-login")?.addEventListener("click", () => {
     state.authMode = "login";
+    state.signupOpen = false;
     state.authError = "";
     state.authMessage = "";
     render();
   });
   document.querySelector("#auth-mode-create")?.addEventListener("click", () => {
-    state.authMode = "create";
+    state.authMode = "login";
+    state.signupOpen = true;
     state.signupStep = 1;
     state.authError = "";
     state.authMessage = "";
     render();
+  });
+  const closeSignup = () => {
+    if (state.authBusy) return;
+    state.signupOpen = false;
+    state.signupStep = 1;
+    state.authError = "";
+    state.authMessage = "";
+    render();
+  };
+  document.querySelector("#close-signup-modal")?.addEventListener("click", closeSignup);
+  const signupBackdrop = document.querySelector("#signup-modal-backdrop");
+  signupBackdrop?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeSignup();
+  });
+  signupBackdrop?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSignup();
   });
   document.querySelector("#email-auth-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2421,10 +2453,12 @@ function bindViewEvents() {
     );
     if (profile) {
       applyMemberProfile(profile);
+      state.signupOpen = false;
       state.signupStep = 1;
       state.signupEmail = "";
       state.signupUsername = "";
       state.signupUfid = "";
+      render();
     }
   });
   document.querySelector("#forgot-password")?.addEventListener("click", async () => {

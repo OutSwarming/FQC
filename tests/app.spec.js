@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
 const createThreeStepAccount = async (page, { email = "new.gator@ufl.edu", username = "newgator", ufid = "00000000", method = "passkey" } = {}) => {
   await page.getByRole("tab", { name: "Create Account" }).click();
-  await page.getByLabel("UF email").fill(email);
+  await page.getByLabel("UF email", { exact: true }).fill(email);
   await page.getByRole("button", { name: "Next: choose a username" }).click();
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByRole("button", { name: "Check username" }).click();
@@ -405,7 +405,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.6.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.6.1 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -590,9 +590,15 @@ test("account creation is an inviting three-step UF email, username, and securit
   await expect(page.getByText(/officer code/i)).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Create Account" }).click();
-  await expect(page.getByRole("tab", { name: "Create Account" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toBeVisible();
+  await page.getByRole("button", { name: "Close account creation" }).click();
+  await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.locator("#signup-modal-backdrop").click({ position: { x: 4, y: 4 } });
+  await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Create Account" }).click();
   await expect(page.getByText("Step 1 of 3")).toBeVisible();
-  await page.getByLabel("UF email").fill("new.gator@ufl.edu");
+  await page.getByLabel("UF email", { exact: true }).fill("new.gator@ufl.edu");
   await page.getByRole("button", { name: "Next: choose a username" }).click();
   await expect(page.getByText("Step 2 of 3")).toBeVisible();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "taken@ufl.edu" }));
@@ -607,6 +613,8 @@ test("account creation is an inviting three-step UF email, username, and securit
   await page.getByRole("radio", { name: /Private password/ }).check();
   await page.locator("#signup-password").fill("quantum-safe-password");
   await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Enter your UFID" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "newgator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
 });
