@@ -344,7 +344,7 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.0.3 · Current")).toBeVisible();
+  await expect(page.getByText("v2.0.4 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -399,12 +399,17 @@ test("login and account creation are separate and creation includes UFID", async
   await expect(page.getByLabel("Password")).toBeVisible();
   await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Apple" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /passkey/i })).toBeVisible();
   await expect(page.getByText(/officer code/i)).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Create Account" }).click();
   await expect(page.getByRole("tab", { name: "Create Account" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("Name")).toBeVisible();
   await expect(page.getByLabel("UFID", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue with Apple" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /passkey/i })).toHaveCount(0);
   await page.getByLabel("Name").fill("New Gator");
   await page.getByLabel("Email").fill("new.gator@ufl.edu");
   await page.getByLabel("Password").fill("quantum-safe-password");
