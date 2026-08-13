@@ -4,6 +4,7 @@ import {
   buildLeaderboardEntries,
   canManageOfficerRoles,
   leadershipForRole,
+  normalizedEventStatus,
   officerResourceCatalog,
   officerResourceRoleKey,
   parseCsv,
@@ -72,4 +73,10 @@ test("leaderboard points are one per unique event and server-ranked", () => {
     { uid: "a", displayName: "Alex Q", points: 4, role: "member" },
     { uid: "b", displayName: "Bailey", points: 3, role: "officer" }
   ]);
+});
+
+test("event status is constrained to the spreadsheet dropdown", () => {
+  assert.equal(normalizedEventStatus("Confirmed", "2026-09-03"), "Confirmed");
+  assert.equal(normalizedEventStatus("made up", "2099-01-01"), "Planned");
+  assert.equal(normalizedEventStatus("", "2020-01-01"), "Completed");
 });

@@ -5,6 +5,7 @@ import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
+import { GoogleAuth } from "google-auth-library";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -22,9 +23,14 @@ const challengeLifetimeMs = 5 * 60 * 1000;
 const maxLeaderboardEntries = 100;
 const officerRosterSpreadsheetId = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const officerRosterSheetName = "Current Leadership";
+const eventSheetName = "Events";
+const treasurySheetName = "Treasurer Breakdown";
+const locationSheetName = "UF Locations";
 const officerRosterCacheMs = 5 * 60 * 1000;
 const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
 let officerRosterCache = { expiresAt: 0, entries: [] };
+const sheetsAuth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
+const eventStatuses = Object.freeze(["Planning", "Planned", "Room pending", "Confirmed", "In progress", "Completed", "Cancelled"]);
 const driveResourceUrl = (fileId) => `https://drive.google.com/open?id=${fileId}`;
 export const officerResourceCatalog = Object.freeze([
   { id: "general-onboarding", title: "General Onboarding", kind: "Google Doc", category: "Getting Started", roles: ["general"], featured: ["all"], summary: "Start here for the club-wide officer onboarding process.", url: driveResourceUrl("1QTB_FgUUzLY6x3gb9Qy4VXjBkdCuMak9Qd8OhEhA-DM") },
@@ -205,6 +211,188 @@ export function parseCsv(text) {
     rows.push(row);
   }
   return rows;
+}
+
+function normalizedSheetDate(value) {
+  const text = cleanText(value, 24);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return "";
+  return `${match[3]}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
+}
+
+function normalizedSheetTime(value) {
+  return cleanText(value, 24).replace(/^(\d{1,2}:\d{2}):\d{2}\s/i, "$1 ");
+}
+
+function sheetNumber(value) {
+  const number = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(number) ? number : 0;
+}
+
+export function normalizedEventStatus(value, date = "") {
+  const status = cleanText(value, 40);
+  if (eventStatuses.includes(status)) return status;
+  return date && date < new Date().toISOString().slice(0, 10) ? "Completed" : "Planned";
+}
+
+async function sheetsAccessToken() {
+  const client = await sheetsAuth.getClient();
+  const result = await client.getAccessToken();
+  const token = typeof result === "string" ? result : result?.token;
+  if (!token) throw new HttpsError("unavailable", "Google Sheets authorization is unavailable.");
+  return token;
+}
+
+async function sheetsRequest(path, { method = "GET", body } = {}) {
+  const token = await sheetsAccessToken();
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${officerRosterSpreadsheetId}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+      ...(body ? { "content-type": "application/json" } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  });
+  if (!response.ok) {
+    const detail = cleanText(await response.text(), 500);
+    console.error("Google Sheets request failed", response.status, detail);
+    throw new HttpsError("unavailable", "The FQC event workbook could not be updated. Try again shortly.");
+  }
+  return response.status === 204 ? {} : response.json();
+}
+
+function valuesPath(range, options = {}) {
+  const query = new URLSearchParams(options);
+  return `/values/${encodeURIComponent(range)}${query.size ? `?${query}` : ""}`;
+}
+
+async function getSheetValues(range, valueRenderOption = "FORMATTED_VALUE") {
+  const result = await sheetsRequest(valuesPath(range, { majorDimension: "ROWS", valueRenderOption }));
+  return Array.isArray(result.values) ? result.values : [];
+}
+
+async function updateSheetValues(data) {
+  return sheetsRequest("/values:batchUpdate", {
+    method: "POST",
+    body: { valueInputOption: "USER_ENTERED", data }
+  });
+}
+
+async function ensureEventOperationsSchema() {
+  const [headers = []] = await getSheetValues(`'${eventSheetName}'!A1:W1`);
+  if (headers[21] === "Event Status" && headers[22] === "Officer RSVPs") return;
+  await sheetsRequest(":batchUpdate", {
+    method: "POST",
+    body: {
+      requests: [
+        {
+          copyPaste: {
+            source: { sheetId: 0, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 20, endColumnIndex: 21 },
+            destination: { sheetId: 0, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 21, endColumnIndex: 23 },
+            pasteType: "PASTE_FORMAT",
+            pasteOrientation: "NORMAL"
+          }
+        },
+        {
+          setDataValidation: {
+            range: { sheetId: 0, startRowIndex: 1, endRowIndex: 1001, startColumnIndex: 21, endColumnIndex: 22 },
+            rule: {
+              condition: { type: "ONE_OF_LIST", values: eventStatuses.map((userEnteredValue) => ({ userEnteredValue })) },
+              strict: true,
+              showCustomUi: true
+            }
+          }
+        },
+        {
+          updateDimensionProperties: {
+            range: { sheetId: 0, dimension: "COLUMNS", startIndex: 21, endIndex: 23 },
+            properties: { pixelSize: 150 },
+            fields: "pixelSize"
+          }
+        }
+      ]
+    }
+  });
+  await updateSheetValues([{ range: `'${eventSheetName}'!V1:W1`, majorDimension: "ROWS", values: [["Event Status", "Officer RSVPs"]] }]);
+}
+
+async function loadEventOperationsWorkbook() {
+  await ensureEventOperationsSchema();
+  const query = new URLSearchParams({ majorDimension: "ROWS", valueRenderOption: "FORMATTED_VALUE" });
+  [`'${eventSheetName}'!A1:W1000`, `'${treasurySheetName}'!A1:O1000`, `'${locationSheetName}'!A1:G250`]
+    .forEach((range) => query.append("ranges", range));
+  const response = await sheetsRequest(`/values:batchGet?${query}`);
+  const [eventRange, treasuryRange, locationRange] = response.valueRanges || [];
+  const [eventHeaders = [], ...eventRows] = eventRange?.values || [];
+  const [treasuryHeaders = [], ...treasuryRows] = treasuryRange?.values || [];
+  const [locationHeaders = [], ...locationRows] = locationRange?.values || [];
+  const eventIndex = Object.fromEntries(eventHeaders.map((header, index) => [cleanText(header, 80), index]));
+  const treasuryIndex = Object.fromEntries(treasuryHeaders.map((header, index) => [cleanText(header, 80), index]));
+  const locationIndex = Object.fromEntries(locationHeaders.map((header, index) => [cleanText(header, 80), index]));
+  const eventRowById = new Map();
+  const blankStatuses = [];
+  const events = eventRows.map((row, index) => {
+    const date = normalizedSheetDate(row[eventIndex.Date]);
+    const id = cleanText(row[eventIndex["Event ID"]], 100);
+    if (!id || !date) return null;
+    const status = normalizedEventStatus(row[eventIndex["Event Status"]], date);
+    if (!row[eventIndex["Event Status"]]) blankStatuses.push({ row: index + 2, status });
+    eventRowById.set(id, index + 2);
+    return {
+      id,
+      row: index + 2,
+      date,
+      time: normalizedSheetTime(row[eventIndex.Time]),
+      title: cleanText(row[eventIndex.Type], 120),
+      location: cleanText(row[eventIndex.Location], 160),
+      backupRoom: cleanText(row[eventIndex["Backup Room"]], 160),
+      attendance: cleanText(row[eventIndex.Attendance], 24),
+      permitStatus: cleanText(row[eventIndex["Permit (y/n)"]], 120),
+      permitNumber: cleanText(row[eventIndex["Permit Number"]], 80),
+      roomStatus: cleanText(row[eventIndex["Room Request"]], 120),
+      backupRoomStatus: cleanText(row[eventIndex["Backup Room Request"]], 120),
+      notes: cleanText(row[eventIndex.Notes], 1200),
+      plannedBudget: sheetNumber(row[eventIndex["Event Budget"]]),
+      actualSpend: sheetNumber(row[eventIndex["Actual Spend"]]),
+      remainingBudget: sheetNumber(row[eventIndex["Remaining Budget"]]),
+      fundingSource: cleanText(row[eventIndex["Funding Source"]], 160),
+      budgetStatus: cleanText(row[eventIndex["Budget Status"]], 80),
+      eventStatus: status,
+      officerRsvps: cleanText(row[eventIndex["Officer RSVPs"]], 1000).split(",").map((name) => name.trim()).filter(Boolean)
+    };
+  }).filter(Boolean);
+
+  if (blankStatuses.length) {
+    await updateSheetValues(blankStatuses.map(({ row, status }) => ({ range: `'${eventSheetName}'!V${row}`, values: [[status]] })));
+  }
+
+  const budgetItems = treasuryRows.map((row, index) => {
+    const eventId = cleanText(row[treasuryIndex["Event ID"]], 100);
+    const item = cleanText(row[treasuryIndex.Item], 160);
+    if (!eventId || !item) return null;
+    return {
+      row: index + 2,
+      eventId,
+      event: cleanText(row[treasuryIndex.Event], 120),
+      date: normalizedSheetDate(row[treasuryIndex.Date]),
+      item,
+      quantity: sheetNumber(row[treasuryIndex.Quantity]),
+      unit: cleanText(row[treasuryIndex.Unit], 40),
+      unitCost: sheetNumber(row[treasuryIndex["Unit Cost"]]),
+      plannedCost: sheetNumber(row[treasuryIndex["Planned Cost"]]),
+      actualCost: sheetNumber(row[treasuryIndex["Actual Cost"]]),
+      fundingSource: cleanText(row[treasuryIndex["Funding Source"]], 120),
+      status: cleanText(row[treasuryIndex.Status], 80),
+      notes: cleanText(row[treasuryIndex.Notes], 800)
+    };
+  }).filter(Boolean);
+  const summaries = Object.fromEntries(treasuryRows
+    .filter((row) => row[treasuryIndex["Budget Summary"]])
+    .map((row) => [cleanText(row[treasuryIndex["Budget Summary"]], 80), sheetNumber(row[treasuryIndex.Amount])]));
+  const locations = locationRows.map((row) => cleanText(row[locationIndex.Location], 160)).filter(Boolean);
+  return { events, budgetItems, summaries, locations, eventRowById, treasuryRows };
 }
 
 function rosterUrl() {
@@ -414,6 +602,220 @@ export const listMembers = onCall(callableOptions, async (request) => {
 export const getOfficerResources = onCall(callableOptions, (request) => {
   requireOfficer(request);
   return { resources: officerResourceCatalog };
+});
+
+function eventFormData(value = {}) {
+  const date = normalizedSheetDate(value.date);
+  const title = cleanText(value.title, 120);
+  const time = normalizedSheetTime(value.time);
+  const location = cleanText(value.location, 160);
+  if (!date || !title || !time || !location) {
+    throw new HttpsError("invalid-argument", "Date, time, event name, and location are required.");
+  }
+  return {
+    date,
+    title,
+    time,
+    location,
+    backupRoom: cleanText(value.backupRoom, 160),
+    attendance: cleanText(value.attendance, 24),
+    roomStatus: cleanText(value.roomStatus, 120),
+    backupRoomStatus: cleanText(value.backupRoomStatus, 120),
+    notes: cleanText(value.notes, 1200),
+    eventStatus: normalizedEventStatus(value.eventStatus, date)
+  };
+}
+
+function eventRowValues(event, row) {
+  return [
+    event.date,
+    event.time,
+    event.title,
+    event.location,
+    event.backupRoom,
+    event.attendance,
+    "",
+    "",
+    "",
+    "",
+    event.roomStatus,
+    event.backupRoomStatus,
+    "",
+    "",
+    event.notes,
+    `=IF(OR(A${row}="",C${row}=""),"","fqc-"&TEXT(A${row},"yyyy-mm-dd")&"-"&LEFT(LOWER(REGEXREPLACE(REGEXREPLACE(TRIM(C${row}),"[^A-Za-z0-9]+","-"),"(^-|-$)","")),52))`,
+    `=IF(P${row}="","",SUMIF('${treasurySheetName}'!$A$2:$A,P${row},'${treasurySheetName}'!$H$2:$H))`,
+    `=IF(P${row}="","",SUMIF('${treasurySheetName}'!$A$2:$A,P${row},'${treasurySheetName}'!$I$2:$I))`,
+    `=IF(P${row}="","",Q${row}-R${row})`,
+    `=IF(P${row}="","",IFERROR(TEXTJOIN(", ",TRUE,UNIQUE(FILTER('${treasurySheetName}'!$J$2:$J,'${treasurySheetName}'!$A$2:$A=P${row},'${treasurySheetName}'!$J$2:$J<>""))),""))`,
+    `=IF(P${row}="","",IF(Q${row}=0,"No plan",IF(R${row}>Q${row},"Over budget",IF(R${row}=Q${row},"Complete",IF(R${row}=0,"Planned","In progress")))))`,
+    event.eventStatus,
+    ""
+  ];
+}
+
+function rsvpEntriesForEvent(rsvpData = {}, eventId) {
+  const entries = rsvpData?.byEvent?.[eventId];
+  return Array.isArray(entries) ? entries.slice(0, 300) : [];
+}
+
+export const getOfficerEventOperations = onCall(callableOptions, async (request) => {
+  requireOfficer(request);
+  const [workbook, rsvpSnapshot] = await Promise.all([
+    loadEventOperationsWorkbook(),
+    db.collection("system").doc("eventRsvps").get()
+  ]);
+  const rsvpData = rsvpSnapshot.data() || {};
+  return {
+    events: workbook.events.map((event) => ({
+      ...event,
+      rsvps: rsvpEntriesForEvent(rsvpData, event.id),
+      officerRsvps: rsvpEntriesForEvent(rsvpData, event.id)
+        .filter((entry) => entry.role === "officer")
+        .map((entry) => entry.displayName)
+    })),
+    budgetItems: workbook.budgetItems,
+    totals: {
+      baseFunding: workbook.summaries["Base Funding"] || 0,
+      operationalFunding: workbook.summaries["Operational Funding"] || 0,
+      totalApproved: workbook.summaries["Total Approved"] || 0,
+      plannedSpend: workbook.summaries["Planned Spend"] || 0,
+      actualSpend: workbook.summaries["Actual Spend"] || 0,
+      availableAfterActual: workbook.summaries["Available After Actual"] || 0,
+      uncommittedAfterPlan: workbook.summaries["Uncommitted After Plan"] || 0
+    },
+    locations: workbook.locations,
+    updatedAt: new Date().toISOString()
+  };
+});
+
+export const saveOfficerEvent = onCall(callableOptions, async (request) => {
+  const caller = requireOfficer(request);
+  const input = eventFormData(request.data?.event);
+  const requestedId = cleanText(request.data?.event?.id, 100);
+  const workbook = await loadEventOperationsWorkbook();
+  const existingRow = requestedId ? workbook.eventRowById.get(requestedId) : null;
+  let row = existingRow;
+  if (existingRow) {
+    const updates = [
+      ["A", input.date], ["B", input.time], ["C", input.title], ["D", input.location], ["E", input.backupRoom],
+      ["F", input.attendance], ["K", input.roomStatus], ["L", input.backupRoomStatus], ["O", input.notes], ["V", input.eventStatus]
+    ].map(([column, value]) => ({ range: `'${eventSheetName}'!${column}${existingRow}`, values: [[value]] }));
+    await updateSheetValues(updates);
+  } else {
+    row = Math.max(1, ...workbook.events.map((event) => event.row)) + 1;
+    await updateSheetValues([{ range: `'${eventSheetName}'!A${row}:W${row}`, values: [eventRowValues(input, row)] }]);
+  }
+  await db.collection("eventOperationsAudit").add({
+    action: existingRow ? "event-updated" : "event-created",
+    eventId: requestedId || "generated-in-sheet",
+    row,
+    updatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { saved: true, row };
+});
+
+function budgetItemData(value = {}) {
+  const eventId = cleanText(value.eventId, 100);
+  const event = cleanText(value.event, 120);
+  const date = normalizedSheetDate(value.date);
+  const item = cleanText(value.item, 160);
+  if (!SAFE_ID_PATTERN.test(eventId) || !event || !date || !item) {
+    throw new HttpsError("invalid-argument", "Choose an event and enter a budget item name.");
+  }
+  return {
+    eventId,
+    event,
+    date,
+    item,
+    quantity: Math.max(0, sheetNumber(value.quantity)),
+    unit: cleanText(value.unit, 40),
+    unitCost: Math.max(0, sheetNumber(value.unitCost)),
+    actualCost: Math.max(0, sheetNumber(value.actualCost)),
+    fundingSource: cleanText(value.fundingSource, 120),
+    status: cleanText(value.status, 80) || "Estimate",
+    notes: cleanText(value.notes, 800)
+  };
+}
+
+export const saveOfficerBudgetItem = onCall(callableOptions, async (request) => {
+  const caller = requireOfficer(request);
+  const input = budgetItemData(request.data?.item);
+  const workbook = await loadEventOperationsWorkbook();
+  if (!workbook.eventRowById.has(input.eventId)) throw new HttpsError("not-found", "That event is no longer in the workbook.");
+  const requestedRow = Math.trunc(Number(request.data?.item?.row) || 0);
+  const existing = requestedRow > 1 ? workbook.budgetItems.find((item) => item.row === requestedRow) : null;
+  if (requestedRow && (!existing || existing.eventId !== input.eventId)) {
+    throw new HttpsError("failed-precondition", "That budget row changed. Refresh and try again.");
+  }
+  const row = existing ? existing.row : Math.max(1, workbook.treasuryRows.length + 1) + 1;
+  const values = [[
+    input.eventId,
+    input.event,
+    input.date,
+    input.item,
+    input.quantity || "",
+    input.unit,
+    input.unitCost || "",
+    `=IF(OR(E${row}="",G${row}=""),"",E${row}*G${row})`,
+    input.actualCost || "",
+    input.fundingSource,
+    input.status,
+    input.notes
+  ]];
+  await updateSheetValues([{ range: `'${treasurySheetName}'!A${row}:L${row}`, values }]);
+  await db.collection("eventOperationsAudit").add({
+    action: existing ? "budget-item-updated" : "budget-item-created",
+    eventId: input.eventId,
+    row,
+    updatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { saved: true, row };
+});
+
+export const setEventRsvp = onCall(callableOptions, async (request) => {
+  const caller = requireAuth(request);
+  const eventId = cleanText(request.data?.eventId, 100);
+  const going = request.data?.going === true;
+  if (!SAFE_ID_PATTERN.test(eventId)) throw new HttpsError("invalid-argument", "Choose a valid event.");
+  const aggregateRef = db.collection("system").doc("eventRsvps");
+  const userRef = db.collection("users").doc(caller.uid);
+  const result = await db.runTransaction(async (transaction) => {
+    const [aggregateSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(aggregateRef),
+      transaction.get(userRef)
+    ]);
+    const data = aggregateSnapshot.data() || {};
+    const byEvent = { ...(data.byEvent || {}) };
+    const current = rsvpEntriesForEvent(data, eventId).filter((entry) => entry.uid !== caller.uid);
+    const profile = userSnapshot.data() || {};
+    if (going) {
+      current.push({
+        uid: caller.uid,
+        displayName: cleanText(profile.displayName || caller.token.name || caller.token.email || "FQC Member", 80),
+        role: profileRole(profile.role || caller.token.role)
+      });
+    }
+    byEvent[eventId] = current.slice(0, 300);
+    transaction.set(aggregateRef, { byEvent, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { entries: byEvent[eventId], role: profileRole(profile.role || caller.token.role) };
+  });
+
+  if (result.role === "officer") {
+    try {
+      const workbook = await loadEventOperationsWorkbook();
+      const row = workbook.eventRowById.get(eventId);
+      if (row) {
+        const names = result.entries.filter((entry) => entry.role === "officer").map((entry) => entry.displayName).join(", ");
+        await updateSheetValues([{ range: `'${eventSheetName}'!W${row}`, values: [[names]] }]);
+      }
+    } catch (error) {
+      console.error("Officer RSVP sheet sync failed", error);
+    }
+  }
+  return { eventId, going, entries: result.entries };
 });
 
 export const setMemberRole = onCall(callableOptions, async (request) => {

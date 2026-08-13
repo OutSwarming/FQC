@@ -1548,6 +1548,130 @@ textarea { min-height: 96px; resize: vertical; }
   align-items: center;
 }
 
+.profile-overview { padding-block: 18px; }
+
+.settings-account-summary { display: grid; gap: 14px; }
+
+.settings-group { padding: 0; overflow: hidden; }
+.settings-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.settings-group > summary::-webkit-details-marker { display: none; }
+.settings-group > summary::after { content: "+"; color: var(--accent); font-size: 1.35rem; font-weight: 850; }
+.settings-group[open] > summary::after { content: "−"; }
+.settings-group > summary > span { min-width: 0; }
+.settings-group > summary .section-kicker { margin: 0 0 3px; }
+.settings-group > summary strong { color: var(--ink); font-size: 1rem; }
+.settings-group > summary h2 { margin: 0; font-size: 1rem; }
+.settings-group > summary small { margin-left: auto; color: var(--muted); font-weight: 800; }
+.settings-group-content { display: grid; gap: 14px; padding: 0 18px 18px; border-top: 1px solid var(--line); }
+.settings-group-content > p { margin: 14px 0 0; }
+.settings-group-content .ufid-card { margin: 0; padding: 14px 0 0; border: 0; box-shadow: none; }
+
+.officer-operations { display: grid; gap: 16px; }
+.officer-operations-header { align-items: start; }
+.officer-operations-header .secondary-button { flex: 0 0 auto; }
+.officer-budget-overview { margin: 0; }
+
+.officer-add-event,
+.officer-event-card,
+.officer-event-subsection {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-raised);
+}
+
+.officer-add-event > summary,
+.officer-event-subsection > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  font-weight: 850;
+}
+.officer-add-event > summary::-webkit-details-marker,
+.officer-event-card > summary::-webkit-details-marker,
+.officer-event-subsection > summary::-webkit-details-marker { display: none; }
+.officer-add-event > summary > span { display: inline-flex; align-items: center; gap: 8px; }
+.officer-add-event > summary svg { width: 18px; height: 18px; }
+.officer-add-event > summary small,
+.officer-event-subsection > summary small { margin-left: auto; color: var(--muted); font-size: 0.74rem; }
+.officer-add-event[open] > summary,
+.officer-event-subsection[open] > summary { border-bottom: 1px solid var(--line); }
+.officer-add-event .officer-event-form { padding: 14px; }
+
+.officer-event-list { display: grid; gap: 10px; }
+.officer-event-card > summary {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.officer-event-card[open] > summary { border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent) 5%, var(--surface-raised)); }
+.officer-event-date { display: grid; justify-items: center; padding: 7px; border-radius: 12px; background: var(--surface-soft); color: var(--accent); }
+.officer-event-date small { font-size: 0.64rem; font-weight: 900; letter-spacing: 0.07em; text-transform: uppercase; }
+.officer-event-date strong { font-size: 1.25rem; line-height: 1; }
+.officer-event-summary { display: grid; gap: 4px; min-width: 0; }
+.officer-event-summary strong { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.officer-event-summary small { overflow: hidden; color: var(--muted); font-size: 0.74rem; text-overflow: ellipsis; white-space: nowrap; }
+.officer-event-money { color: var(--accent); font-weight: 900; white-space: nowrap; }
+.event-status-pill { padding: 6px 9px; border-radius: 999px; background: var(--surface-soft); color: var(--muted); font-size: 0.68rem; font-weight: 900; white-space: nowrap; }
+.event-status-pill.status-confirmed,
+.event-status-pill.status-completed { background: color-mix(in srgb, var(--success) 15%, var(--surface-raised)); color: var(--success); }
+.event-status-pill.status-room-pending,
+.event-status-pill.status-planning { background: color-mix(in srgb, var(--warning) 15%, var(--surface-raised)); color: #8a5700; }
+.event-status-pill.status-cancelled { background: color-mix(in srgb, var(--danger) 12%, var(--surface-raised)); color: var(--danger); }
+
+.officer-event-body { display: grid; gap: 12px; padding: 14px; }
+.officer-event-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.officer-event-stats > span { display: grid; gap: 3px; padding: 10px; border-radius: 12px; background: var(--surface-soft); }
+.officer-event-stats small { color: var(--muted); font-size: 0.65rem; font-weight: 850; text-transform: uppercase; }
+.officer-event-stats strong { color: var(--ink); }
+.officer-event-quick-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.officer-event-quick-facts span { color: var(--muted); font-size: 0.76rem; }
+.officer-event-quick-facts strong { margin-right: 6px; color: var(--ink); }
+.officer-event-actions { display: flex; gap: 8px; }
+.officer-event-actions > * { flex: 1; }
+
+.officer-event-form { display: grid; gap: 14px; }
+.officer-event-subsection .officer-event-form,
+.event-budget-editor,
+.event-rsvp-roster { padding: 14px; }
+.officer-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.officer-form-wide { grid-column: 1 / -1; }
+.officer-event-form .form-row,
+.event-budget-item-form .form-row { margin: 0; }
+
+.event-rsvp-roster { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.event-rsvp-roster > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-radius: 10px; background: var(--surface-soft); }
+.event-rsvp-roster strong { color: var(--ink); font-size: 0.78rem; }
+.event-rsvp-roster small { color: var(--muted); font-size: 0.68rem; font-weight: 800; }
+
+.event-budget-editor { display: grid; gap: 10px; }
+.event-budget-item-form { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.budget-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.budget-item-heading strong { color: var(--ink); }
+.budget-item-heading span { color: var(--accent); font-size: 0.75rem; font-weight: 850; }
+.budget-edit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.budget-item-name { grid-column: span 2; }
+.budget-item-notes { grid-column: span 3; }
+.event-budget-item-form textarea { min-height: 68px; }
+
+
 .progress {
   overflow: hidden;
   height: 11px;
@@ -1652,6 +1776,28 @@ textarea { min-height: 96px; resize: vertical; }
   .profile-login,
   .checkin-gate,
   .checkin-hero { margin-top: 10px; }
+
+  .settings-group > summary { padding: 15px; }
+  .settings-group-content { padding: 0 15px 15px; }
+  .officer-operations { gap: 12px; }
+  .officer-operations-header .secondary-button { width: 100%; }
+  .officer-event-card > summary {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 9px 10px;
+  }
+  .officer-event-money { display: none; }
+  .event-status-pill { grid-column: 3; grid-row: 1; max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
+  .officer-event-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .officer-event-quick-facts { grid-template-columns: 1fr; }
+  .officer-event-actions { display: grid; }
+  .officer-form-grid,
+  .event-rsvp-roster { grid-template-columns: 1fr; }
+  .budget-edit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .budget-item-name,
+  .budget-item-notes { grid-column: 1 / -1; }
+  .officer-add-event > summary small,
+  .officer-event-subsection > summary small { max-width: 48%; text-align: right; }
 
   .checkin-gate { padding-block: 34px; }
   .checkin-admin-grid { grid-template-columns: 1fr; }

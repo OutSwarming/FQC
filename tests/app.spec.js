@@ -352,7 +352,8 @@ test("switches between light and dark themes and remembers the choice", async ({
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
-  await expect(page.getByText("v2.3.0 · Current")).toBeVisible();
+  await page.getByRole("heading", { name: "Version History" }).click();
+  await expect(page.getByText("v2.4.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -362,27 +363,34 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
 
-  await expect(page.getByRole("heading", { name: "Officer Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Event Operations" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your Officer Toolkit" })).toBeVisible();
   await expect(page.getByRole("link", { name: /General Onboarding/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /2026 Event Logistics/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
   await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Officer metrics").getByRole("article").filter({ hasText: "Total approved" }).getByText("$3,540.00")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Budget by Event" })).toBeVisible();
+  await expect(page.getByLabel("Team budget overview").getByRole("article").filter({ hasText: "Total approved" }).getByText("$3,540.00")).toBeVisible();
   await expect(page.getByText("$1,050.00 base + $2,490.00 operational")).toBeVisible();
-  await expect(page.getByText("Speaker catering")).toBeVisible();
-  await expect(page.getByText(/updates every 5 minutes/)).toBeVisible();
+  await expect(page.getByText(/Sheet edits return on refresh and every 5 minutes/)).toBeVisible();
 
-  await page.getByLabel("Area").selectOption("Permits");
-  await page.getByLabel("Note").fill("Confirm room permit owner");
-  await page.getByRole("button", { name: "Add Note" }).click();
-  await expect(page.getByText("Confirm room permit owner")).toBeVisible();
+  const firstEvent = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
+  await firstEvent.getByText("Budget & purchases", { exact: true }).click();
+  await expect(firstEvent.getByText("Speaker catering")).toBeVisible();
+  await firstEvent.getByText("Event details & notes", { exact: true }).click();
+  await firstEvent.getByLabel("Officer notes for this event").fill("Confirm room permit owner");
+  await firstEvent.getByRole("button", { name: "Save Event Details" }).click();
+  const savedFirstEvent = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
+  await savedFirstEvent.getByText("Event details & notes", { exact: true }).click();
+  await expect(savedFirstEvent.getByLabel("Officer notes for this event")).toHaveValue("Confirm room permit owner");
 
-  await page.getByLabel("Active event").selectOption("fqc-2026-04-14-gbm-3");
-  await page.getByRole("button", { name: "Update Active Event" }).click();
+  const secondEvent = page.locator('[data-officer-event="fqc-2026-04-14-gbm-3"]');
+  await secondEvent.locator("summary").first().click();
+  await secondEvent.getByRole("button", { name: "Start Event Check-In" }).click();
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
 });
 
 test("prioritizes the logged-in officer's Drive resources and expands the complete library", async ({ page }) => {
@@ -407,6 +415,38 @@ test("prioritizes the logged-in officer's Drive resources and expands the comple
   await expect(page.getByRole("link", { name: /Treasurer Guide/ }).last()).toBeVisible();
 });
 
+test("keeps event money, notes, RSVPs, creation, and check-in inside each officer event", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-ops", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
+
+  await expect(page.getByRole("heading", { name: "Event Operations" })).toBeVisible();
+  await expect(page.getByText("Member Activity", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Display name")).toHaveCount(0);
+  await expect(page.getByText("Passkeys & Face ID", { exact: true })).toHaveCount(0);
+
+  const eventCard = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
+  await expect(eventCard).toContainText("1 going");
+  await eventCard.getByText("Budget & purchases", { exact: true }).click();
+  const budgetForm = eventCard.locator('[data-budget-item-form="2"]');
+  await budgetForm.getByLabel("Actual cost").fill("62.50");
+  await budgetForm.getByRole("button", { name: "Save Money Changes" }).click();
+  await expect(eventCard).toContainText("$62.50");
+
+  const addEvent = page.locator(".officer-add-event");
+  await addEvent.getByText("Add Event", { exact: true }).click();
+  await addEvent.getByLabel("Event name").fill("Quantum Career Night");
+  await addEvent.getByLabel("Date").fill("2026-11-12");
+  await addEvent.getByLabel("Time").fill("6:00 PM");
+  await addEvent.getByLabel("Location / room").fill("Reitz G320");
+  await addEvent.getByRole("button", { name: "Create Event" }).click();
+  await expect(page.locator(".officer-event-card").filter({ hasText: "Quantum Career Night" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByLabel("Display name")).toBeVisible();
+  await expect(page.getByText("Passkeys & Face ID", { exact: true })).toBeVisible();
+  await expect(page.getByText("UFID & role verification", { exact: true })).toBeVisible();
+});
+
 test("member login enables event check-in and shows a member profile", async ({ page }) => {
   await navButton(page, "Check In").click();
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
@@ -423,9 +463,11 @@ test("member login enables event check-in and shows a member profile", async ({ 
   await expect(page.getByText("Attendance recorded for Google Member.")).toBeVisible();
 
   await navButton(page, "Profile").click();
+  await page.getByRole("button", { name: "Open settings" }).click();
   await page.getByLabel("Display name").fill("Alex Q");
   await page.getByRole("button", { name: "Save" }).click();
 
+  await navButton(page, "Profile").click();
   await expect(page.getByRole("heading", { name: "Alex Q", level: 2 })).toBeVisible();
   await expect(page.locator("#profile-initial")).toHaveText("A");
 });
@@ -454,7 +496,7 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await expect(page.getByText("3 participants · verified event check-ins")).toBeVisible();
   await expect(page.locator(".leader-card").first()).toContainText("Jordan");
   await expect(page.locator(".leader-card.current-user")).toContainText("You");
-  await expect(page.getByText("1 point earned · Member")).toBeVisible();
+  await expect(page.getByText("1 point from verified event check-ins")).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
 
   await navButton(page, "Home").click();
@@ -464,7 +506,7 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await navButton(page, "Check In").click();
   await page.getByRole("button", { name: "Check In Now" }).click();
   await navButton(page, "Profile").click();
-  await expect(page.getByText("2 points earned · Member")).toBeVisible();
+  await expect(page.getByText("2 points from verified event check-ins")).toBeVisible();
   await expect(page.locator(".leader-card.current-user")).toContainText("2 PTS");
 });
 
@@ -514,6 +556,8 @@ test("a current officer can recommend a member but cannot directly change roles"
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" });
   });
 
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
   const row = page.locator('[data-member-id="member-1"]');
   await expect(row.locator("select")).toHaveCount(0);
@@ -533,6 +577,8 @@ test("the Treasurer can add and remove ordinary officers while leadership stays 
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
   });
 
+  await expect(page.getByRole("heading", { name: "Officer Management" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
   const president = page.locator('[data-member-id="president-1"]');
   await expect(president.locator("select")).toBeDisabled();
@@ -554,6 +600,8 @@ test("a matching UFID assigns the spreadsheet officer title during account creat
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await finishMemberSetup(page, "12345678");
   await expect(page.locator(".profile-role-line").getByText("President", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Officer Management" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
 });
 
@@ -561,7 +609,9 @@ test("a signed-in member can add a device passkey", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await finishMemberSetup(page);
+  await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("0 passkeys")).toBeVisible();
+  await page.getByText("Passkeys & Face ID", { exact: true }).click();
   await page.getByRole("button", { name: "Set Up Face ID / Touch ID" }).click();
   await expect(page.getByText("1 passkey", { exact: true })).toBeVisible();
   await expect(page.getByText(/Passkey added/)).toBeVisible();
