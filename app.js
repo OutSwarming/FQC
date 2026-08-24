@@ -922,7 +922,15 @@ function render() {
   } else {
     app.focus({ preventScroll: true });
   }
-  if (state.view === "home") requestAnimationFrame(initEventMap);
+  if (mapInitFrame) cancelAnimationFrame(mapInitFrame);
+  if (state.view === "home") {
+    mapInitFrame = requestAnimationFrame(() => {
+      mapInitFrame = null;
+      initEventMap();
+    });
+  } else {
+    mapInitFrame = null;
+  }
 }
 
 function renderHome() {
@@ -1518,10 +1526,44 @@ function bindCalendarEvents() {
   });
 }
 
+// Only one initEventMap() may run per frame; render() can fire several times in
+// a single tick (initial paint, auth, sheet load) and each used to queue its own
+// map init against the same fresh container — the source of the
+// "Map container is already initialized" crash and the blank map on first load.
+let mapInitFrame = null;
+let appRevealed = false;
+const splashStartTime = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+
+// Fade the FQC splash out once the app has actually rendered (map included),
+// holding a short minimum so it reads as intentional rather than a flash.
+function revealApp() {
+  if (appRevealed) return;
+  appRevealed = true;
+  const splash = document.getElementById("app-splash");
+  if (!splash) return;
+  const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  const wait = Math.max(0, 600 - (now - splashStartTime));
+  window.setTimeout(() => {
+    splash.classList.add("is-hidden");
+    document.body.classList.remove("splash-active");
+    const removeSplash = () => splash.remove();
+    splash.addEventListener("transitionend", removeSplash, { once: true });
+    window.setTimeout(removeSplash, 900);
+  }, wait);
+}
+
 function initEventMap() {
   const mapElement = document.querySelector("#event-map");
   if (!mapElement || !window.L) {
     document.querySelector("#event-map-message")?.removeAttribute("hidden");
+    revealApp();
+    return;
+  }
+
+  // A container can host only one Leaflet map; if one is already bound here the
+  // map is live, so reveal and bail instead of throwing "already initialized".
+  if (mapElement._leaflet_id) {
+    revealApp();
     return;
   }
 
@@ -1549,6 +1591,7 @@ function initEventMap() {
   drawMapMarkers();
   window.__FQC_MAP__ = eventMap;
   window.setTimeout(() => eventMap?.invalidateSize(), 120);
+  window.setTimeout(revealApp, 180);
 }
 
 // Pins follow the visible tab, so Past events only appear while Past is open.
@@ -3310,4 +3353,10 @@ observeCheckIn((checkIn) => {
 
 applyTheme(state.theme, false);
 render();
+// If the first screen has no map to wait on, reveal right after paint; otherwise
+// initEventMap() reveals once the map is up. Hard cap so the splash never sticks.
+requestAnimationFrame(() => {
+  if (state.view !== "home" || !window.L) revealApp();
+});
+window.setTimeout(revealApp, 4500);
 refreshEventData("initial Google Sheet load");
