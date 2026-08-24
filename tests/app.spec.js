@@ -455,14 +455,8 @@ test("calendar tab selects an event and preserves it across reloads", async ({ p
   await expect(page.getByText("April 2026")).toBeVisible();
   await expect(page.locator(".calendar-agenda-event")).toHaveCount(3);
   await expect(page.getByRole("button", { name: "Next month" })).toBeDisabled();
-  // The app rebinds click handlers after every render, so a click that lands
-  // while the DOM is being replaced is dropped. A person would tap again; on a
-  // slow CI runner the single click was enough to make this flake.
-  await expect(async () => {
-    await page.locator('.calendar-day[data-select-event="fqc-2026-04-21-social"]').click();
-    await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" }))
-      .toBeVisible({ timeout: 2000 });
-  }).toPass({ timeout: 20000 });
+  await page.locator('.calendar-day[data-select-event="fqc-2026-04-21-social"]').click();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");

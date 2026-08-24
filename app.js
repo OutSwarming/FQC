@@ -1513,8 +1513,19 @@ function bindCalendarEvents() {
   document.querySelectorAll("[data-calendar-shift]").forEach((button) => {
     button.addEventListener("click", () => shiftCalendarMonth(Number(button.dataset.calendarShift)));
   });
-  document.querySelectorAll("#event-calendar [data-select-event]").forEach((button) => {
-    button.addEventListener("click", () => selectEvent(button.dataset.selectEvent));
+}
+
+// Event selection is delegated from the document rather than bound per button.
+// Buttons are recreated on every render, so a click landing between a re-render
+// and the rebind used to be dropped with no feedback.
+function bindEventSelectionDelegate() {
+  document.addEventListener("click", (event) => {
+    const trigger = event.target instanceof Element
+      ? event.target.closest("[data-select-event]")
+      : null;
+    if (!trigger) return;
+    const eventId = trigger.dataset.selectEvent;
+    if (eventId) selectEvent(eventId);
   });
 }
 
@@ -2754,9 +2765,6 @@ function bindViewEvents() {
   document.querySelectorAll("[data-event-tab]").forEach((button) => {
     button.addEventListener("click", () => setEventMode(button.dataset.eventTab));
   });
-  document.querySelectorAll(".event-list [data-select-event]").forEach((button) => {
-    button.addEventListener("click", () => selectEvent(button.dataset.selectEvent));
-  });
   document.querySelector("#retry-officer-resources")?.addEventListener("click", () => refreshOfficerResources(true));
   document.querySelector("#retry-officer-operations")?.addEventListener("click", () => refreshOfficerOperations(true));
   document.querySelector("#show-all-officer-events")?.addEventListener("click", () => {
@@ -3309,5 +3317,6 @@ observeCheckIn((checkIn) => {
 });
 
 applyTheme(state.theme, false);
+bindEventSelectionDelegate();
 render();
 refreshEventData("initial Google Sheet load");
