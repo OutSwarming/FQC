@@ -1,13 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
-const createThreeStepAccount = async (page, { email = "new.gator@ufl.edu", username = "newgator", ufid = "00000000", method = "passkey" } = {}) => {
+const createThreeStepAccount = async (page, { email = "new.gator@ufl.edu", username = "newgator", method = "passkey" } = {}) => {
   await page.getByRole("tab", { name: "Create Account" }).click();
   await page.getByLabel("UF email", { exact: true }).fill(email);
   await page.getByRole("button", { name: "Next: choose a username" }).click();
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByRole("button", { name: "Check username" }).click();
-  await page.getByLabel("UFID verification").fill(ufid);
   if (method === "password") {
     await page.getByRole("radio", { name: /Private password/ }).check();
     await page.locator("#signup-password").fill("quantum-safe-password");
@@ -86,17 +85,34 @@ test("renders the unified event explorer and simplified navigation", async ({ pa
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /user-scalable=no/);
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
   await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toBeVisible();
-  await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toHaveAttribute("src", "/assets/fqc-badge.png");
-  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", /fqc-badge\.png/);
-  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", /fqc-badge\.png/);
+  await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toHaveAttribute("src", /fqc-app-icon-192\.png/);
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", /fqc-app-icon-192\.png/);
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute("href", /fqc-app-icon-180\.png/);
+
+  // Installed-app behaviour: standalone hides the address bar and browser buttons.
   const manifest = await page.evaluate(() => fetch(document.querySelector('link[rel="manifest"]').href).then((response) => response.json()));
-  expect(manifest.icons).toEqual([
-    expect.objectContaining({ src: "/assets/fqc-badge.png?v=23", sizes: "900x900", type: "image/png" })
-  ]);
+  expect(manifest.display).toBe("standalone");
+  expect(manifest.scope).toBe("/");
+  expect(manifest.start_url).toBe("/");
+  expect(manifest.icons.map((icon) => icon.sizes)).toEqual(["192x192", "512x512", "1024x1024", "512x512"]);
+  expect(manifest.icons.every((icon) => icon.src.includes("fqc-app-icon"))).toBe(true);
+  expect(manifest.icons.some((icon) => icon.purpose === "maskable")).toBe(true);
+  await expect(page.locator('meta[name="apple-mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+  await expect(page.locator('meta[name="mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+
+  // Every declared icon must actually resolve.
+  const iconStatuses = await page.evaluate((sources) => Promise.all(
+    sources.map((src) => fetch(src).then((response) => response.status))
+  ), ["/assets/fqc-app-icon-180.png", ...(manifest.icons.map((icon) => icon.src))]);
+  expect(iconStatuses.every((status) => status === 200)).toBe(true);
   await expect(page.locator("#event-intro").getByRole("heading", { name: "IonQ Quantum Networking Speaker Session", level: 2 })).toBeVisible();
   await expect(page.getByRole("region", { name: "FQC events and locations" })).toBeVisible();
   await expect(page.locator("#event-map")).toBeVisible();
-  await expect(page.locator(".event-map-pin")).toHaveCount(7);
+  // One pin per location, labelled with how many events happen there.
+  await expect(page.locator(".event-map-pin")).toHaveCount(3);
+  await expect(page.locator('.event-map-pin[data-location-id="malachowsky-hall"]')).toHaveText("4");
+  await expect(page.locator('.event-map-pin[data-location-id="larsen-hall"]')).toHaveText("2");
+  await expect(page.locator('.event-map-pin[data-location-id="reitz-student-union"]')).toHaveText("1");
   await expect(page.getByRole("tab", { name: /Past 0/ })).toBeVisible();
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
   await expect(page.locator(".event-map-campus")).toHaveCount(0);
@@ -158,7 +174,7 @@ test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", a
   await expect(page.locator("#event-intro")).toContainText("Intro Event");
   await expect(page.locator("#event-intro")).toContainText("Reitz Student Union");
   await expect(page.locator("#event-intro")).toContainText("Room G325");
-  await expect(page.locator(".event-map-pin")).toHaveCount(5);
+  await expect(page.locator('.event-map-pin[data-location-id="reitz-student-union"]')).toHaveText("3");
 
   await page.getByRole("tab", { name: "Calendar", exact: true }).click();
   await expect(page.locator(".calendar-heading")).toContainText("July 2026");
@@ -225,7 +241,76 @@ test("rejects an unsafe saved schedule and replaces it with live Sheet data", as
   await page.reload();
   await expect(page.getByText("Unsafe event")).toHaveCount(0);
   await expect(page.getByText("Google Sheet connected")).toBeVisible();
-  await expect(page.locator(".event-map-pin")).toHaveCount(7);
+  await expect(page.locator(".event-map-pin")).toHaveCount(3);
+});
+
+test("event tabs stay pinned to the top while the list scrolls", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile", "Mobile uses the drag sheet, covered separately");
+  const tabs = page.locator(".event-tabs-sticky");
+  const planner = page.locator(".event-planner");
+  await expect(tabs).toHaveCSS("position", "sticky");
+
+  const plannerTop = await planner.evaluate((element) => element.getBoundingClientRect().top);
+  await planner.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.waitForTimeout(150);
+
+  // The fixture must actually overflow or this proves nothing.
+  expect(await planner.evaluate((element) => element.scrollTop)).toBeGreaterThan(40);
+
+  const tabsTop = await tabs.evaluate((element) => element.getBoundingClientRect().top);
+  expect(tabsTop).toBeGreaterThanOrEqual(plannerTop - 2);
+  expect(tabsTop).toBeLessThan(plannerTop + 60);
+  await expect(page.getByRole("tab", { name: /Past/ })).toBeInViewport();
+});
+
+test("the map only pins events for the tab in view", async ({ page }) => {
+  const archiveEventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"
+"Archived Workshop","2026-02-27","6:00 PM","Larsen Hall","234","More than 24 hours old.","Yes","fqc-2026-02-27-archived"
+"Upcoming Workshop","2026-03-03","6:00 PM","Malachowsky Hall","1142","Future event.","Yes","fqc-2026-03-03-upcoming"`;
+  await page.unroute("https://docs.google.com/spreadsheets/**");
+  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+    const sheetName = new URL(route.request().url()).searchParams.get("sheet");
+    await route.fulfill({
+      status: 200,
+      contentType: "text/csv; charset=utf-8",
+      body: sheetName === "UF Locations" ? locationsCsv : sheetName === "Treasurer Breakdown" ? budgetCsv : archiveEventsCsv
+    });
+  });
+  await page.evaluate(() => {
+    localStorage.removeItem("fqc:event-data");
+    localStorage.setItem("fqc:event-mode", "list");
+    localStorage.setItem("fqc:selected-event", "fqc-2026-03-03-upcoming");
+  });
+  await page.reload();
+
+  // Upcoming tab pins only the upcoming location.
+  await expect(page.locator(".event-map-pin")).toHaveCount(1);
+  await expect(page.locator('.event-map-pin[data-location-id="malachowsky-hall"]')).toBeVisible();
+  await expect(page.locator('.event-map-pin[data-location-id="larsen-hall"]')).toHaveCount(0);
+
+  // Past tab swaps the pins over to the archived location.
+  await page.getByRole("tab", { name: /Past 1/ }).click();
+  await expect(page.locator('.event-map-pin[data-location-id="larsen-hall"]')).toBeVisible();
+  await expect(page.locator(".event-map-pin")).toHaveCount(1);
+});
+
+test("a background refresh leaves the map where the reader put it", async ({ page }) => {
+  const view = () => page.evaluate(() => {
+    const map = window.__FQC_MAP__;
+    return { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom() };
+  });
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setView([29.6436, -82.3549], 17, { animate: false }));
+  const before = await view();
+
+  // Re-render the home view the way a five-minute Sheet sync would.
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await page.waitForTimeout(600);
+
+  const after = await view();
+  expect(Math.abs(after.lat - before.lat)).toBeLessThan(0.002);
+  expect(Math.abs(after.lng - before.lng)).toBeLessThan(0.002);
+  expect(after.zoom).toBe(before.zoom);
 });
 
 test("keeps fixed navigation clear of event details in a short desktop window", async ({ page }, testInfo) => {
@@ -267,15 +352,19 @@ test("selecting a list event synchronizes the detail card and map marker", async
     await expect(page.locator("#event-details").getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
     await expect(page.locator("#event-details").getByText("Larsen Hall")).toBeVisible();
   }
-  await expect(page.locator(".event-map-pin.active")).toHaveText("24");
+  // Quirk is at Larsen Hall, which hosts two events, so its pin reads "2".
+  await expect(page.locator(".event-map-pin.active")).toHaveText("2");
+  await expect(page.locator('.event-map-pin.active')).toHaveAttribute("data-location-id", "larsen-hall");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("fqc:selected-event"))).toBe("fqc-2026-03-24-quirk");
 
-  await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
-  await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  // A location pin opens the soonest event held there.
+  await page.locator('.event-map-pin[data-location-id="malachowsky-hall"]').click();
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "GBM 2" })).toBeVisible();
   if (testInfo.project.name !== "mobile") {
-    await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+    await expect(page.locator("#event-details").getByRole("heading", { name: "GBM 2" })).toBeVisible();
   }
-  await expect(page.locator('[data-event-card="fqc-2026-04-21-social"]')).toHaveClass(/selected/);
+  await expect(page.locator('[data-event-card="fqc-2026-03-10-gbm-2"]')).toHaveClass(/selected/);
+  await expect(page.locator(".event-map-pin.active")).toHaveAttribute("data-location-id", "malachowsky-hall");
 });
 
 test("mobile event sheet expands, collapses, and reveals pin selections with swipe shortcuts", async ({ page }, testInfo) => {
@@ -332,16 +421,16 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await visibleEvent.dispatchEvent("pointermove", { button: 0, pointerId: 11, pointerType: "touch", clientY: 760 });
   await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 11, pointerType: "touch", clientY: 760 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "low");
-  await page.locator('.event-map-pin[data-event-id="fqc-2026-04-21-social"]').click();
+  await page.locator('.event-map-pin[data-location-id="malachowsky-hall"]').click();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
-  await expect(intro.getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+  await expect(intro.getByRole("heading", { name: "GBM 2" })).toBeVisible();
 
   await page.locator("#event-map").click({ position: { x: 190, y: 180 } });
   await expect(planner).toHaveAttribute("data-sheet-mode", "closed");
   await expect(planner).toHaveCSS("height", "0px");
-  await page.locator('.event-map-pin[data-event-id="fqc-2026-04-14-gbm-3"]').click();
+  await page.locator('.event-map-pin[data-location-id="larsen-hall"]').click();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
-  await expect(intro.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
+  await expect(intro.getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
 });
 
 test("calendar tab selects an event and preserves it across reloads", async ({ page }, testInfo) => {
@@ -402,7 +491,7 @@ test("returns from login and automatically finishes the pending RSVP", async ({ 
 });
 
 test("saves a signed-in RSVP from the unified home", async ({ page }) => {
-  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "rsvp-member", displayName: "Riley", username: "riley", email: "riley@ufl.edu", role: "member", ufidStatus: "member" }));
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "rsvp-member", displayName: "Riley", username: "riley", email: "riley@ufl.edu", role: "member" }));
   const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
   await speakerCard.locator("[data-rsvp]").click();
   await expect(speakerCard.locator("[data-rsvp]")).toHaveText("Going");
@@ -424,11 +513,81 @@ test("switches between light and dark themes and remembers the choice", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
+test("display name takes any characters within the limit but not one already in use", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "member-1", displayName: "Alex Q", email: "alex@ufl.edu", role: "member" },
+      { uid: "member-2", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-2", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" });
+  });
+  await page.getByRole("button", { name: "Open settings" }).click();
+
+  const nameField = page.getByLabel("Display name");
+  await expect(nameField).toHaveAttribute("maxlength", "80");
+
+  // Punctuation, spaces and emoji are all fine.
+  await nameField.fill("Jordan “JJ” Vega-Ruiz 🐊");
+  await page.getByRole("button", { name: "Save Profile" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Profile saved.");
+
+  // A name another member holds is refused.
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByLabel("Display name").fill("alex q");
+  await page.getByRole("button", { name: "Save Profile" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Another member is already using that display name.");
+
+  // Too short is still refused, and names the limit.
+  await page.getByLabel("Display name").fill("J");
+  await page.getByRole("button", { name: "Save Profile" }).click();
+  await expect(page.getByText("Use 2 to 80 characters for your display name.")).toBeVisible();
+});
+
+test("account management and updates are both collapsible", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }));
+  await page.getByRole("button", { name: "Open settings" }).click();
+
+  const account = page.locator(".settings-account-summary");
+  const updates = page.locator(".settings-group").filter({ hasText: "Updates" }).first();
+  await expect(account).toHaveAttribute("open", "");
+  await expect(page.getByLabel("Display name")).toBeVisible();
+  await account.getByText("Account management", { exact: true }).click();
+  await expect(page.getByLabel("Display name")).toBeHidden();
+
+  await expect(updates).not.toHaveAttribute("open", "");
+  await updates.getByText("Updates", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Check for Updates" })).toBeVisible();
+});
+
+test("settings offers a home-screen install so the app runs without browser chrome", async ({ page }) => {
+  await page.getByRole("button", { name: "Open settings" }).click();
+  const installCard = page.locator(".install-card");
+  await expect(installCard.getByRole("heading", { name: "Install FQC" })).toBeVisible();
+  // Without a browser install event there is still a manual route.
+  await expect(installCard.locator(".install-steps")).toBeVisible();
+  await expect(installCard).toContainText("no address bar, search field, or browser buttons");
+
+  // A browser that offers installation gets a one-tap button instead.
+  await page.evaluate(() => {
+    const event = new Event("beforeinstallprompt");
+    event.prompt = () => { window.__promptShown = true; };
+    event.userChoice = Promise.resolve({ outcome: "accepted" });
+    window.dispatchEvent(event);
+  });
+  const installButton = page.getByRole("button", { name: "Install FQC" });
+  await expect(installButton).toBeVisible();
+  await installButton.click();
+  await expect.poll(() => page.evaluate(() => window.__promptShown === true)).toBe(true);
+  await expect(page.locator("#action-feedback")).toContainText("FQC is installing to your home screen.");
+});
+
 test("settings hides device reset under Advanced and shows version history", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.8.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.11.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -468,7 +627,7 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open settings" }).click();
-  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
+  await expect(page.locator(".officer-settings-group")).toBeVisible();
 });
 
 test("keeps the officer profile minimal with four current events and a completed archive", async ({ page }) => {
@@ -538,6 +697,9 @@ test("officers control the club-wide two-mile check-in setting", async ({ page }
   }));
 
   await page.getByRole("button", { name: "Open settings" }).click();
+  const officerGroup = page.locator(".officer-settings-group");
+  await expect(officerGroup).not.toHaveAttribute("open", "");
+  await officerGroup.getByText("Officer controls", { exact: true }).click();
   const locationSwitch = page.getByRole("switch", { name: /Require members to be within 2 miles/ });
   await expect(locationSwitch).not.toBeChecked();
   await locationSwitch.check();
@@ -596,7 +758,75 @@ test("keeps event money, notes, RSVPs, creation, and check-in inside each office
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByLabel("Display name")).toBeVisible();
   await expect(page.getByText("Passkeys & Face ID", { exact: true })).toBeVisible();
-  await expect(page.getByText("UFID & role verification", { exact: true })).toBeVisible();
+  await expect(page.getByText("UFID & role verification", { exact: true })).toHaveCount(0);
+});
+
+test("saving money shows the planned total up front and keeps the officer in place", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-money", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer" }));
+
+  const eventCard = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
+  const cardMoney = eventCard.locator("summary .officer-event-money");
+  await expect(cardMoney).toBeVisible();
+  await expect(cardMoney).toContainText("$80.00");
+
+  const budgetSection = eventCard.locator(".officer-event-subsection").filter({ hasText: "Budget & purchases" });
+  await expect(budgetSection).toContainText("$80.00 planned");
+  await budgetSection.getByText("Budget & purchases", { exact: true }).click();
+  await expect(budgetSection).toHaveAttribute("open", "");
+
+  const budgetForm = eventCard.locator('[data-budget-item-form="2"]');
+  await budgetForm.getByLabel("Actual cost").fill("62.50");
+  await budgetForm.getByRole("button", { name: "Save Money Changes" }).click();
+  await expect(eventCard).toContainText("$62.50");
+
+  await expect(eventCard).toHaveAttribute("open", "");
+  await expect(budgetSection).toHaveAttribute("open", "");
+  await expect(budgetForm.getByLabel("Actual cost")).toBeVisible();
+});
+
+test("treasurer budget lines use dropdowns and can be added or removed", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-budget", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true }));
+
+  const eventCard = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
+  await eventCard.getByText("Budget & purchases", { exact: true }).click();
+  const savedLine = eventCard.locator('[data-budget-item-form="2"]');
+
+  // Funding source is a fixed three-way dropdown, not free text.
+  const funding = savedLine.getByLabel("Funding source");
+  await expect(funding).toHaveJSProperty("tagName", "SELECT");
+  await expect(funding.locator("option")).toContainText([
+    "Operational Funding",
+    "Advertising Operation",
+    "Food Operation",
+    "Base Funds"
+  ]);
+  await funding.selectOption("Food Operation");
+  await expect(savedLine.getByLabel("Unit", { exact: true })).toHaveJSProperty("tagName", "SELECT");
+  await expect(savedLine.getByLabel("Budget status")).toHaveJSProperty("tagName", "SELECT");
+
+  // Add a second line.
+  const addLine = eventCard.locator(".budget-add-line");
+  await addLine.getByText("Add another line", { exact: true }).click();
+  await addLine.getByLabel("Item").fill("Poster printing");
+  await addLine.getByLabel("Quantity").fill("2");
+  await addLine.getByLabel("Unit cost").fill("15");
+  await addLine.getByLabel("Funding source").selectOption("Advertising Operation");
+  await addLine.getByRole("button", { name: "Add Budget Item" }).click();
+  await expect(eventCard.getByText("Poster printing")).toBeVisible();
+  await expect(eventCard.locator(".event-budget-item-form")).toHaveCount(3);
+
+  // Remove it again, with a confirmation in between.
+  const addedLine = eventCard.locator(".event-budget-item-form").filter({ hasText: "Poster printing" });
+  await addedLine.getByRole("button", { name: "Remove Line" }).click();
+  await page.locator(".confirm-modal").getByRole("button", { name: "Cancel" }).click();
+  await expect(eventCard.getByText("Poster printing")).toBeVisible();
+
+  await addedLine.getByRole("button", { name: "Remove Line" }).click();
+  await page.locator(".confirm-modal").getByRole("button", { name: "Remove Line" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Budget line removed");
+  await expect(eventCard.getByText("Poster printing")).toHaveCount(0);
 });
 
 test("member login enables event check-in and shows a member profile", async ({ page }) => {
@@ -646,8 +876,11 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await navButton(page, "Profile").click();
   await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
   await expect(page.getByText("3 participants · verified event check-ins")).toBeVisible();
-  await expect(page.locator(".leader-card").first()).toContainText("Jordan");
-  await expect(page.locator(".leader-card.current-user")).toContainText("You");
+  await expect(page.locator(".leader-row").first()).toContainText("Jordan");
+  await expect(page.locator(".leader-row.current-user")).toContainText("You");
+  // A real ranked list, not medals.
+  await expect(page.locator(".leader-row").first().locator(".leader-rank")).toHaveText("1");
+  await expect(page.locator(".leader-card")).toHaveCount(0);
   await expect(page.getByText("1 point from verified event check-ins")).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
 
@@ -659,7 +892,51 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await page.getByRole("button", { name: "I’m Here" }).click();
   await navButton(page, "Profile").click();
   await expect(page.getByText("2 points from verified event check-ins")).toBeVisible();
-  await expect(page.locator(".leader-card.current-user")).toContainText("2 PTS");
+  await expect(page.locator(".leader-row.current-user")).toContainText("2 PTS");
+});
+
+test("a long leaderboard previews ten and opens the rest in a scrollable popup", async ({ page }) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setLeaderboard({
+      entries: Array.from({ length: 24 }, (_, index) => ({
+        uid: `ranked-${index + 1}`,
+        displayName: `Member ${String(index + 1).padStart(2, "0")}`,
+        points: 30 - index,
+        role: "member"
+      }))
+    });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "ranked-24", displayName: "Member 24", email: "m24@ufl.edu", role: "member" });
+  });
+  await navButton(page, "Profile").click();
+
+  const section = page.locator(".leaderboard-section");
+  await expect(section.locator(".leader-row")).toHaveCount(10);
+  await expect(section).toContainText("Member 10");
+  await expect(section).not.toContainText("Member 11");
+
+  await page.getByRole("button", { name: /Show all \d+ members/ }).click();
+  const modal = page.locator(".leaderboard-modal");
+  await expect(modal.getByRole("heading", { name: "Full Leaderboard" })).toBeVisible();
+  await expect(modal.locator(".leader-row")).toHaveCount(24);
+  await expect(modal).toContainText("Member 23");
+  await expect(modal.locator(".leader-row").last()).toHaveClass(/current-user/);
+
+  // Ranks continue past the preview instead of restarting.
+  await expect(modal.locator(".leader-row").nth(10).locator(".leader-rank")).toHaveText("11");
+
+  // The list scrolls inside the popup rather than growing the page.
+  const scroller = page.locator(".leaderboard-scroll");
+  await expect(scroller).toHaveCSS("overflow-y", "auto");
+  const scrolled = await scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return { top: element.scrollTop, overflows: element.scrollHeight > element.clientHeight };
+  });
+  expect(scrolled.overflows).toBe(true);
+  expect(scrolled.top).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "Close full leaderboard" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(section.locator(".leader-row")).toHaveCount(10);
 });
 
 test("account creation is an inviting three-step UF email, username, and security flow", async ({ page }) => {
@@ -693,12 +970,11 @@ test("account creation is an inviting three-step UF email, username, and securit
   await page.getByRole("button", { name: "Check username" }).click();
   await expect(page.getByText("Step 3 of 3")).toBeVisible();
   await expect(page.getByRole("radio", { name: /Passkey/ })).toBeChecked();
-  await page.getByLabel("UFID verification").fill("00000000");
+  await expect(page.getByLabel("UFID verification")).toHaveCount(0);
   await page.getByRole("radio", { name: /Private password/ }).check();
   await page.locator("#signup-password").fill("quantum-safe-password");
   await page.getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Enter your UFID" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "newgator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
 });
@@ -709,26 +985,53 @@ test("forgot password accepts a username or UF email", async ({ page }) => {
   await expect(page.getByText("Enter your username or UF email first, then choose Forgot password.")).toBeVisible();
   await page.getByLabel("Username or UF email").fill("member@ufl.edu");
   await page.getByRole("button", { name: "Forgot password?" }).click();
-  await expect(page.getByText("Password reset email sent to your UF inbox.")).toBeVisible();
+  await expect(page.getByText("If an FQC account matches that, a link to set a password is on its way to the UF inbox.")).toBeVisible();
+
+  // The same wording comes back for an identifier with no account, so the form
+  // cannot be used to find out who has one.
+  await page.getByLabel("Username or UF email").fill("nobody.here@ufl.edu");
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByText("If an FQC account matches that, a link to set a password is on its way to the UF inbox.")).toBeVisible();
 });
 
-test("a current officer can recommend a member but cannot directly change roles", async ({ page }) => {
+test("any officer can make a member an officer but cannot demote or remove one", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.setMembers([
       { uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" },
       { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
     ]);
+    window.__FQC_AUTH_TEST_API__.setLeaderboard({
+      entries: [
+        { uid: "member-1", displayName: "Jordan", points: 4, role: "member" },
+        { uid: "officer-1", displayName: "Morgan", points: 2, role: "officer" }
+      ]
+    });
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" });
   });
 
-  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
+  // Members are no longer managed from Settings at all.
   await page.getByRole("button", { name: "Open settings" }).click();
-  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toBeVisible();
-  const row = page.locator('[data-member-id="member-1"]');
-  await expect(row.locator("select")).toHaveCount(0);
-  await row.getByRole("button", { name: "Recommend officer" }).click();
-  await expect(row.getByRole("button", { name: "Recommended" })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
+  await expect(page.locator('[data-member-id]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Back" }).click();
+
+  await page.getByRole("button", { name: /Open Jordan/ }).click();
+  const profile = page.locator(".member-profile-modal");
+  await expect(profile.getByRole("heading", { name: "Jordan" })).toBeVisible();
+  // A plain officer promotes, but cannot demote or remove.
+  await expect(profile.getByRole("button", { name: "Remove Member" })).toHaveCount(0);
+  await expect(profile.locator('option[value="member"]')).toHaveAttribute("disabled", "");
+  await profile.locator("select").selectOption("officer");
+  await profile.getByRole("button", { name: "Save role" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Member role updated.");
+  await profile.getByRole("button", { name: "Close member profile" }).click();
+
+  // Their own row offers nothing to change.
+  await page.getByRole("button", { name: /Open Morgan/ }).click();
+  await expect(profile.locator("select")).toBeDisabled();
+  await expect(profile.getByRole("button", { name: "Save role" })).toBeDisabled();
+  await expect(profile).toContainText("You cannot change your own role.");
 });
 
 test("the Treasurer can add and remove ordinary officers while leadership stays protected", async ({ page }) => {
@@ -740,61 +1043,311 @@ test("the Treasurer can add and remove ordinary officers while leadership stays 
       { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
       { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
     ]);
+    window.__FQC_AUTH_TEST_API__.setLeaderboard({
+      entries: [
+        { uid: "member-1", displayName: "Jordan", points: 6, role: "member" },
+        { uid: "president-1", displayName: "Alex", points: 4, role: "officer" },
+        { uid: "vp-1", displayName: "Taylor", points: 3, role: "officer" },
+        { uid: "treasurer-1", displayName: "Carter", points: 1, role: "officer" }
+      ]
+    });
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
   });
 
-  await expect(page.getByRole("heading", { name: "Officer Management" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Open settings" }).click();
-  await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
-  const president = page.locator('[data-member-id="president-1"]');
-  await expect(president.locator("select")).toBeDisabled();
-  await expect(president.getByRole("button", { name: "Save role" })).toBeDisabled();
-  const vicePresident = page.locator('[data-member-id="vp-1"]');
-  await expect(vicePresident.locator("select")).toBeDisabled();
-  await expect(vicePresident.getByRole("button", { name: "Save role" })).toBeDisabled();
-  const row = page.locator('[data-member-id="member-1"]');
-  await row.locator("select").selectOption("officer");
-  await row.getByRole("button", { name: "Save role" }).click();
-  await expect(row.locator("select")).toHaveValue("officer");
+  const profile = page.locator(".member-profile-modal");
+
+  await page.getByRole("button", { name: /Open Alex/ }).click();
+  await expect(profile.locator("select")).toBeDisabled();
+  await expect(profile.getByRole("button", { name: "Save role" })).toBeDisabled();
+  await expect(profile.getByRole("button", { name: "Remove Member" })).toBeDisabled();
+  await expect(profile).toContainText("President, Vice President, and Treasurer accounts are protected.");
+  await profile.getByRole("button", { name: "Close member profile" }).click();
+
+  await page.getByRole("button", { name: /Open Taylor/ }).click();
+  await expect(profile.locator("select")).toBeDisabled();
+  await expect(profile.getByRole("button", { name: "Remove Member" })).toBeDisabled();
+  await profile.getByRole("button", { name: "Close member profile" }).click();
+
+  await page.getByRole("button", { name: /Open Jordan/ }).click();
+  await profile.locator("select").selectOption("officer");
+  await profile.getByRole("button", { name: "Save role" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Member role updated.");
 });
 
-test("the Treasurer can securely link a pending Sheet leadership row to a UFID-verified account", async ({ page }) => {
+test("removing a member needs a confirmation and then clears the standings", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.setMembers([
-      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true, ufidStatus: "matched" },
-      { uid: "sidney-1", displayName: "Sidney Brann", email: "sidney@ufl.edu", role: "member", ufidStatus: "member" }
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeaderboard({
+      entries: [
+        { uid: "member-1", displayName: "Jordan", points: 5, role: "member" },
+        { uid: "treasurer-1", displayName: "Carter", points: 1, role: "officer" }
+      ]
+    });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  const profile = page.locator(".member-profile-modal");
+  await page.getByRole("button", { name: /Open Jordan/ }).click();
+  await profile.getByRole("button", { name: "Remove Member" }).click();
+
+  // Backing out of the confirmation must leave the member alone.
+  const confirmDialog = page.locator(".confirm-modal");
+  await expect(confirmDialog).toContainText("permanently deletes");
+  await confirmDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Open Jordan/ })).toBeVisible();
+
+  await profile.getByRole("button", { name: "Remove Member" }).click();
+  await page.locator(".confirm-modal").getByRole("button", { name: "Remove Member" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Jordan was removed from FQC.");
+  await expect(profile).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Open Jordan/ })).toHaveCount(0);
+  await expect(page.locator(".leader-row")).toHaveCount(1);
+});
+
+test("the Treasurer can link a pending Sheet leadership row to a member account", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "sidney-1", displayName: "Sidney Brann", email: "sidney@ufl.edu", role: "member" }
     ]);
     window.__FQC_AUTH_TEST_API__.setLeadershipSlots([
       { row: 3, name: "Sidney Brann", title: "Vice President" }
     ]);
-    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true, ufidStatus: "matched" });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
   });
 
   await page.getByRole("button", { name: "Open settings" }).click();
+  // Officer-only settings stay collapsed until an officer opens them.
+  const officerGroup = page.locator(".officer-settings-group");
+  await expect(officerGroup).not.toHaveAttribute("open", "");
+  await expect(page.locator('[data-leadership-row="3"]')).toBeHidden();
+  await officerGroup.getByText("Officer controls", { exact: true }).click();
   const slot = page.locator('[data-leadership-row="3"]');
   await expect(slot.getByText("Vice President", { exact: false })).toBeVisible();
   await slot.locator("select").selectOption("sidney-1");
   await slot.getByRole("button", { name: "Link role" }).click();
-  await expect(page.locator('[data-member-id="sidney-1"]')).toContainText("Vice President");
-  await expect(page.locator('[data-leadership-row="3"]')).toHaveCount(0);
+  await expect(page.locator("#action-feedback")).toContainText("Leadership role linked to that account.");
+  // The seat stays on the roster once linked — it just stops being pending.
+  await expect(page.locator('[data-leadership-row="3"]')).toHaveCount(1);
+  await expect(slot.getByRole("button", { name: "Link role" })).toHaveCount(0);
+  await expect(slot.locator(".leadership-seat-status")).toHaveText("Active");
 });
 
-test("a matching UFID assigns the spreadsheet officer title during account creation", async ({ page }) => {
+test("the Treasurer can open a filled leadership seat and put it back on the roster", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUfidDirectory({
-    "12345678": { officerTitle: "President" }
-  }));
-  await createThreeStepAccount(page, { email: "president@ufl.edu", username: "fqcprez", ufid: "12345678" });
-  await expect(page.locator(".profile-role-line").getByText("President", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Officer Management" })).toHaveCount(0);
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "vp-1", displayName: "Taylor", email: "taylor@ufl.edu", role: "officer", leadership: "vice_president", officerTitle: "Vice President" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipRoster([
+      { row: 3, name: "Taylor", title: "Vice President", active: true, linked: true, pending: false }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
   await page.getByRole("button", { name: "Open settings" }).click();
-  await expect(page.getByRole("heading", { name: "Officer Management" })).toBeVisible();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  const seat = page.locator('[data-leadership-row="3"]');
+  await expect(seat.locator(".leadership-seat-status")).toHaveText("Active");
+
+  await seat.getByRole("button", { name: "Open seat" }).click();
+  await expect(page.locator(".confirm-modal")).toContainText("stays a plain officer");
+  await page.locator(".confirm-modal").getByRole("button", { name: "Open seat" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Leadership seat opened.");
+
+  // The seat is back on the roster and can be linked to somebody else.
+  await expect(seat.getByRole("button", { name: "Link role" })).toBeVisible();
+  await expect(seat).toContainText("Waiting for an account");
+});
+
+test("a seat held by two matching accounts makes the Treasurer pick which one to open", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "treasurer-dupe", displayName: "carter.swarm1", email: "carter.swarm1@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipRoster([
+      { row: 4, name: "Carter Swarm", title: "Treasurer", active: true, linked: true, pending: false }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  const seat = page.locator('[data-leadership-row="4"]');
+
+  // Two accounts claim the same leadership value, so the seat asks which one.
+  const picker = seat.locator("[data-leadership-holder]");
+  await expect(picker).toBeVisible();
+  await expect(picker.locator("option")).toHaveCount(2);
+  await picker.selectOption("treasurer-dupe");
+  await seat.getByRole("button", { name: "Open seat" }).click();
+  await page.locator(".confirm-modal").getByRole("button", { name: "Open seat" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Leadership seat opened.");
+});
+
+test("a seat with one obvious holder opens without asking", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "prez-1", displayName: "Alex", email: "alex@ufl.edu", role: "officer", leadership: "president", officerTitle: "President" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipRoster([
+      { row: 2, name: "Alex Heard", title: "President", active: true, linked: true, pending: false }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  const seat = page.locator('[data-leadership-row="2"]');
+  await expect(seat.locator("[data-leadership-holder]")).toHaveCount(0);
+  await expect(seat.getByRole("button", { name: "Open seat" })).toHaveAttribute("data-holder-uid", "prez-1");
+});
+
+test("an existing officer can be moved into a pending leadership seat", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true },
+      { uid: "secretary-1", displayName: "Jay", email: "jay@ufl.edu", role: "officer", officerTitle: "Secretary" },
+      { uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipSlots([{ row: 3, name: "Sidney Brann", title: "Vice President" }]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  const slot = page.locator('[data-leadership-row="3"]');
+  const picker = slot.locator("[data-leadership-member]");
+
+  // A sitting officer can move up; someone holding a different seat is excluded.
+  await expect(picker.locator("option")).toHaveCount(3);
+  await expect(picker.locator('option[value="secretary-1"]')).toHaveCount(1);
+  await expect(picker.locator('option[value="member-1"]')).toHaveCount(1);
+  await expect(picker.locator('option[value="treasurer-1"]')).toHaveCount(0);
+
+  await picker.selectOption("secretary-1");
+  await slot.getByRole("button", { name: "Link role" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Leadership role linked to that account.");
+});
+
+test("a seat that drifted open can be re-linked to the officer who already holds the role", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "prez-1", displayName: "Alex", email: "alex@ufl.edu", role: "officer", leadership: "president", officerTitle: "President", canManageOfficers: true },
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipSlots([{ row: 4, name: "Carter Swarm", title: "Treasurer" }]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "prez-1", displayName: "Alex", email: "alex@ufl.edu", role: "officer", leadership: "president", officerTitle: "President", canManageOfficers: true });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  const slot = page.locator('[data-leadership-row="4"]');
+  const picker = slot.locator("[data-leadership-member]");
+
+  // The sitting Treasurer is offered for the Treasurer seat, but the President is not.
+  await expect(picker.locator('option[value="treasurer-1"]')).toHaveCount(1);
+  await expect(picker.locator('option[value="prez-1"]')).toHaveCount(0);
+
+  await picker.selectOption("treasurer-1");
+  await slot.getByRole("button", { name: "Link role" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Leadership role linked to that account.");
+});
+
+test("a plain officer is never offered the leadership seat controls", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipRoster([
+      { row: 2, name: "Alex", title: "President", active: true, linked: true, pending: false },
+      { row: 3, name: "Sidney", title: "Program Officer", active: false, linked: false, pending: true }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "officer-1", displayName: "Morgan", email: "morgan@ufl.edu", role: "officer", officerTitle: "Secretary" });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Open seat" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Link role" })).toHaveCount(0);
+});
+
+test("officer controls list every leadership seat, linked and pending alike", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setMembers([
+      { uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true }
+    ]);
+    window.__FQC_AUTH_TEST_API__.setLeadershipRoster([
+      { row: 2, name: "Alexander Heard", title: "President", active: true, linked: true, pending: false },
+      { row: 3, name: "Sidney Brann", title: "Program Officer", active: false, linked: false, pending: true },
+      { row: 4, name: "Carter Swarm", title: "Treasurer", active: true, linked: true, pending: false },
+      { row: 5, name: "Daniel Takshi", title: "Workshop Lead", active: false, linked: false, pending: true },
+      { row: 6, name: "Jay", title: "Secretary", active: true, linked: true, pending: false },
+      { row: 7, name: "Ayo", title: "Undergrad Outreach", active: false, linked: false, pending: true },
+      { row: 8, name: "Jake", title: "Social Media", active: false, linked: false, pending: true }
+    ]);
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "treasurer-1", displayName: "Carter", email: "carter@ufl.edu", role: "officer", leadership: "treasurer", officerTitle: "Treasurer", canManageOfficers: true });
+  });
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator(".officer-settings-group").getByText("Officer controls", { exact: true }).click();
+
+  const roster = page.locator(".leadership-slot-roster");
+  await expect(roster.locator(".leadership-seat")).toHaveCount(7);
+  await expect(roster).toContainText("Alexander Heard");
+  await expect(roster).toContainText("Jay");
+  await expect(roster).toContainText("4 seats are still waiting on an account");
+  await expect(roster.locator(".leadership-seat-status.active")).toHaveCount(3);
+  // Only unmatched seats offer the link control.
+  await expect(roster.getByRole("button", { name: "Link role" })).toHaveCount(4);
+});
+
+test("a brand new account is always a plain member with no officer controls", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await createThreeStepAccount(page, { email: "hopeful@ufl.edu", username: "hopeful" });
+  await expect(page.locator(".profile-role-line").getByText("Member", { exact: true })).toBeVisible();
+  await expect(page.locator(".officer-settings-group")).toHaveCount(0);
+  await page.getByRole("button", { name: "Open settings" }).click();
+  // Signing up cannot hand anyone officer access, whatever they type on the way in.
+  await expect(page.locator(".officer-settings-group")).toHaveCount(0);
+});
+
+test("a passkey member can email themselves a link to set a backup password", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "passkey-only", displayName: "Robin", username: "robin", email: "robin@ufl.edu", role: "member", passkeyCount: 1 }));
+  await page.getByRole("button", { name: "Open settings" }).click();
+
+  await page.getByText("Password", { exact: true }).click();
+  await expect(page.getByText(/A password is how you get back in on a device that has no passkey/)).toBeVisible();
+  await page.getByRole("button", { name: "Email Me a Password Link" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Password link sent to robin@ufl.edu");
+});
+
+test("the login screen tells a member with no passkey on this device how to get in", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await expect(page.getByText(/No passkey on this device, or never set a password/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
 });
 
 test("a signed-in member can add a device passkey", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-passkey", displayName: "Member", username: "member", email: "member@ufl.edu", role: "member", ufidStatus: "member", passkeyCount: 0 }));
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-passkey", displayName: "Member", username: "member", email: "member@ufl.edu", role: "member", passkeyCount: 0 }));
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByText("0 passkeys")).toBeVisible();
   await page.getByText("Passkeys & Face ID", { exact: true }).click();
@@ -805,7 +1358,7 @@ test("a signed-in member can add a device passkey", async ({ page }) => {
 
 test("nukes local app data and reloads a fresh events home", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-nuke", displayName: "Nuke Member", username: "nukemember", email: "nuke@ufl.edu", role: "member", ufidStatus: "member" }));
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-nuke", displayName: "Nuke Member", username: "nukemember", email: "nuke@ufl.edu", role: "member" }));
   await expect(page.getByRole("heading", { name: "Nuke Member", level: 2 })).toBeVisible();
 
   await page.getByRole("button", { name: "Open settings" }).click();

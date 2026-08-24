@@ -2,9 +2,11 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   assignLeadershipRole,
+  openLeadershipSeat,
   checkUsername,
   changeMemberRole,
   createEmailAccount,
+  deleteOfficerBudgetItem,
   loadLeaderboard,
   loadMembers,
   loadOfficerEventOperations,
@@ -13,10 +15,11 @@ import {
   observeCheckIn,
   observeSession,
   readableAuthError,
-  recommendOfficer,
   requestPasswordReset,
+  sendPasswordSetupEmail,
   recordCheckIn,
   registerPasskey,
+  removeClubMember,
   saveOfficerBudgetItem,
   saveOfficerEvent,
   signInWithEmail,
@@ -25,13 +28,19 @@ import {
   updateActiveCheckIn,
   updateCheckInLocationRequirement,
   updateEventRsvp,
-  updateProfileName,
-  verifyUfid
+  updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.8.0";
-const APP_RELEASE_DATE = "August 13, 2026";
+const APP_VERSION = "2.11.0";
+const APP_RELEASE_DATE = "August 14, 2026";
 const RELEASE_HISTORY = [
+  ["2.11.0", "Added an emailed password link so a passkey member can get in on a device that has no passkey, spelled that out on the login screen, stopped the reset form revealing which accounts exist, and stopped re-registering a device inflating the passkey count"],
+  ["2.10.0", "Removed UFID verification everywhere. Every new account starts as a member, any officer can make a member an officer, and the President or Treasurer still handles leadership seats, demotions, and removals. Passkey, Face ID, and Touch ID sign-in are unchanged."],
+  ["2.9.3", "Capped the leaderboard at ten with a scrollable full-standings popup instead of one long scroll"],
+  ["2.9.2", "Listed every officer seat instead of only pending matches, made account settings and updates collapsible, freed up display names with a uniqueness check, pinned the event tabs, and stopped the map from re-zooming or pinning past events"],
+  ["2.9.1", "Adopted the FQC mark as the app icon and home-screen install, so the installed app opens full screen with no address bar or browser buttons"],
+  ["2.9.0","Counted events on each map pin, added budget line add/remove with funding dropdowns, tucked officer-only settings away, and moved member management into a real leaderboard with member profiles"],
+  ["2.8.1", "Repaired officer money and RSVP saving, kept the workspace open and in place after every save, and put each event's planned total on its card"],
   ["2.8.0", "Simplified the officer profile into compact current events, completed events, resources, and a tucked-away club budget"],
   ["2.7.0", "Polished RSVP, sign-in, and check-in handoffs with faster location checks and clear live confirmation feedback"],
   ["2.6.1", "Moved three-step signup into a dismissible modal and removed the duplicate post-account UFID screen"],
@@ -64,6 +73,11 @@ const UF_LOCATIONS_SHEET_NAME = "UF Locations";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const EVENT_DATA_CACHE_KEY = "fqc:event-data";
 const EVENT_BUDGET_CACHE_KEY = "fqc:event-budget";
+const MAX_DISPLAY_NAME = 80;
+const LEADERBOARD_PREVIEW = 10;
+const FUNDING_SOURCES = ["Advertising Operation", "Food Operation", "Base Funds"];
+const BUDGET_UNITS = ["each", "order", "tray", "box", "pack", "dozen", "gallon", "person", "hour", "flat rate"];
+const BUDGET_STATUSES = ["Estimate", "Needs quote", "Quoted", "Approved", "Ordered", "Purchased", "Reimbursed"];
 const EVENT_DATA_SOURCE = "2026 Event Logistics Google Sheet";
 const EVENT_BUDGET_SHEET_URL = `https://docs.google.com/spreadsheets/d/${EVENT_SHEET_ID}/edit#gid=806240242`;
 const MAX_EVENTS = 250;
@@ -119,17 +133,16 @@ const state = {
   signupStep: 1,
   signupEmail: "",
   signupUsername: "",
-  signupUfid: "",
   signupMethod: "passkey",
   authUser: null,
   memberRole: "member",
   leadership: "",
   officerTitle: "",
   canManageOfficers: false,
-  ufidStatus: "",
   passkeyCount: 0,
   members: [],
   leadershipSlots: [],
+  leadershipRoster: [],
   membersLoading: false,
   officerResources: [],
   officerResourcesLoaded: false,
@@ -140,6 +153,9 @@ const state = {
   officerOperationsLoading: false,
   officerOperationsError: "",
   selectedOfficerEventId: "",
+  openDisclosures: {},
+  memberProfileUid: "",
+  leaderboardExpanded: false,
   showAllOfficerEvents: false,
   budgetBreakdownOpen: false,
   activeCheckInEventId: "fqc-2026-03-03-ionq",
@@ -647,6 +663,22 @@ const settingsToggle = document.querySelector("#settings-toggle");
 let eventMap = null;
 let eventMarkers = new Map();
 let pendingMapPan = null;
+let renderedView = "";
+let installPrompt = null;
+let savedMapView = null;
+let mapPinSignature = "";
+
+function isInstalledApp() {
+  return window.matchMedia?.("(display-mode: standalone)").matches === true
+    || window.matchMedia?.("(display-mode: fullscreen)").matches === true
+    || window.navigator.standalone === true;
+}
+
+function isIosDevice() {
+  const agent = String(window.navigator.userAgent || "");
+  return /iPad|iPhone|iPod/.test(agent)
+    || (/Macintosh/.test(agent) && window.navigator.maxTouchPoints > 1);
+}
 const MOBILE_EVENT_SHEET_MODES = ["closed", "low", "medium", "high"];
 let mobileEventSheetMode = "medium";
 
@@ -664,8 +696,27 @@ function getEvent(eventId) {
   return events.find((event) => event.id === eventId) || events[0];
 }
 
+// Exact lookup: unlike getEvent, an unknown id stays unknown instead of
+// silently reporting the first event on the schedule.
+function findEventById(eventId) {
+  return events.find((event) => event.id === eventId)
+    || state.officerOperations?.events?.find((event) => event.id === eventId)
+    || null;
+}
+
 function getEventLocation(event) {
-  return locations[event.locationId];
+  return event ? locations[event.locationId] : undefined;
+}
+
+function eventsByLocation(source = events) {
+  const grouped = new Map();
+  source.forEach((event) => {
+    const location = getEventLocation(event);
+    if (!location) return;
+    if (!grouped.has(location.id)) grouped.set(location.id, { location, events: [] });
+    grouped.get(location.id).events.push(event);
+  });
+  return [...grouped.values()];
 }
 
 function eventDate(event) {
@@ -813,11 +864,23 @@ function setView(view) {
     queueMicrotask(refreshOfficerResources);
     queueMicrotask(refreshOfficerOperations);
   }
-  if (state.view === "settings" && state.memberRole === "officer" && !state.members.length) queueMicrotask(refreshMemberDirectory);
+  if (state.memberRole === "officer" && !state.members.length && (state.view === "settings" || state.view === "profile")) {
+    queueMicrotask(refreshMemberDirectory);
+  }
+}
+
+function isDisclosureOpen(key, defaultOpen = false) {
+  return key in state.openDisclosures ? state.openDisclosures[key] === true : defaultOpen;
+}
+
+function disclosureAttrs(key, defaultOpen = false) {
+  return `data-disclosure="${escapeHtml(key)}"${isDisclosureOpen(key, defaultOpen) ? " open" : ""}`;
 }
 
 function render() {
   if (eventMap) {
+    // Remember where the reader had the map so the rebuild lands in the same place.
+    savedMapView = { center: eventMap.getCenter(), zoom: eventMap.getZoom() };
     if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
     eventMap.remove();
     eventMap = null;
@@ -828,7 +891,7 @@ function render() {
   const eventsScreenActive = state.view === "home";
   document.documentElement.classList.toggle("events-screen-active", eventsScreenActive);
   document.body.classList.toggle("events-screen-active", eventsScreenActive);
-  document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen);
+  document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen || Boolean(state.memberProfileUid) || state.leaderboardExpanded);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
   title.textContent = titles[state.view] || "Events";
@@ -846,9 +909,18 @@ function render() {
     settings: renderSettings
   };
 
+  const sameView = renderedView === state.view;
+  const previousScrollY = window.scrollY;
   app.innerHTML = `${views[state.view]?.() || renderHome()}${state.authPromptOpen ? renderAuthPromptModal() : ""}${state.signupOpen ? renderSignupModal() : ""}`;
   bindViewEvents();
-  app.focus({ preventScroll: true });
+  renderedView = state.view;
+  if (sameView) {
+    // Re-rendering in place (a save, a background refresh) must not move the page
+    // out from under the officer who is still working in it.
+    if (window.scrollY !== previousScrollY) window.scrollTo(0, previousScrollY);
+  } else {
+    app.focus({ preventScroll: true });
+  }
   if (state.view === "home") requestAnimationFrame(initEventMap);
 }
 
@@ -870,6 +942,7 @@ function renderHome() {
               ${renderSelectedEventIntro()}
             </div>
 
+            <div class="event-tabs-sticky">
             <div class="event-tabs" role="tablist" aria-label="Event view">
               <button type="button" role="tab" data-event-tab="list" aria-selected="${state.eventMode === "list"}">
                 <svg><use href="#icon-map"></use></svg>
@@ -882,6 +955,7 @@ function renderHome() {
               <button type="button" role="tab" data-event-tab="past" aria-selected="${state.eventMode === "past"}">
                 Past <span class="event-tab-count">${archivedEvents.length}</span>
               </button>
+            </div>
             </div>
 
             <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
@@ -1074,6 +1148,7 @@ function setEventMode(mode) {
   document.querySelectorAll("[data-event-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
+  drawMapMarkers();
   selectEvent(state.selectedEventId, { focusMap: false });
   if (isMobileEventSheetViewport()) {
     const nextSheetMode = state.eventMode === "calendar" || state.eventMode === "past" || mobileEventSheetMode === "high"
@@ -1112,8 +1187,9 @@ function selectEvent(eventId, options = {}) {
     if (button.classList.contains("calendar-day")) button.classList.toggle("selected", button.dataset.selectEvent === eventId);
   });
 
-  eventMarkers.forEach((marker, id) => {
-    marker.getElement()?.querySelector(".event-map-pin")?.classList.toggle("active", id === eventId);
+  const activeLocationId = getEventLocation(getEvent(eventId))?.id;
+  eventMarkers.forEach((marker, locationId) => {
+    marker.getElement()?.querySelector(".event-map-pin")?.classList.toggle("active", locationId === activeLocationId);
   });
 
   const details = document.querySelector("#event-details");
@@ -1386,7 +1462,7 @@ function bindMobileEventSheet() {
 }
 
 async function toggleRsvp(eventId) {
-  if (!state.loggedIn || state.ufidStatus === "required") {
+  if (!state.loggedIn) {
     state.pendingIntent = { type: "rsvp", eventId };
     state.authPromptOpen = true;
     state.authPromptAction = "rsvp";
@@ -1469,28 +1545,52 @@ function initEventMap() {
     if (isMobileEventSheetViewport()) setMobileEventSheetMode("closed");
   });
 
+  drawMapMarkers();
+  window.__FQC_MAP__ = eventMap;
+  window.setTimeout(() => eventMap?.invalidateSize(), 120);
+}
+
+// Pins follow the visible tab, so Past events only appear while Past is open.
+function drawMapMarkers() {
+  if (!eventMap) return;
+  eventMarkers.forEach((marker) => marker.remove());
+  eventMarkers = new Map();
+
   const bounds = [];
-  events.forEach((event) => {
-    const location = getEventLocation(event);
-    const day = Number(event.date.slice(8, 10));
+  const selectedLocationId = getEventLocation(getEvent(state.selectedEventId))?.id;
+  const groups = eventsByLocation(eventsForMode());
+  groups.forEach(({ location, events: locationEvents }) => {
+    const count = locationEvents.length;
     const marker = window.L.marker([location.lat, location.lng], {
-      title: event.title,
-      alt: `${event.title} at ${location.name}`,
+      title: `${location.name} · ${count} ${count === 1 ? "event" : "events"}`,
+      alt: `${count} ${count === 1 ? "event" : "events"} at ${location.name}`,
       icon: window.L.divIcon({
         className: "event-marker-shell",
-        html: `<span class="event-map-pin${event.id === state.selectedEventId ? " active" : ""}" data-event-id="${event.id}"><span>${day}</span></span>`,
+        html: `<span class="event-map-pin${location.id === selectedLocationId ? " active" : ""}" data-location-id="${escapeHtml(location.id)}"><span>${count}</span></span>`,
         iconSize: [44, 48],
         iconAnchor: [22, 44]
       }),
       bubblingMouseEvents: false
     }).addTo(eventMap);
-    marker.on("click", () => selectEvent(event.id, { revealSheet: true }));
-    eventMarkers.set(event.id, marker);
+    marker.on("click", () => {
+      // Tapping a location keeps the current pick when it already lives there,
+      // otherwise it opens the soonest event at that spot.
+      const alreadyHere = locationEvents.some((event) => event.id === state.selectedEventId);
+      selectEvent(alreadyHere ? state.selectedEventId : locationEvents[0].id, { revealSheet: true });
+    });
+    eventMarkers.set(location.id, marker);
     bounds.push([location.lat, location.lng]);
   });
 
-  eventMap.fitBounds(bounds, { padding: [54, 54], maxZoom: 16 });
-  window.setTimeout(() => eventMap?.invalidateSize(), 120);
+  // Only reframe when the pins actually change. Refitting on every repaint is
+  // what yanked the map away after a background Sheet refresh.
+  const signature = groups.map(({ location, events: list }) => `${location.id}:${list.length}`).join("|");
+  if (bounds.length && signature !== mapPinSignature) {
+    eventMap.fitBounds(bounds, { padding: [54, 54], maxZoom: 16 });
+  } else if (savedMapView) {
+    eventMap.setView(savedMapView.center, savedMapView.zoom, { animate: false });
+  }
+  mapPinSignature = signature;
 }
 
 function focusSelectedEvent() {
@@ -1539,7 +1639,6 @@ function applyMemberProfile(profile) {
   state.leadership = ["president", "vice_president", "treasurer"].includes(profile.leadership) ? profile.leadership : "";
   state.officerTitle = profile.officerTitle || "";
   state.canManageOfficers = profile.canManageOfficers === true;
-  state.ufidStatus = ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member";
   state.passkeyCount = Number(profile.passkeyCount) || 0;
   state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
   state.memberPoints = state.checkedInEvents.length;
@@ -1557,7 +1656,7 @@ function applyMemberProfile(profile) {
 }
 
 async function refreshLeaderboard(force = false) {
-  if (!state.loggedIn || state.ufidStatus === "required" || state.leaderboardLoading) return;
+  if (!state.loggedIn || state.leaderboardLoading) return;
   if (state.leaderboardLoaded && !force) return;
   state.leaderboardLoading = true;
   state.leaderboardError = "";
@@ -1573,6 +1672,16 @@ async function refreshLeaderboard(force = false) {
     state.leaderboardLoading = false;
     if (state.view === "profile") render();
   }
+}
+
+function closeMemberProfile() {
+  state.memberProfileUid = "";
+  render();
+}
+
+function closeFullLeaderboard() {
+  state.leaderboardExpanded = false;
+  render();
 }
 
 let actionFeedbackTimer = 0;
@@ -1592,6 +1701,41 @@ function showActionFeedback(kind, message) {
   if (kind !== "working") {
     actionFeedbackTimer = window.setTimeout(() => feedback.classList.remove("visible"), kind === "success" ? 2400 : 4200);
   }
+}
+
+function confirmDestructiveAction({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel" }) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "signup-modal-backdrop confirm-backdrop";
+    backdrop.innerHTML = `
+      <section class="signup-modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+        <h2 id="confirm-title">${escapeHtml(title)}</h2>
+        <p id="confirm-message">${escapeHtml(message)}</p>
+        <div class="confirm-actions">
+          <button class="secondary-button" type="button" data-confirm-cancel>${escapeHtml(cancelLabel)}</button>
+          <button class="danger-button" type="button" data-confirm-accept>${escapeHtml(confirmLabel)}</button>
+        </div>
+      </section>
+    `;
+    const close = (result) => {
+      document.removeEventListener("keydown", onKeyDown);
+      backdrop.remove();
+      document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen || Boolean(state.memberProfileUid) || state.leaderboardExpanded);
+      resolve(result);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close(false);
+    };
+    backdrop.querySelector("[data-confirm-cancel]").addEventListener("click", () => close(false));
+    backdrop.querySelector("[data-confirm-accept]").addEventListener("click", () => close(true));
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close(false);
+    });
+    document.addEventListener("keydown", onKeyDown);
+    document.body.append(backdrop);
+    document.body.classList.add("signup-modal-open");
+    backdrop.querySelector("[data-confirm-cancel]").focus();
+  });
 }
 
 function setActiveControlBusy(busy) {
@@ -1653,6 +1797,7 @@ async function refreshMemberDirectory() {
     const directory = await loadMembers();
     state.members = directory.members;
     state.leadershipSlots = directory.leadershipSlots;
+    state.leadershipRoster = directory.leadershipRoster || [];
     state.authError = "";
   } catch (error) {
     state.authError = readableAuthError(error);
@@ -1679,12 +1824,14 @@ async function refreshOfficerResources(force = false) {
   }
 }
 
-async function refreshOfficerOperations(force = false) {
+async function refreshOfficerOperations(force = false, { silent = false } = {}) {
   if (state.memberRole !== "officer" || state.officerOperationsLoading) return;
   if (state.officerOperationsLoaded && !force) return;
   state.officerOperationsLoading = true;
   state.officerOperationsError = "";
-  if (state.view === "profile") render();
+  // A silent refresh already has a workspace on screen, so skip the loading pass
+  // and repaint once with the saved values instead of flashing twice.
+  if (state.view === "profile" && !silent) render();
   try {
     state.officerOperations = await loadOfficerEventOperations();
     state.officerOperationsLoaded = true;
@@ -1732,20 +1879,6 @@ function renderCheckIn() {
           <h2>Sign in to check in</h2>
           <p>Use your FQC profile for tabling, GBMs, workshops, speaker sessions, and socials.</p>
           <button class="primary-button" id="go-to-login" type="button">Open Profile Login</button>
-        </section>
-      </section>
-    `;
-  }
-
-  if (state.ufidStatus === "required") {
-    return `
-      <section class="view" data-screen="checkin">
-        <section class="section checkin-gate">
-          <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
-          <p class="section-kicker">One-time account setup</p>
-          <h2>Verify your UFID first</h2>
-          <p>Finish your secure profile before checking in to an event.</p>
-          <button class="primary-button" id="go-to-login" type="button">Finish Account Setup</button>
         </section>
       </section>
     `;
@@ -1809,7 +1942,7 @@ function renderOfficerWorkspace() {
     <section class="section officer-operations">
       <div class="section-header officer-operations-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div></div>
       <datalist id="uf-location-options">${(operations?.locations || []).map((location) => `<option value="${escapeHtml(location)}"></option>`).join("")}</datalist>
-      <details class="officer-event-group" open>
+      <details class="officer-event-group" ${disclosureAttrs("officer-group-current", true)}>
         <summary><span><strong>Current Events</strong><small>${currentEvents.length} scheduled</small></span></summary>
         <div class="officer-event-group-body">
           <div class="officer-event-list" aria-label="Current officer events">
@@ -1818,7 +1951,7 @@ function renderOfficerWorkspace() {
           ${currentEvents.length > 4 && !state.showAllOfficerEvents ? `<button class="officer-show-more" id="show-all-officer-events" type="button">Show all ${currentEvents.length} events</button>` : ""}
         </div>
       </details>
-      <details class="officer-event-group completed-events-group">
+      <details class="officer-event-group completed-events-group" ${disclosureAttrs("officer-group-completed")}>
         <summary><span><strong>Completed Events</strong><small>${completedEvents.length} archived</small></span></summary>
         <div class="officer-event-group-body">
           <div class="officer-event-list" aria-label="Completed officer events">
@@ -1827,7 +1960,7 @@ function renderOfficerWorkspace() {
         </div>
       </details>
       <div class="officer-event-footer">
-        <details class="officer-add-event">
+        <details class="officer-add-event" ${disclosureAttrs("officer-add-event")}>
           <summary><span><svg><use href="#icon-plus"></use></svg>Add Event</span></summary>
           ${renderOfficerEventForm({ eventStatus: "Planning" }, true)}
         </details>
@@ -1896,38 +2029,59 @@ function renderOfficerEventForm(event = {}, creating = false) {
   `;
 }
 
+function budgetSelectOptions(options, current) {
+  const value = String(current || "").trim();
+  const known = options.some((option) => option.toLowerCase() === value.toLowerCase());
+  return [
+    ...(value && !known ? [value] : []),
+    ...options
+  ].map((option) => `<option value="${escapeHtml(option)}" ${option.toLowerCase() === value.toLowerCase() ? "selected" : ""}>${escapeHtml(option)}</option>`).join("");
+}
+
 function renderBudgetItemForm(item, event, creating = false) {
   const row = creating ? "new" : item.row;
   return `
     <form class="event-budget-item-form" data-budget-item-form="${escapeHtml(String(row))}" data-budget-event="${escapeHtml(event.id)}">
-      <div class="budget-item-heading"><strong>${creating ? "New purchase" : escapeHtml(item.item)}</strong>${creating ? "" : `<span>${formatMoney(item.plannedCost)} planned</span>`}</div>
+      <div class="budget-item-heading">
+        <strong>${creating ? "New purchase" : escapeHtml(item.item)}</strong>
+        ${creating ? "" : `<span>${formatMoney(item.plannedCost)} planned</span>`}
+      </div>
       <div class="budget-edit-grid">
         <div class="form-row budget-item-name"><label>Item</label><input name="item" aria-label="Item" value="${escapeHtml(item.item || "")}" required /></div>
         <div class="form-row"><label>Quantity</label><input name="quantity" aria-label="Quantity" type="number" min="0" step="0.01" value="${escapeHtml(item.quantity || "")}" /></div>
-        <div class="form-row"><label>Unit</label><input name="unit" aria-label="Unit" value="${escapeHtml(item.unit || "")}" placeholder="each / order" /></div>
+        <div class="form-row"><label>Unit</label>
+          <select name="unit" aria-label="Unit">${budgetSelectOptions(BUDGET_UNITS, item.unit || "")}</select>
+        </div>
         <div class="form-row"><label>Unit cost</label><input name="unitCost" aria-label="Unit cost" type="number" min="0" step="0.01" value="${escapeHtml(item.unitCost || "")}" /></div>
         <div class="form-row"><label>Actual cost</label><input name="actualCost" aria-label="Actual cost" type="number" min="0" step="0.01" value="${escapeHtml(item.actualCost || "")}" /></div>
-        <div class="form-row"><label>Funding source</label><input name="fundingSource" aria-label="Funding source" value="${escapeHtml(item.fundingSource || "")}" /></div>
-        <div class="form-row"><label>Budget status</label><input name="status" aria-label="Budget status" value="${escapeHtml(item.status || "Estimate")}" /></div>
+        <div class="form-row"><label>Funding source</label>
+          <select name="fundingSource" aria-label="Funding source">${budgetSelectOptions(FUNDING_SOURCES, item.fundingSource || "")}</select>
+        </div>
+        <div class="form-row"><label>Budget status</label>
+          <select name="status" aria-label="Budget status">${budgetSelectOptions(BUDGET_STATUSES, item.status || "Estimate")}</select>
+        </div>
         <div class="form-row budget-item-notes"><label>Budget notes</label><textarea name="notes" aria-label="Budget notes" maxlength="800">${escapeHtml(item.notes || "")}</textarea></div>
       </div>
-      <button class="secondary-button" type="submit">${creating ? "Add Budget Item" : "Save Money Changes"}</button>
+      <div class="budget-item-actions">
+        <button class="secondary-button" type="submit">${creating ? "Add Budget Item" : "Save Money Changes"}</button>
+        ${creating ? "" : `<button class="danger-button budget-item-remove" type="button" data-remove-budget-item="${escapeHtml(String(row))}" data-budget-item-name="${escapeHtml(item.item || "this line")}">Remove Line</button>`}
+      </div>
     </form>
   `;
 }
 
 function renderOfficerEventCard(event, allBudgetItems) {
   const items = allBudgetItems.filter((item) => item.eventId === event.id);
-  const open = event.id === state.selectedOfficerEventId;
   const rsvps = event.rsvps || [];
   const completed = isOfficerEventCompleted(event);
+  const budgetSummary = `${formatMoney(event.plannedBudget)} planned · ${formatMoney(event.actualSpend)} actual`;
   return `
-    <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" ${open ? "open" : ""}>
+    <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" ${disclosureAttrs(`officer-card-${event.id}`, event.id === state.selectedOfficerEventId)}>
       <summary>
         <span class="officer-event-date"><small>${escapeHtml(formatEventDate(event, { month: "short" }))}</small><strong>${escapeHtml(formatEventDate(event, { day: "2-digit" }))}</strong></span>
         <span class="officer-event-summary"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || "Location pending")} · ${escapeHtml(event.time)}</small></span>
         <span class="event-status-pill status-${escapeHtml(String(event.eventStatus || "planned").toLowerCase().replace(/[^a-z]+/g, "-"))}">${escapeHtml(event.eventStatus || "Planned")}</span>
-        <span class="officer-event-money">${formatMoney(event.plannedBudget)}</span>
+        <span class="officer-event-money"><small>Planned</small><strong>${formatMoney(event.plannedBudget)}</strong></span>
       </summary>
       <div class="officer-event-body">
         <div class="officer-event-stats">
@@ -1946,19 +2100,22 @@ function renderOfficerEventCard(event, allBudgetItems) {
           <button class="primary-button" type="button" data-start-event="${escapeHtml(event.id)}">${state.checkInOpen && state.activeCheckInEventId === event.id ? "Check-In Is Live" : "Start Event Check-In"}</button>
           ${state.checkInOpen && state.activeCheckInEventId === event.id ? `<button class="secondary-button" id="close-checkin-${escapeHtml(event.id)}" data-close-event="${escapeHtml(event.id)}" type="button">Close Check-In</button>` : ""}
         </div>`}
-        <details class="officer-event-subsection">
+        <details class="officer-event-subsection" ${disclosureAttrs(`officer-notes-${event.id}`)}>
           <summary>Event details & notes</summary>
           ${renderOfficerEventForm(event)}
         </details>
-        <details class="officer-event-subsection">
+        <details class="officer-event-subsection" ${disclosureAttrs(`officer-rsvps-${event.id}`)}>
           <summary><span>RSVPs</span><small>${rsvps.length} going · ${event.officerRsvps?.length || 0} officers</small></summary>
           <div class="event-rsvp-roster">${rsvps.length ? rsvps.map((entry) => `<span><strong>${escapeHtml(entry.displayName)}</strong><small>${entry.role === "officer" ? "Officer" : "Member"}</small></span>`).join("") : '<p class="empty-state">No RSVPs yet.</p>'}</div>
         </details>
-        <details class="officer-event-subsection">
-          <summary><span>Budget & purchases</span><small>${items.length} ${items.length === 1 ? "item" : "items"} · ${escapeHtml(event.budgetStatus || "No plan")}</small></summary>
+        <details class="officer-event-subsection" ${disclosureAttrs(`officer-budget-${event.id}`)}>
+          <summary><span>Budget & purchases</span><small>${items.length} ${items.length === 1 ? "item" : "items"} · ${escapeHtml(budgetSummary)}</small></summary>
           <div class="event-budget-editor">
             ${items.map((item) => renderBudgetItemForm(item, event)).join("") || '<p class="empty-state">No budget items yet.</p>'}
-            ${renderBudgetItemForm({}, event, true)}
+            <details class="budget-add-line" ${disclosureAttrs(`officer-budget-add-${event.id}`)}>
+              <summary><span><svg><use href="#icon-plus"></use></svg>Add another line</span></summary>
+              ${renderBudgetItemForm({}, event, true)}
+            </details>
           </div>
         </details>
       </div>
@@ -2049,91 +2206,75 @@ function renderOfficerResources() {
   `;
 }
 
-function renderRoleWorkspace() {
-  if (state.memberRole !== "officer") return "";
-  return `
-    <section class="section admin-roster">
-      <div class="section-header">
-        <div>
-          <p class="section-kicker">${state.canManageOfficers ? "President & Treasurer" : "Current officers"}</p>
-          <h2>${state.canManageOfficers ? "Officer Management" : "Officer Recommendations"}</h2>
-          <p>${state.canManageOfficers
-            ? "Promote members or remove ordinary officers. President and Treasurer accounts are protected."
-            : "Recommend a signed-in member for officer access. The President or Treasurer completes every role change."}</p>
-        </div>
-        <button class="secondary-button" id="refresh-members" type="button" ${state.membersLoading ? "disabled" : ""}>${state.membersLoading ? "Loading…" : "Refresh"}</button>
-      </div>
-      ${state.canManageOfficers && state.leadershipSlots.length ? `
-        <div class="member-roster leadership-slot-roster" aria-label="Pending leadership matches">
-          <h3>Pending leadership matches</h3>
-          <p>These Sheet rows are waiting for a secure UFID match. Choose the account only after that person finishes UFID setup.</p>
-          ${state.leadershipSlots.map((slot) => {
-            const eligible = state.members.filter((member) => member.role === "member" && member.ufidStatus !== "required");
-            return `
-              <article class="member-role-row" data-leadership-row="${slot.row}">
-                <div class="member-identity">
-                  <strong>${escapeHtml(slot.name)}</strong>
-                  <span>${escapeHtml(slot.title)} · Waiting for account match</span>
-                </div>
-                <label>
-                  <span class="sr-only">Account for ${escapeHtml(slot.name)}</span>
-                  <select data-leadership-member="${slot.row}" ${eligible.length ? "" : "disabled"}>
-                    <option value="">Choose signed-in member</option>
-                    ${eligible.map((member) => `<option value="${escapeHtml(member.uid)}">${escapeHtml(member.displayName)} (${escapeHtml(member.email || "no email")})</option>`).join("")}
-                  </select>
-                </label>
-                <button class="secondary-button" data-assign-leadership="${slot.row}" type="button" ${eligible.length ? "" : "disabled"}>Link role</button>
-              </article>
-            `;
-          }).join("")}
-        </div>
-      ` : ""}
-      <div class="member-roster" aria-live="polite">
-        ${state.membersLoading && !state.members.length ? '<p class="empty-state">Loading FQC accounts…</p>' : state.members.length ? state.members.map((member) => `
-          <article class="member-role-row" data-member-id="${escapeHtml(member.uid)}">
-            <div class="member-identity">
-              <strong>${escapeHtml(member.displayName)}</strong>
-              <span>${escapeHtml(member.email || "No shared email")} · ${escapeHtml(profileRoleLabel(member))}${member.officerNomination === "pending" ? " · Recommendation pending" : ""}</span>
-            </div>
-            ${state.canManageOfficers ? `
-              <label>
-                <span class="sr-only">Role for ${escapeHtml(member.displayName)}</span>
-                <select data-member-role="${escapeHtml(member.uid)}" ${member.leadership ? "disabled" : ""}>
-                  <option value="member" ${member.role === "member" ? "selected" : ""}>Member</option>
-                  <option value="officer" ${member.role === "officer" ? "selected" : ""}>Officer</option>
-                </select>
-              </label>
-              <button class="secondary-button" data-save-member-role="${escapeHtml(member.uid)}" type="button" ${member.leadership ? "disabled" : ""}>Save role</button>
-            ` : member.role === "member" ? `
-              <button class="secondary-button" data-recommend-officer="${escapeHtml(member.uid)}" type="button" ${member.officerNomination === "pending" ? "disabled" : ""}>${member.officerNomination === "pending" ? "Recommended" : "Recommend officer"}</button>
-            ` : '<span class="role-badge officer">Officer</span>'}
-          </article>
-        `).join("") : '<p class="empty-state">No FQC accounts have signed in yet.</p>'}
-      </div>
-    </section>
-  `;
+function leadershipKeyForTitle(title = "") {
+  const normalized = String(title).trim().toLowerCase();
+  if (normalized === "president") return "president";
+  if (normalized === "vice president" || normalized === "vice-president" || normalized === "vp") return "vice_president";
+  if (normalized === "treasurer") return "treasurer";
+  return "";
 }
 
-function renderUfidForm(onboarding = false) {
+// Who the app believes holds a seat. Column B only carries an account id for seats
+// linked since that change, so the server cannot resolve older ones on its own —
+// and a role lookup cannot separate two accounts sharing one leadership value.
+function leadershipSeatCandidates(seat) {
+  const leadership = leadershipKeyForTitle(seat.title);
+  return state.members.filter((member) => leadership
+    ? member.leadership === leadership
+    : member.role === "officer" && member.officerTitle === seat.title);
+}
+
+function renderLeadershipSlots() {
+  const roster = state.leadershipRoster.length
+    ? state.leadershipRoster
+    : state.leadershipSlots.map((slot) => ({ ...slot, active: false, linked: false, pending: true }));
+  if (!roster.length) {
+    return state.membersLoading ? '<p class="empty-state">Loading the officer roster…</p>' : "";
+  }
+  // Anyone without a leadership seat of their own can take one, so an existing
+  // officer can move up rather than having to be demoted to a member first.
+  const eligible = (seatTitle) => state.members.filter((member) =>
+    !member.leadership || member.leadership === leadershipKeyForTitle(seatTitle));
+  const pendingCount = roster.filter((seat) => seat.pending).length;
   return `
-    <section class="section ufid-card${onboarding ? " ufid-onboarding" : ""}">
-      <div class="section-header">
-        <div>
-          <p class="section-kicker">${onboarding ? "One-time account setup" : "Secure role verification"}</p>
-          <h2>${onboarding ? "Enter your UFID" : "Verify a different UFID"}</h2>
-          <p>Firebase compares a protected fingerprint with the officer roster. The eight-digit UFID is never saved or sent back to the browser.</p>
-        </div>
-        ${onboarding ? `<button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button>` : ""}
-      </div>
-      <div class="form-row">
-        <label for="member-ufid">Eight-digit UFID</label>
-        <input id="member-ufid" type="text" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="off" placeholder="8-digit UFID" />
-      </div>
-      <button class="primary-button" id="verify-ufid" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>${onboarding ? "Finish Account Setup" : "Check UFID Role"}</span></button>
-      ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Checking the secure officer roster…</p>' : ""}
-      ${onboarding ? renderAuthFeedback() : ""}
-      <p class="auth-privacy">A matching active roster entry receives its listed role, including President, Treasurer, Vice President, or another officer title. No match creates a normal Member account.</p>
-    </section>
+    <div class="member-roster leadership-slot-roster" aria-label="Officer roster">
+      <h3>Officer roster</h3>
+      <p>Every seat on the <strong>Current Leadership</strong> tab. ${pendingCount
+        ? `${pendingCount} ${pendingCount === 1 ? "seat is" : "seats are"} still waiting on an account — link the member who holds that seat.`
+        : "Every seat is linked to an account."}</p>
+      ${roster.map((seat) => `
+        <article class="member-role-row leadership-seat${seat.pending ? " is-pending" : ""}" data-leadership-row="${seat.row}">
+          <div class="member-identity">
+            <strong>${escapeHtml(seat.name)}</strong>
+            <span>${escapeHtml(seat.title)} · ${seat.pending ? "Waiting for an account" : seat.linked ? "Linked to an account" : "Listed, not yet active"}</span>
+          </div>
+          ${seat.pending && state.canManageOfficers ? `
+            <label>
+              <span class="sr-only">Account for ${escapeHtml(seat.name)}</span>
+              <select data-leadership-member="${seat.row}" ${eligible(seat.title).length ? "" : "disabled"}>
+                <option value="">Choose an account</option>
+                ${eligible(seat.title).map((member) => `<option value="${escapeHtml(member.uid)}">${escapeHtml(member.displayName)} (${escapeHtml(member.email || "no email")})</option>`).join("")}
+              </select>
+            </label>
+            <button class="secondary-button" data-assign-leadership="${seat.row}" type="button" ${eligible(seat.title).length ? "" : "disabled"}>Link role</button>
+          ` : `
+            <span class="leadership-seat-status ${seat.pending ? "pending" : "active"}">${seat.pending ? "Pending" : "Active"}</span>
+            ${state.canManageOfficers ? (() => {
+              const candidates = leadershipSeatCandidates(seat);
+              const picker = candidates.length > 1 ? `
+                <label>
+                  <span class="sr-only">Account holding ${escapeHtml(seat.title)}</span>
+                  <select data-leadership-holder="${seat.row}">
+                    ${candidates.map((member) => `<option value="${escapeHtml(member.uid)}">${escapeHtml(member.displayName)} (${escapeHtml(member.email || "no email")})</option>`).join("")}
+                  </select>
+                </label>
+              ` : "";
+              return `${picker}<button class="secondary-button" data-open-leadership="${seat.row}" data-holder-uid="${escapeHtml(candidates.length === 1 ? candidates[0].uid : "")}" type="button">Open seat</button>`;
+            })() : ""}
+          `}
+        </article>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -2143,21 +2284,80 @@ function renderAccountSettings() {
     return `<section class="section settings-account-summary"><div class="section-header"><div><p class="section-kicker">Account management</p><h2>No account signed in</h2><p>Open Profile to log in or create an account.</p></div><button class="secondary-button" id="settings-go-to-login" type="button">Open Login</button></div></section>`;
   }
   return `
-    <section class="section settings-account-summary">
-      <div class="section-header"><div><p class="section-kicker">Account management</p><h2>${escapeHtml(state.memberName)}</h2><p>${state.memberUsername ? `@${escapeHtml(state.memberUsername)} · ` : ""}${escapeHtml(state.memberEmail || "Secure Firebase account")} · ${escapeHtml(roleLabel())}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
-      <div class="form-row"><label for="member-name">Display name</label><input id="member-name" value="${escapeHtml(state.memberName)}" /></div>
-      <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
-      ${renderAuthFeedback()}
-    </section>
+    <details class="section settings-group settings-account-summary" ${disclosureAttrs("settings-account", true)}>
+      <summary><span><p class="section-kicker">Account management</p><strong>${escapeHtml(state.memberName)}</strong></span><small>${escapeHtml(roleLabel())}</small></summary>
+      <div class="settings-group-content">
+        <div class="section-header"><div><p>${state.memberUsername ? `@${escapeHtml(state.memberUsername)} · ` : ""}${escapeHtml(state.memberEmail || "Secure Firebase account")}</p></div><button class="secondary-button" id="profile-logout" type="button" ${state.authBusy ? "disabled" : ""}>Sign Out</button></div>
+        <div class="form-row">
+          <label for="member-name">Display name</label>
+          <input id="member-name" maxlength="${MAX_DISPLAY_NAME}" value="${escapeHtml(state.memberName)}" />
+          <small class="field-hint">Any name up to ${MAX_DISPLAY_NAME} characters, as long as another member is not already using it.</small>
+        </div>
+        <button class="primary-button" id="save-profile" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Save Profile</span></button>
+        ${renderAuthFeedback()}
+      </div>
+    </details>
     <details class="section settings-group passkey-card">
       <summary><span><p class="section-kicker">Security</p><strong>Passkeys & Face ID</strong></span><small>${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</small></summary>
-      <div class="settings-group-content"><p>Use Face ID, Touch ID, your screen lock, or a hardware security key next time.</p><button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button></div>
+      <div class="settings-group-content">
+        <p>Use Face ID, Touch ID, your screen lock, or a hardware security key to sign in. A passkey belongs to the device that made it unless your password manager syncs it, so add one on each device you use.</p>
+        <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
+      </div>
     </details>
-    <details class="section settings-group">
-      <summary><span><p class="section-kicker">Identity</p><strong>UFID & role verification</strong></span><small>${escapeHtml(roleLabel())}</small></summary>
-      <div class="settings-group-content">${renderUfidForm(false)}</div>
+    <details class="section settings-group password-card">
+      <summary><span><p class="section-kicker">Security</p><strong>Password</strong></span><small>Backup sign-in</small></summary>
+      <div class="settings-group-content">
+        <p>A password is how you get back in on a device that has no passkey — a borrowed laptop, a new phone, or a lost device. We email you a link to set one; it works whether or not you already have a password.</p>
+        <button class="primary-button" id="send-password-link" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Email Me a Password Link</span></button>
+        <p class="field-hint">The link goes to ${escapeHtml(state.memberEmail || "your UF inbox")} and expires after a while. Ask for a new one any time.</p>
+      </div>
     </details>
-    ${state.memberRole === "officer" ? renderRoleWorkspace() : ""}
+  `;
+}
+
+function renderInstallCard() {
+  // Standalone display only kicks in once FQC is installed to the home screen,
+  // so the browser chrome stays until someone actually adds it.
+  if (isInstalledApp()) {
+    return `
+      <section class="section install-card is-installed">
+        <div class="section-header"><div><p class="section-kicker">Installed app</p><h2>Running as the FQC app</h2><p>No address bar, no browser buttons — you are in the installed app.</p></div></div>
+      </section>
+    `;
+  }
+  return `
+    <section class="section install-card">
+      <div class="section-header">
+        <div>
+          <p class="section-kicker">Home screen app</p>
+          <h2>Install FQC</h2>
+          <p>Adds the FQC icon to your home screen and opens full screen — no address bar, search field, or browser buttons.</p>
+        </div>
+      </div>
+      ${installPrompt
+        ? '<button class="primary-button" id="install-app" type="button"><svg><use href="#icon-plus"></use></svg><span>Install FQC</span></button>'
+        : isIosDevice()
+          ? '<ol class="install-steps"><li>Tap the <strong>Share</strong> button in Safari.</li><li>Choose <strong>Add to Home Screen</strong>.</li><li>Open FQC from the new icon.</li></ol>'
+          : '<ol class="install-steps"><li>Open your browser menu.</li><li>Choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.</li><li>Open FQC from the new icon.</li></ol>'}
+    </section>
+  `;
+}
+
+function renderOfficerSettings() {
+  if (state.memberRole !== "officer") return "";
+  return `
+    <details class="section settings-group officer-settings-group" ${disclosureAttrs("settings-officer-controls")}>
+      <summary><span><p class="section-kicker">Officers only</p><strong>Officer controls</strong></span><small>${escapeHtml(roleLabel())}</small></summary>
+      <div class="settings-group-content">
+        <p>These switches apply to the whole club, not just this device. Members never see this section.</p>
+        <label class="settings-switch-row" for="checkin-location-required">
+          <span><strong>Require members to be within 2 miles</strong><small>Checked once when they tap I’m Here; precise coordinates are not stored.</small></span>
+          <input id="checkin-location-required" type="checkbox" role="switch" ${state.checkInRequireLocation ? "checked" : ""} ${state.authBusy ? "disabled" : ""} />
+        </label>
+        <p class="officer-settings-note">Members are managed from the leaderboard on the Profile screen — tap anyone in the standings to open their profile.</p>
+        ${renderLeadershipSlots()}
+      </div>
+    </details>
   `;
 }
 
@@ -2173,29 +2373,17 @@ function renderSettings() {
         <button class="secondary-button" id="close-settings" type="button">Back</button>
       </section>
       ${renderAccountSettings()}
-      ${state.memberRole === "officer" ? `
-        <section class="section checkin-settings-card">
-          <div class="section-header">
-            <div>
-              <p class="section-kicker">Club-wide check-in</p>
-              <h2>Location verification</h2>
-              <p>This applies to every member and every active event. Turn it off only for an online event.</p>
-            </div>
-          </div>
-          <label class="settings-switch-row" for="checkin-location-required">
-            <span><strong>Require members to be within 2 miles</strong><small>Checked once when they tap I’m Here; precise coordinates are not stored.</small></span>
-            <input id="checkin-location-required" type="checkbox" role="switch" ${state.checkInRequireLocation ? "checked" : ""} ${state.authBusy ? "disabled" : ""} />
-          </label>
-        </section>
-      ` : ""}
-      <section class="section">
-        <div class="section-header">
-          <div><h2>Updates</h2><p>Fetch the newest app shell while keeping your account and saved app data.</p></div>
+      ${renderInstallCard()}
+      ${renderOfficerSettings()}
+      <details class="section settings-group" ${disclosureAttrs("settings-updates")}>
+        <summary><span><p class="section-kicker">App shell</p><strong>Updates</strong></span><small>v${APP_VERSION}</small></summary>
+        <div class="settings-group-content">
+          <p>Fetch the newest app shell while keeping your account and saved app data.</p>
+          <button class="primary-button" id="check-for-updates" type="button" ${state.authBusy ? "disabled" : ""}>
+            <svg><use href="#icon-check"></use></svg><span>Check for Updates</span>
+          </button>
         </div>
-        <button class="primary-button" id="check-for-updates" type="button" ${state.authBusy ? "disabled" : ""}>
-          <svg><use href="#icon-check"></use></svg><span>Check for Updates</span>
-        </button>
-      </section>
+      </details>
       <details class="section settings-group version-history-settings">
         <summary><span><p class="section-kicker">What changed</p><h2>Version History</h2></span><small>v${APP_VERSION}</small></summary>
         <div class="settings-group-content version-history">
@@ -2236,32 +2424,157 @@ function renderLeaderboard() {
     `;
   }
 
-  const currentUid = state.authUser?.uid || "";
   const entries = state.leaderboardEntries;
+  const participants = state.leaderboardParticipantCount || entries.length;
+  const overflow = Math.max(0, entries.length - LEADERBOARD_PREVIEW);
   return `
     <section class="section leaderboard-section" aria-labelledby="leaderboard-title">
       <div class="section-header">
-        <div><p class="section-kicker">Club standings</p><h2 id="leaderboard-title">Leaderboard</h2><p>${state.leaderboardParticipantCount || entries.length} participant${(state.leaderboardParticipantCount || entries.length) === 1 ? "" : "s"} · verified event check-ins</p></div>
+        <div><p class="section-kicker">Club standings</p><h2 id="leaderboard-title">Leaderboard</h2><p>${participants} participant${participants === 1 ? "" : "s"} · verified event check-ins</p></div>
         <button class="secondary-button leaderboard-refresh" id="refresh-leaderboard" type="button" ${state.leaderboardLoading ? "disabled" : ""}>${state.leaderboardLoading ? "Refreshing…" : "Refresh"}</button>
       </div>
-      ${entries.length ? `<div class="leaderboard">${entries.map((entry, index) => {
-        const rank = index + 1;
-        const isCurrentUser = entry.uid === currentUid;
-        const previous = index > 0 ? entries[index - 1] : null;
-        const pointsToOvertake = isCurrentUser && previous ? Math.max(1, previous.points - entry.points + 1) : 0;
-        return `
-          <article class="leader-card rank-${Math.min(rank, 4)}${isCurrentUser ? " current-user" : ""}">
-            <span class="leader-rank" aria-label="Rank ${rank}">${rank === 1 ? "♛" : rank}</span>
-            <div class="leader-identity">
-              <h3>${isCurrentUser ? "You" : escapeHtml(entry.displayName)}</h3>
-              <p>${entry.role === "officer" ? "Officer" : "Member"} · ${entry.points} event${entry.points === 1 ? "" : "s"} attended</p>
-              ${pointsToOvertake ? `<small>${pointsToOvertake} ${pointsToOvertake === 1 ? "point" : "points"} to move ahead</small>` : ""}
-            </div>
-            <strong class="leader-points">${entry.points} <span>PT${entry.points === 1 ? "" : "S"}</span></strong>
-          </article>
-        `;
-      }).join("")}</div>` : '<p class="empty-state">No ranked members yet. The first event check-in starts the standings.</p>'}
+      ${entries.length
+        ? renderLeaderboardRows(entries.slice(0, LEADERBOARD_PREVIEW))
+        : '<p class="empty-state">No ranked members yet. The first event check-in starts the standings.</p>'}
+      ${overflow ? `<button class="secondary-button leaderboard-show-more" id="open-full-leaderboard" type="button">Show all ${entries.length} members</button>` : ""}
     </section>
+    ${state.leaderboardExpanded ? renderLeaderboardModal() : ""}
+    ${state.memberProfileUid ? renderMemberProfileModal() : ""}
+  `;
+}
+
+// Ranks come from the full standings so the preview and the popup agree.
+function renderLeaderboardRows(visibleEntries) {
+  const entries = state.leaderboardEntries;
+  const standings = competitionStandings(entries);
+  const currentUid = state.authUser?.uid || "";
+  const officerView = state.memberRole === "officer";
+  return `<ol class="leaderboard" ${officerView ? 'aria-label="Standings — open a member to manage them"' : ""}>${visibleEntries.map((entry) => {
+    const index = entries.indexOf(entry);
+    const rank = standings[index];
+    const isCurrentUser = entry.uid === currentUid;
+    const previous = index > 0 ? entries[index - 1] : null;
+    const pointsToOvertake = isCurrentUser && previous ? Math.max(1, previous.points - entry.points + 1) : 0;
+    const identity = `
+        <span class="leader-rank" aria-label="Rank ${rank}">${rank}</span>
+        <span class="leader-identity">
+          <strong>${isCurrentUser ? "You" : escapeHtml(entry.displayName)}</strong>
+          <span class="leader-meta">${entry.role === "officer" ? "Officer" : "Member"} · ${entry.points} event${entry.points === 1 ? "" : "s"} attended</span>
+          ${pointsToOvertake ? `<small>${pointsToOvertake} ${pointsToOvertake === 1 ? "point" : "points"} to move ahead</small>` : ""}
+        </span>
+        <strong class="leader-points">${entry.points} <span>PT${entry.points === 1 ? "" : "S"}</span></strong>
+    `;
+    return `
+      <li class="leader-row${isCurrentUser ? " current-user" : ""}">
+        ${officerView
+          ? `<button class="leader-open" type="button" data-open-member="${escapeHtml(entry.uid)}" aria-label="Open ${escapeHtml(entry.displayName)}’s member profile">${identity}</button>`
+          : `<div class="leader-open is-static">${identity}</div>`}
+      </li>
+    `;
+  }).join("")}</ol>`;
+}
+
+function renderLeaderboardModal() {
+  const entries = state.leaderboardEntries;
+  const participants = state.leaderboardParticipantCount || entries.length;
+  return `
+    <div class="signup-modal-backdrop leaderboard-backdrop" id="leaderboard-backdrop">
+      <section class="signup-modal leaderboard-modal" role="dialog" aria-modal="true" aria-labelledby="full-leaderboard-title">
+        <button class="signup-modal-close" id="close-full-leaderboard" type="button" aria-label="Close full leaderboard">×</button>
+        <p class="section-kicker">Club standings</p>
+        <h2 id="full-leaderboard-title">Full Leaderboard</h2>
+        <p class="leaderboard-modal-meta">${participants} participant${participants === 1 ? "" : "s"} · scroll for the whole club</p>
+        <div class="leaderboard-scroll">${renderLeaderboardRows(entries)}</div>
+      </section>
+    </div>
+  `;
+}
+
+function competitionStandings(entries) {
+  let lastPoints = null;
+  let lastRank = 0;
+  return entries.map((entry, index) => {
+    if (entry.points !== lastPoints) {
+      lastRank = index + 1;
+      lastPoints = entry.points;
+    }
+    return lastRank;
+  });
+}
+
+function memberEventHistory(uid) {
+  const operations = state.officerOperations;
+  const rsvped = (operations?.events || [])
+    .filter((event) => (event.rsvps || []).some((entry) => entry.uid === uid))
+    .map((event) => ({ id: event.id, title: event.title, date: event.date }));
+  return { rsvped };
+}
+
+function renderMemberProfileModal() {
+  const uid = state.memberProfileUid;
+  const entry = state.leaderboardEntries.find((item) => item.uid === uid);
+  const member = state.members.find((item) => item.uid === uid);
+  const name = member?.displayName || entry?.displayName || "FQC Member";
+  const points = member ? member.points : entry?.points || 0;
+  const attended = member?.checkedInEvents || [];
+  const { rsvped } = memberEventHistory(uid);
+  const protectedLeadership = Boolean(member?.leadership);
+  const isSelf = uid === state.authUser?.uid;
+  return `
+    <div class="signup-modal-backdrop member-profile-backdrop" id="member-profile-backdrop">
+      <section class="signup-modal member-profile-modal" role="dialog" aria-modal="true" aria-labelledby="member-profile-title">
+        <button class="signup-modal-close" id="close-member-profile" type="button" aria-label="Close member profile">×</button>
+        <p class="section-kicker">Member profile</p>
+        <h2 id="member-profile-title">${escapeHtml(name)}</h2>
+        <p class="member-profile-role">${escapeHtml(member ? profileRoleLabel(member) : entry?.role === "officer" ? "Officer" : "Member")}${member?.email ? ` · ${escapeHtml(member.email)}` : ""}</p>
+        ${state.membersLoading && !member ? '<p class="empty-state">Loading account details…</p>' : ""}
+        <div class="member-profile-metrics">
+          <article><strong>${points}</strong><span>Point${points === 1 ? "" : "s"}</span></article>
+          <article><strong>${attended.length}</strong><span>Checked in</span></article>
+          <article><strong>${rsvped.length}</strong><span>RSVP’d</span></article>
+        </div>
+        <div class="member-profile-lists">
+          <section>
+            <h3>Events RSVP’d</h3>
+            ${rsvped.length
+              ? `<ul>${rsvped.map((event) => `<li><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(formatEventDate(event, { month: "short", day: "numeric" }))}</small></li>`).join("")}</ul>`
+              : '<p class="empty-state">No RSVPs recorded.</p>'}
+          </section>
+          <section>
+            <h3>Events attended</h3>
+            ${attended.length
+              ? `<ul>${attended.map((eventId) => {
+                  const event = findEventById(eventId);
+                  return `<li><strong>${escapeHtml(event?.title || eventId)}</strong>${event?.date ? `<small>${escapeHtml(formatEventDate(event, { month: "short", day: "numeric" }))}</small>` : ""}</li>`;
+                }).join("")}</ul>`
+              : '<p class="empty-state">No verified check-ins yet.</p>'}
+          </section>
+        </div>
+        ${member ? `
+          <div class="member-profile-manage">
+            <h3>Manage</h3>
+            ${state.memberRole === "officer" ? `
+              <label class="member-profile-role-row">
+                <span>Club role</span>
+                <select data-member-role="${escapeHtml(uid)}" ${protectedLeadership || isSelf ? "disabled" : ""}>
+                  <option value="member" ${member.role === "member" ? "selected" : ""} ${state.canManageOfficers ? "" : "disabled"}>Member</option>
+                  <option value="officer" ${member.role === "officer" ? "selected" : ""}>Officer</option>
+                </select>
+              </label>
+              <div class="member-profile-actions">
+                <button class="secondary-button" data-save-member-role="${escapeHtml(uid)}" type="button" ${protectedLeadership || isSelf ? "disabled" : ""}>Save role</button>
+                ${state.canManageOfficers ? `<button class="danger-button" data-remove-member="${escapeHtml(uid)}" type="button" ${protectedLeadership || isSelf ? "disabled" : ""}>Remove Member</button>` : ""}
+              </div>
+              ${protectedLeadership ? '<p class="member-profile-note">President, Vice President, and Treasurer accounts are protected.</p>' : ""}
+              ${isSelf ? '<p class="member-profile-note">You cannot change your own role.</p>' : ""}
+              ${state.canManageOfficers
+                ? ""
+                : '<p class="member-profile-note">Any officer can make a member an officer. Only the President or Treasurer can take officer access away or remove an account.</p>'}
+            ` : '<p class="member-profile-note">Only officers can change club roles.</p>'}
+          </div>
+        ` : ""}
+      </section>
+    </div>
   `;
 }
 
@@ -2309,15 +2622,10 @@ function renderSignupWizard() {
   return `
     ${signupProgress()}
     <form class="email-auth-form signup-step" id="signup-security-form">
-      <div class="signup-step-copy"><p class="section-kicker">Step 3 of 3</p><h3>Secure your account</h3><p>Use a passkey for Face ID, Touch ID, or your device lock—or create a private password.</p></div>
+      <div class="signup-step-copy"><p class="section-kicker">Step 3 of 3</p><h3>Secure your account</h3><p>Use a passkey for Face ID, Touch ID, or your device lock—or create a private password. You can add the other one later from Settings.</p></div>
       <div class="signup-summary"><span>${escapeHtml(state.signupEmail)}</span><strong>@${escapeHtml(state.signupUsername)}</strong></div>
-      <div class="form-row">
-        <label for="signup-ufid">UFID verification</label>
-        <input id="signup-ufid" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{8}" maxlength="8" value="${escapeHtml(state.signupUfid)}" placeholder="8-digit UFID" required />
-        <small>Used once to match your club role; it is not your password.</small>
-      </div>
       <fieldset class="signup-methods">
-        <legend>Choose one sign-in method</legend>
+        <legend>Choose how to sign in first</legend>
         <label class="signup-method${state.signupMethod === "passkey" ? " selected" : ""}${passkeyAvailable ? "" : " unavailable"}">
           <input type="radio" name="signup-method" value="passkey" ${state.signupMethod === "passkey" ? "checked" : ""} ${passkeyAvailable ? "" : "disabled"} />
           <svg><use href="#icon-lock"></use></svg><span><strong>Passkey</strong><small>${passkeyAvailable ? "Fastest · Face ID, Touch ID, or device lock" : "Unavailable on this device"}</small></span>
@@ -2345,12 +2653,12 @@ function renderSignupModal() {
         <button class="signup-modal-close" id="close-signup-modal" type="button" aria-label="Close account creation" ${state.authBusy ? "disabled" : ""}>×</button>
         <div class="signup-modal-heading">
           <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
-          <div><p class="section-kicker">Join Florida Quantum Computing</p><h2 id="signup-modal-title">Create your FQC account</h2><p>Three quick steps. Choose a passkey or private password—never both.</p></div>
+          <div><p class="section-kicker">Join Florida Quantum Computing</p><h2 id="signup-modal-title">Create your FQC account</h2><p>Three quick steps. Start with a passkey or a private password—you can add the other later.</p></div>
         </div>
         ${renderSignupWizard()}
-        ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Creating your account and checking your UFID once…</p>' : ""}
+        ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Creating your account…</p>' : ""}
         ${renderAuthFeedback()}
-        <p class="auth-privacy">Your UFID is checked once during this flow. There is no second verification screen.</p>
+        <p class="auth-privacy">Every new account starts as a member. Officers grant officer access from the member directory.</p>
       </section>
     </div>
   `;
@@ -2410,6 +2718,7 @@ function renderProfile() {
               </div>
               <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>Log In</span></button>
               <button class="text-button" id="forgot-password" type="button">Forgot password?</button>
+              <p class="auth-recovery-hint">No passkey on this device, or never set a password? Enter your username or UF email above and choose <strong>Forgot password</strong> — we email you a link to set one.</p>
           </form>
           <div class="auth-divider"><span>or</span></div>
           <div class="auth-provider-list">
@@ -2419,7 +2728,7 @@ function renderProfile() {
           </div>
           ${state.authBusy && !state.signupOpen ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
           ${state.signupOpen ? "" : renderAuthFeedback()}
-          <p class="auth-privacy">Firebase Authentication protects sign-in sessions. Passwords stay private, and UFIDs are one-time verification—not login credentials.</p>
+          <p class="auth-privacy">Firebase Authentication protects sign-in sessions. Use Face ID, Touch ID, or your device lock with a passkey, or your private password. You can use both, and add a passkey on every device you sign in from.</p>
         </section>
       </section>
     `;
@@ -2603,14 +2912,12 @@ function bindViewEvents() {
     render();
   });
   document.querySelector("#signup-back-username")?.addEventListener("click", () => {
-    state.signupUfid = document.querySelector("#signup-ufid")?.value.trim() || state.signupUfid;
     state.signupStep = 2;
     state.authError = "";
     render();
   });
   document.querySelectorAll('input[name="signup-method"]').forEach((input) => {
     input.addEventListener("change", () => {
-      state.signupUfid = document.querySelector("#signup-ufid")?.value.trim() || "";
       state.signupMethod = input.value;
       state.authError = "";
       render();
@@ -2618,21 +2925,14 @@ function bindViewEvents() {
   });
   document.querySelector("#signup-security-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const ufid = document.querySelector("#signup-ufid")?.value.trim() || "";
     const password = document.querySelector("#signup-password")?.value || "";
-    state.signupUfid = ufid;
-    if (!/^\d{8}$/.test(ufid)) {
-      state.authError = "Enter an eight-digit UFID for one-time role verification.";
-      render();
-      return;
-    }
     if (state.signupMethod === "password" && password.length < 10) {
       state.authError = "Use a private password with at least 10 characters.";
       render();
       return;
     }
     const profile = await runAuthAction(
-      () => createEmailAccount({ username: state.signupUsername, email: state.signupEmail, password, ufid, method: state.signupMethod }),
+      () => createEmailAccount({ username: state.signupUsername, email: state.signupEmail, password, method: state.signupMethod }),
       state.signupMethod === "passkey" ? "Account and passkey created." : "Account created securely."
     );
     if (profile) {
@@ -2641,7 +2941,6 @@ function bindViewEvents() {
       state.signupStep = 1;
       state.signupEmail = "";
       state.signupUsername = "";
-      state.signupUfid = "";
       render();
     }
   });
@@ -2652,29 +2951,17 @@ function bindViewEvents() {
       render();
       return;
     }
-    await runAuthAction(() => requestPasswordReset(identifier), "Password reset email sent to your UF inbox.");
+    await runAuthAction(
+      () => requestPasswordReset(identifier),
+      "If an FQC account matches that, a link to set a password is on its way to the UF inbox."
+    );
   });
 
   document.querySelector("#sign-in-passkey")?.addEventListener("click", () => runAuthAction(signInWithPasskey));
   document.querySelector("#profile-logout")?.addEventListener("click", () => runAuthAction(logOut));
-  document.querySelector("#verify-ufid")?.addEventListener("click", async () => {
-    const input = document.querySelector("#member-ufid");
-    const ufid = input?.value.trim() || "";
-    if (!/^\d{8}$/.test(ufid)) {
-      state.authError = "Enter an eight-digit UFID.";
-      render();
-      return;
-    }
-    const profile = await runAuthAction(() => verifyUfid(ufid), "UFID checked securely. Your account role is updated.");
-    if (profile) {
-      if (input) input.value = "";
-      applyMemberProfile(profile);
-      state.members = [];
-      state.leaderboardLoaded = false;
-      render();
-      queueMicrotask(() => refreshLeaderboard());
-      if (state.memberRole === "officer") queueMicrotask(refreshMemberDirectory);
-    }
+  document.querySelector("#send-password-link")?.addEventListener("click", async () => {
+    const email = state.memberEmail || "your UF inbox";
+    await runAuthAction(sendPasswordSetupEmail, `Password link sent to ${email}. Open it to set your password.`);
   });
   document.querySelector("#register-passkey")?.addEventListener("click", async () => {
     const profile = await runAuthAction(registerPasskey, "Passkey added. You can now use Face ID, Touch ID, or your device lock to sign in.");
@@ -2727,9 +3014,10 @@ function bindViewEvents() {
     }
   });
 
-  document.querySelectorAll("[data-officer-event]").forEach((details) => {
+  document.querySelectorAll("[data-disclosure]").forEach((details) => {
     details.addEventListener("toggle", () => {
-      if (details.open) state.selectedOfficerEventId = details.dataset.officerEvent;
+      state.openDisclosures[details.dataset.disclosure] = details.open;
+      if (details.open && details.dataset.officerEvent) state.selectedOfficerEventId = details.dataset.officerEvent;
     });
   });
 
@@ -2741,7 +3029,7 @@ function bindViewEvents() {
       const saved = await runAuthAction(() => saveOfficerEvent({ id: eventId, ...values }), eventId ? "Event details saved to Google Sheets." : "Event created in Google Sheets.");
       if (!saved) return;
       state.officerOperationsLoaded = false;
-      await refreshOfficerOperations(true);
+      await refreshOfficerOperations(true, { silent: true });
       await refreshEventData("officer event save");
     });
   });
@@ -2757,8 +3045,26 @@ function bindViewEvents() {
       const saved = await runAuthAction(() => saveOfficerBudgetItem({ row, eventId, event: eventRecord.title, date: eventRecord.date, ...values }), "Money changes saved to Google Sheets.");
       if (!saved) return;
       state.officerOperationsLoaded = false;
-      await refreshOfficerOperations(true);
+      await refreshOfficerOperations(true, { silent: true });
       await refreshEventData("officer budget save");
+    });
+  });
+
+  document.querySelectorAll("[data-remove-budget-item]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const row = Number(button.dataset.removeBudgetItem);
+      const name = button.dataset.budgetItemName || "this line";
+      const confirmed = await confirmDestructiveAction({
+        title: "Remove this budget line?",
+        message: `${name} will be cleared from the Treasurer Breakdown sheet. The event totals recalculate immediately.`,
+        confirmLabel: "Remove Line"
+      });
+      if (!confirmed) return;
+      const removed = await runAuthAction(() => deleteOfficerBudgetItem(row), "Budget line removed from Google Sheets.");
+      if (!removed) return;
+      state.officerOperationsLoaded = false;
+      await refreshOfficerOperations(true, { silent: true });
+      await refreshEventData("officer budget removal");
     });
   });
 
@@ -2786,8 +3092,8 @@ function bindViewEvents() {
 
   document.querySelector("#save-profile")?.addEventListener("click", async () => {
     const name = document.querySelector("#member-name").value.trim();
-    if (name.length < 2) {
-      state.authError = "Enter a display name.";
+    if (name.length < 2 || name.length > MAX_DISPLAY_NAME) {
+      state.authError = `Use 2 to ${MAX_DISPLAY_NAME} characters for your display name.`;
       render();
       return;
     }
@@ -2809,6 +3115,21 @@ function bindViewEvents() {
       if (updated) await refreshMemberDirectory();
     });
   });
+  document.querySelectorAll("[data-open-leadership]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const row = Number(button.dataset.openLeadership);
+      const seat = state.leadershipRoster.find((entry) => entry.row === row);
+      const uid = document.querySelector(`[data-leadership-holder="${row}"]`)?.value || button.dataset.holderUid || "";
+      const confirmed = await confirmDestructiveAction({
+        title: "Open this leadership seat?",
+        message: `${seat?.name || "This officer"} stops holding ${seat?.title || "this seat"} and stays a plain officer. The seat returns to the roster so another account can be linked.`,
+        confirmLabel: "Open seat"
+      });
+      if (!confirmed) return;
+      const opened = await runAuthAction(() => openLeadershipSeat(row, uid), "Leadership seat opened.");
+      if (opened) await refreshMemberDirectory();
+    });
+  });
   document.querySelectorAll("[data-assign-leadership]").forEach((button) => {
     button.addEventListener("click", async () => {
       const row = Number(button.dataset.assignLeadership);
@@ -2818,16 +3139,61 @@ function bindViewEvents() {
         render();
         return;
       }
-      const updated = await runAuthAction(() => assignLeadershipRole(uid, row), "Leadership role securely linked to the UFID roster.");
+      const updated = await runAuthAction(() => assignLeadershipRole(uid, row), "Leadership role linked to that account.");
       if (updated) await refreshMemberDirectory();
     });
   });
-  document.querySelectorAll("[data-recommend-officer]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const uid = button.dataset.recommendOfficer;
-      const recommended = await runAuthAction(() => recommendOfficer(uid), "Officer recommendation sent to the President and Treasurer.");
-      if (recommended) await refreshMemberDirectory();
+
+  document.querySelector("#open-full-leaderboard")?.addEventListener("click", () => {
+    state.leaderboardExpanded = true;
+    render();
+  });
+  document.querySelector("#close-full-leaderboard")?.addEventListener("click", closeFullLeaderboard);
+  document.querySelector("#leaderboard-backdrop")?.addEventListener("click", (event) => {
+    if (event.target.id === "leaderboard-backdrop") closeFullLeaderboard();
+  });
+
+  document.querySelectorAll("[data-open-member]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (state.memberRole !== "officer") return;
+      // Swap the standings popup for the member's profile rather than stacking them.
+      state.leaderboardExpanded = false;
+      state.memberProfileUid = button.dataset.openMember;
+      render();
+      if (!state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
     });
+  });
+  document.querySelector("#close-member-profile")?.addEventListener("click", closeMemberProfile);
+  document.querySelector("#member-profile-backdrop")?.addEventListener("click", (event) => {
+    if (event.target.id === "member-profile-backdrop") closeMemberProfile();
+  });
+  document.querySelectorAll("[data-remove-member]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const uid = button.dataset.removeMember;
+      const member = state.members.find((entry) => entry.uid === uid);
+      const name = member?.displayName || "This member";
+      const confirmed = await confirmDestructiveAction({
+        title: `Remove ${name}?`,
+        message: `This permanently deletes ${name}’s FQC account, passkeys, points, check-in history, and RSVPs. They would have to create a brand-new account to return. This cannot be undone.`,
+        confirmLabel: "Remove Member"
+      });
+      if (!confirmed) return;
+      const removed = await runAuthAction(() => removeClubMember(uid), `${name} was removed from FQC.`);
+      if (!removed) return;
+      closeMemberProfile();
+      state.leaderboardLoaded = false;
+      await refreshMemberDirectory();
+      await refreshLeaderboard(true);
+    });
+  });
+
+  document.querySelector("#install-app")?.addEventListener("click", async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const choice = await installPrompt.userChoice.catch(() => null);
+    installPrompt = null;
+    if (choice?.outcome === "accepted") showActionFeedback("success", "FQC is installing to your home screen.");
+    render();
   });
 
   document.querySelector("#nuke-reload")?.addEventListener("click", nukeAndReload);
@@ -2837,6 +3203,18 @@ navItems.forEach((item) => item.addEventListener("click", () => setView(item.dat
 quickProfile.addEventListener("click", () => setView("profile"));
 settingsToggle.addEventListener("click", () => setView("settings"));
 themeToggle.addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  installPrompt = event;
+  if (state.view === "settings") render();
+});
+
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  showActionFeedback("success", "FQC is on your home screen. Open it there for the full-screen app.");
+  if (state.view === "settings") render();
+});
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => registration.update()).catch(() => {}));
@@ -2865,7 +3243,7 @@ window.setInterval(() => {
 
 async function resumePendingIntent() {
   const intent = state.pendingIntent;
-  if (!intent || !state.loggedIn || state.ufidStatus === "required") return;
+  if (!intent || !state.loggedIn) return;
   state.pendingIntent = null;
   if (intent.type === "rsvp" && intent.eventId) {
     state.view = "home";
@@ -2892,7 +3270,6 @@ observeSession((session) => {
     state.leadership = "";
     state.officerTitle = "";
     state.canManageOfficers = false;
-    state.ufidStatus = "";
     state.passkeyCount = 0;
     state.checkedInEvents = [];
     state.memberPoints = 0;
@@ -2909,11 +3286,11 @@ observeSession((session) => {
     localStorage.removeItem("fqc:name");
   }
   render();
-  if (state.view === "profile" && state.loggedIn && state.ufidStatus !== "required") queueMicrotask(() => refreshLeaderboard());
+  if (state.view === "profile" && state.loggedIn) queueMicrotask(() => refreshLeaderboard());
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
   if (state.memberRole === "officer" && !state.officerResourcesLoaded && !state.officerResourcesLoading) queueMicrotask(refreshOfficerResources);
   if (state.memberRole === "officer" && !state.officerOperationsLoaded && !state.officerOperationsLoading) queueMicrotask(refreshOfficerOperations);
-  if (state.loggedIn && state.pendingIntent && state.ufidStatus !== "required") queueMicrotask(resumePendingIntent);
+  if (state.loggedIn && state.pendingIntent) queueMicrotask(resumePendingIntent);
 }, (error) => {
   state.authReady = true;
   state.authError = readableAuthError(error);

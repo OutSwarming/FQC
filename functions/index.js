@@ -1,10 +1,9 @@
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
 import { GoogleAuth } from "google-auth-library";
 import {
   generateAuthenticationOptions,
@@ -30,11 +29,10 @@ const masterMembersSheetName = "Master Members";
 const masterMembersBaseColumns = 5;
 const masterMembersColumnCount = 260;
 const maxCheckInDistanceMiles = 2;
-const officerRosterCacheMs = 5 * 60 * 1000;
-const officerUfidPepper = defineSecret("OFFICER_UFID_PEPPER");
-let officerRosterCache = { expiresAt: 0, entries: [] };
 const sheetsAuth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
 const eventStatuses = Object.freeze(["Planning", "Planned", "Room pending", "Confirmed", "In progress", "Completed", "Cancelled"]);
+const safeEventIdPattern = /^[a-z0-9][a-z0-9-]{2,80}$/i;
+const maxDisplayNameLength = 80;
 const driveResourceUrl = (fileId) => `https://drive.google.com/open?id=${fileId}`;
 export const officerResourceCatalog = Object.freeze([
   { id: "general-onboarding", title: "General Onboarding", kind: "Google Doc", category: "Getting Started", roles: ["general"], featured: ["all"], summary: "Start here for the club-wide officer onboarding process.", url: driveResourceUrl("1QTB_FgUUzLY6x3gb9Qy4VXjBkdCuMak9Qd8OhEhA-DM") },
@@ -70,7 +68,6 @@ const callableOptions = {
   cors: [...allowedOrigins.keys()],
   maxInstances: 10
 };
-const ufidCallableOptions = { ...callableOptions, secrets: [officerUfidPepper] };
 
 function requireAuth(request) {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Sign in is required.");
@@ -79,6 +76,21 @@ function requireAuth(request) {
 
 function cleanText(value, maxLength = 120) {
   return String(value || "").trim().slice(0, maxLength);
+}
+
+export function isSafeEventId(value) {
+  return safeEventIdPattern.test(cleanText(value, 100));
+}
+
+// Display names allow any characters. Uniqueness is checked case-insensitively
+// and ignores runs of whitespace so "Alex  Q" cannot shadow "alex q".
+export function displayNameKey(value) {
+  return cleanText(value, maxDisplayNameLength)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140)
+    .replace(/\//g, "∕");
 }
 
 const reservedUsernames = new Set(["admin", "administrator", "fqc", "officer", "president", "support", "treasurer"]);
@@ -167,6 +179,17 @@ export function leadershipForRole(role) {
   if (normalized === "vice president" || normalized === "vice-president" || normalized === "vp") return "vice_president";
   if (normalized === "treasurer") return "treasurer";
   return "";
+}
+
+export function leadershipForStoredValue(value) {
+  return ["president", "vice_president", "treasurer"].includes(value) ? value : "";
+}
+
+export function leadershipTitle(leadership) {
+  if (leadership === "president") return "President";
+  if (leadership === "vice_president") return "Vice President";
+  if (leadership === "treasurer") return "Treasurer";
+  return "Officer";
 }
 
 export function officerResourceRoleKey(officerTitle = "", leadership = "") {
@@ -696,29 +719,6 @@ function coordinatesForEvent(event = {}, locationRecords = []) {
   return { lat: match.lat, lng: match.lng, name: match.name };
 }
 
-function rosterUrl() {
-  const sheet = encodeURIComponent(officerRosterSheetName);
-  return `https://docs.google.com/spreadsheets/d/${officerRosterSpreadsheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}`;
-}
-
-async function loadOfficerRoster() {
-  if (officerRosterCache.expiresAt > Date.now()) return officerRosterCache.entries;
-  const response = await fetch(rosterUrl(), { headers: { accept: "text/csv" } });
-  if (!response.ok) throw new HttpsError("unavailable", "The officer roster is temporarily unavailable.");
-  const csv = await response.text();
-  if (csv.length > 250_000) throw new HttpsError("data-loss", "The officer roster is unexpectedly large.");
-  const [headers = [], ...rows] = parseCsv(csv);
-  const headerIndex = Object.fromEntries(headers.map((header, index) => [header.trim().toLowerCase(), index]));
-  const entries = rows.map((row) => ({
-    name: cleanText(row[headerIndex["officer name"]], 80),
-    role: cleanText(row[headerIndex.title] ?? row[headerIndex.role], 80),
-    fingerprint: cleanText(row[headerIndex["ufid fingerprint"]], 64).toLowerCase(),
-    active: /^(yes|true|1|active)$/i.test(cleanText(row[headerIndex.active], 12))
-  })).filter((entry) => entry.active && entry.role && /^[a-f0-9]{64}$/.test(entry.fingerprint));
-  officerRosterCache = { expiresAt: Date.now() + officerRosterCacheMs, entries };
-  return entries;
-}
-
 export function leadershipRowsFromValues(values = []) {
   const [headers = [], ...rows] = values;
   const headerIndex = Object.fromEntries(headers.map((header, index) => [cleanText(header, 80).toLowerCase(), index]));
@@ -726,7 +726,7 @@ export function leadershipRowsFromValues(values = []) {
     row: index + 2,
     name: cleanText(row[headerIndex["officer name"]], 80),
     title: cleanText(row[headerIndex.title] ?? row[headerIndex.role], 80),
-    fingerprint: cleanText(row[headerIndex["ufid fingerprint"]], 64).toLowerCase(),
+    linkedUid: cleanText(row[headerIndex["linked account"] ?? headerIndex["ufid fingerprint"]], 160),
     active: /^(yes|true|1|active)$/i.test(cleanText(row[headerIndex.active], 12)),
     note: cleanText(row[headerIndex["security note"]], 160)
   })).filter((entry) => entry.name && entry.title);
@@ -738,28 +738,37 @@ async function loadLeadershipRows() {
 
 function pendingLeadershipSlots(rows = []) {
   return rows
-    .filter((entry) => !entry.active && !/^[a-f0-9]{64}$/.test(entry.fingerprint))
+    .filter((entry) => !entry.active && !entry.linkedUid)
     .map(({ row, name, title }) => ({ row, name, title }));
 }
 
-export function resolvedAccess(existing = {}, rosterEntry = null) {
-  const rosterLeadership = leadershipForRole(rosterEntry?.role);
-  if (rosterLeadership) {
+// The whole Current Leadership tab, minus the linked account ids, so officers can
+// see every seat rather than only the ones still waiting on an account.
+export function leadershipRosterFromRows(rows = []) {
+  return rows.map(({ row, name, title, active, linkedUid }) => ({
+    row,
+    name,
+    title,
+    active,
+    linked: Boolean(linkedUid),
+    pending: !active && !linkedUid
+  }));
+}
+
+// Roles live in Firestore and nowhere else. A stored leadership seat outranks a
+// plain officer grant; anything unrecognized falls back to a normal member.
+export function resolvedAccess(existing = {}) {
+  const leadership = leadershipForStoredValue(existing.leadership);
+  if (leadership) {
     return {
       role: "officer",
-      leadership: rosterLeadership,
-      officerTitle: rosterEntry.role,
-      canManageOfficers: rosterLeadership === "president" || rosterLeadership === "treasurer"
+      leadership,
+      officerTitle: cleanText(existing.officerTitle || leadershipTitle(leadership), 80),
+      canManageOfficers: leadership === "president" || leadership === "treasurer"
     };
   }
   if (existing.roleOverride === "officer") {
     return { role: "officer", leadership: "", officerTitle: cleanText(existing.officerTitle || "Officer", 80), canManageOfficers: false };
-  }
-  if (existing.roleOverride === "member") {
-    return { role: "member", leadership: "", officerTitle: "", canManageOfficers: false };
-  }
-  if (rosterEntry) {
-    return { role: "officer", leadership: "", officerTitle: rosterEntry.role, canManageOfficers: false };
   }
   return { role: "member", leadership: "", officerTitle: "", canManageOfficers: false };
 }
@@ -814,11 +823,9 @@ function publicProfile(uid, data = {}) {
     leadership: ["president", "vice_president", "treasurer"].includes(data.leadership) ? data.leadership : "",
     officerTitle: cleanText(data.officerTitle, 80),
     canManageOfficers: data.canManageOfficers === true,
-    ufidStatus: !data.ufidFingerprint ? "required" : data.ufidMatched === true ? "matched" : "member",
     checkedInEvents,
     points: pointsForEvents(checkedInEvents),
-    passkeyCount: Number(data.passkeyCount) || 0,
-    officerNomination: data.officerNomination === "pending" ? "pending" : ""
+    passkeyCount: Number(data.passkeyCount) || 0
   };
 }
 
@@ -826,17 +833,13 @@ async function ensureProfileForUser(userRecord) {
   const userRef = db.collection("users").doc(userRecord.uid);
   const snapshot = await userRef.get();
   const existing = snapshot.exists ? snapshot.data() : {};
-  const roster = existing.ufidFingerprint ? await loadOfficerRoster() : [];
-  const rosterEntry = roster.find((entry) => entry.fingerprint === existing.ufidFingerprint) || null;
-  const access = resolvedAccess(existing, rosterEntry);
+  const access = resolvedAccess(existing);
   const data = {
     username: usernameForInput(existing.username),
     displayName: cleanText(existing.displayName || userRecord.displayName || userRecord.email?.split("@")[0] || "FQC Member", 80),
     email: cleanText(userRecord.email, 180),
     photoURL: cleanText(userRecord.photoURL, 500),
     ...access,
-    ufidFingerprint: existing.ufidFingerprint || "",
-    ufidMatched: Boolean(rosterEntry),
     checkedInEvents: uniqueEventIds(existing.checkedInEvents),
     points: pointsForEvents(existing.checkedInEvents),
     passkeyCount: Number(existing.passkeyCount) || 0,
@@ -899,58 +902,30 @@ export const resolveLoginIdentifier = onCall(callableOptions, async (request) =>
   return { email: userRecord.email };
 });
 
-export const claimUfidRole = onCall(ufidCallableOptions, async (request) => {
-  const caller = requireAuth(request);
-  const ufid = String(request.data?.ufid || "").trim();
-  if (!/^\d{8}$/.test(ufid)) throw new HttpsError("invalid-argument", "Enter an eight-digit UFID.");
-  const attemptRef = db.collection("ufidClaimAttempts").doc(caller.uid);
-  await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(attemptRef);
-    const attempt = snapshot.data() || {};
-    const windowStartedAt = attempt.windowStartedAt?.toMillis?.() || 0;
-    const withinWindow = Date.now() - windowStartedAt < 15 * 60 * 1000;
-    const count = withinWindow ? Number(attempt.count) || 0 : 0;
-    if (count >= 5) throw new HttpsError("resource-exhausted", "Too many UFID attempts. Try again in 15 minutes.");
-    transaction.set(attemptRef, {
-      count: count + 1,
-      windowStartedAt: withinWindow ? attempt.windowStartedAt : FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp()
-    }, { merge: true });
-  });
-
-  const fingerprint = createHmac("sha256", officerUfidPepper.value()).update(ufid, "utf8").digest("hex");
-  const roster = await loadOfficerRoster();
-  const rosterEntry = roster.find((entry) => entry.fingerprint === fingerprint) || null;
-  const userRecord = await auth.getUser(caller.uid);
-  const userRef = db.collection("users").doc(caller.uid);
-  const snapshot = await userRef.get();
-  const existing = snapshot.data() || {};
-  const access = resolvedAccess(existing, rosterEntry);
-  const data = {
-    ...access,
-    ufidFingerprint: fingerprint,
-    ufidMatched: Boolean(rosterEntry),
-    ufidVerifiedAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp()
-  };
-  await Promise.all([userRef.set(data, { merge: true }), setAccessClaims(userRecord, access)]);
-  await syncLeaderboardProfile(caller.uid, { ...existing, ...data });
-  try {
-    await syncExistingMasterMemberProfile(caller.uid, { ...existing, ...data });
-  } catch (error) {
-    console.error("Master Members role sync failed", error);
-  }
-  return publicProfile(caller.uid, { ...existing, ...data });
-});
-
 export const updateUserProfile = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
-  const displayName = cleanText(request.data?.displayName, 80);
-  if (displayName.length < 2) throw new HttpsError("invalid-argument", "Enter a display name.");
-  await Promise.all([
-    auth.updateUser(caller.uid, { displayName }),
-    db.collection("users").doc(caller.uid).set({ displayName, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
-  ]);
+  const displayName = cleanText(request.data?.displayName, maxDisplayNameLength);
+  if (displayName.length < 2) throw new HttpsError("invalid-argument", `Use 2 to ${maxDisplayNameLength} characters for your display name.`);
+
+  // Any characters are fine; the only rule is that nobody else holds the name.
+  const key = displayNameKey(displayName);
+  const nameRef = db.collection("displayNameDirectory").doc(key);
+  const userRef = db.collection("users").doc(caller.uid);
+  await db.runTransaction(async (transaction) => {
+    const [nameSnapshot, userSnapshot] = await Promise.all([
+      transaction.get(nameRef),
+      transaction.get(userRef)
+    ]);
+    const owner = cleanText(nameSnapshot.data()?.uid, 160);
+    if (owner && owner !== caller.uid) {
+      throw new HttpsError("already-exists", "Another member is already using that display name.");
+    }
+    const previous = displayNameKey(cleanText(userSnapshot.data()?.displayName, maxDisplayNameLength));
+    if (previous && previous !== key) transaction.delete(db.collection("displayNameDirectory").doc(previous));
+    transaction.set(nameRef, { uid: caller.uid, displayName, updatedAt: FieldValue.serverTimestamp() });
+    transaction.set(userRef, { displayName, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+  await auth.updateUser(caller.uid, { displayName });
   const snapshot = await db.collection("users").doc(caller.uid).get();
   const profile = snapshot.data() || {};
   await syncLeaderboardProfile(caller.uid, profile);
@@ -964,18 +939,14 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
 
 export const listMembers = onCall(callableOptions, async (request) => {
   requireOfficer(request);
-  const [snapshot, nominations, leadershipRows] = await Promise.all([
+  const [snapshot, leadershipRows] = await Promise.all([
     db.collection("users").orderBy("displayName").limit(250).get(),
-    db.collection("officerNominations").where("status", "==", "pending").limit(250).get(),
     loadLeadershipRows()
   ]);
-  const nominated = new Set(nominations.docs.map((doc) => doc.id));
   return {
-    members: snapshot.docs.map((doc) => publicProfile(doc.id, {
-      ...doc.data(),
-      officerNomination: nominated.has(doc.id) ? "pending" : ""
-    })),
-    leadershipSlots: pendingLeadershipSlots(leadershipRows)
+    members: snapshot.docs.map((doc) => publicProfile(doc.id, doc.data())),
+    leadershipSlots: pendingLeadershipSlots(leadershipRows),
+    leadershipRoster: leadershipRosterFromRows(leadershipRows)
   };
 });
 
@@ -1114,12 +1085,12 @@ export const saveOfficerEvent = onCall(callableOptions, async (request) => {
   return { saved: true, row };
 });
 
-function budgetItemData(value = {}) {
+export function budgetItemData(value = {}) {
   const eventId = cleanText(value.eventId, 100);
   const event = cleanText(value.event, 120);
   const date = normalizedSheetDate(value.date);
   const item = cleanText(value.item, 160);
-  if (!SAFE_ID_PATTERN.test(eventId) || !event || !date || !item) {
+  if (!isSafeEventId(eventId) || !event || !date || !item) {
     throw new HttpsError("invalid-argument", "Choose an event and enter a budget item name.");
   }
   return {
@@ -1173,11 +1144,101 @@ export const saveOfficerBudgetItem = onCall(callableOptions, async (request) => 
   return { saved: true, row };
 });
 
+export const deleteOfficerBudgetItem = onCall(callableOptions, async (request) => {
+  const caller = requireOfficer(request);
+  const row = Math.trunc(Number(request.data?.row) || 0);
+  if (row < 2) throw new HttpsError("invalid-argument", "Choose a saved budget line to remove.");
+  const workbook = await loadEventOperationsWorkbook();
+  const existing = workbook.budgetItems.find((item) => item.row === row);
+  if (!existing) throw new HttpsError("not-found", "That budget line is already gone. Refresh and try again.");
+  await updateSheetValues([{ range: `'${treasurySheetName}'!A${row}:L${row}`, values: [Array(12).fill("")] }]);
+  await db.collection("eventOperationsAudit").add({
+    action: "budget-item-removed",
+    eventId: existing.eventId,
+    item: existing.item,
+    row,
+    updatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  return { removed: true, row };
+});
+
+export const removeMember = onCall(callableOptions, async (request) => {
+  const caller = requireOfficerManager(request);
+  const uid = cleanText(request.data?.uid, 160);
+  if (!uid) throw new HttpsError("invalid-argument", "Choose a member to remove.");
+  if (uid === caller.uid) throw new HttpsError("failed-precondition", "You cannot remove your own account.");
+
+  const userRef = db.collection("users").doc(uid);
+  const guardSnapshot = await userRef.get();
+  const guardUser = await auth.getUser(uid).catch(() => null);
+  if (guardSnapshot.data()?.leadership || guardUser?.customClaims?.leadership) {
+    throw new HttpsError("failed-precondition", "Open that leadership seat before removing the account.");
+  }
+  const [targetSnapshot, targetUser] = await Promise.all([
+    userRef.get(),
+    auth.getUser(uid).catch(() => null)
+  ]);
+  const targetData = targetSnapshot.data() || {};
+  if (targetData.leadership || targetUser?.customClaims?.leadership) {
+    throw new HttpsError("failed-precondition", "President, Vice President, and Treasurer accounts are protected.");
+  }
+
+  const displayName = cleanText(targetData.displayName || targetUser?.displayName || "FQC Member", 80);
+  const batch = db.batch();
+  const [passkeys, credentials] = await Promise.all([
+    userRef.collection("passkeys").get(),
+    db.collection("passkeyCredentials").where("uid", "==", uid).get()
+  ]);
+  passkeys.docs.forEach((doc) => batch.delete(doc.ref));
+  credentials.docs.forEach((doc) => batch.delete(doc.ref));
+  uniqueEventIds(targetData.checkedInEvents)
+    .forEach((eventId) => batch.delete(db.collection("events").doc(eventId).collection("checkins").doc(uid)));
+  const username = usernameForInput(targetData.username);
+  if (username) batch.delete(db.collection("usernameDirectory").doc(username));
+  const nameKey = displayNameKey(targetData.displayName);
+  if (nameKey) batch.delete(db.collection("displayNameDirectory").doc(nameKey));
+  batch.delete(userRef);
+  await batch.commit();
+
+  await db.runTransaction(async (transaction) => {
+    const leaderboardRef = db.collection("system").doc("leaderboardData");
+    const rsvpRef = db.collection("system").doc("eventRsvps");
+    const [leaderboardSnapshot, rsvpSnapshot] = await Promise.all([
+      transaction.get(leaderboardRef),
+      transaction.get(rsvpRef)
+    ]);
+    const entries = (leaderboardSnapshot.data()?.entries || []).filter((entry) => entry?.uid !== uid);
+    transaction.set(leaderboardRef, {
+      entries,
+      participantCount: entries.length,
+      updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    const byEvent = { ...(rsvpSnapshot.data()?.byEvent || {}) };
+    for (const eventId of Object.keys(byEvent)) {
+      byEvent[eventId] = (byEvent[eventId] || []).filter((entry) => entry?.uid !== uid);
+    }
+    transaction.set(rsvpRef, { byEvent, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+
+  if (targetUser) await auth.deleteUser(uid);
+
+  await db.collection("officerRosterAudit").add({
+    action: "member-removed",
+    targetUid: uid,
+    displayName,
+    removedBy: caller.uid,
+    removedAt: FieldValue.serverTimestamp()
+  });
+  return { removed: true, uid, displayName };
+});
+
 export const setEventRsvp = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
   const eventId = cleanText(request.data?.eventId, 100);
   const going = request.data?.going === true;
-  if (!SAFE_ID_PATTERN.test(eventId)) throw new HttpsError("invalid-argument", "Choose a valid event.");
+  if (!isSafeEventId(eventId)) throw new HttpsError("invalid-argument", "Choose a valid event.");
   const aggregateRef = db.collection("system").doc("eventRsvps");
   const userRef = db.collection("users").doc(caller.uid);
   const result = await db.runTransaction(async (transaction) => {
@@ -1217,7 +1278,7 @@ export const setEventRsvp = onCall(callableOptions, async (request) => {
 });
 
 export const setMemberRole = onCall(callableOptions, async (request) => {
-  const caller = requireOfficerManager(request);
+  const caller = requireOfficer(request);
   const uid = cleanText(request.data?.uid, 160);
   const role = profileRole(request.data?.role);
   if (!uid) throw new HttpsError("invalid-argument", "Choose a member.");
@@ -1227,8 +1288,12 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   ]);
   const targetData = targetSnapshot.data() || {};
   if (targetData.leadership || targetUser.customClaims?.leadership) {
-    throw new HttpsError("failed-precondition", "President and Treasurer roles are protected.");
+    throw new HttpsError("failed-precondition", "President, Vice President, and Treasurer roles are protected.");
   }
+  if (role === "member" && !canManageOfficerRoles(caller.token)) {
+    throw new HttpsError("permission-denied", "Only the President or Treasurer can remove an officer role.");
+  }
+  if (uid === caller.uid) throw new HttpsError("failed-precondition", "Choose another member.");
   const claims = {
     ...(targetUser.customClaims || {}),
     role,
@@ -1246,7 +1311,6 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
     roleUpdatedBy: caller.uid,
     updatedAt: FieldValue.serverTimestamp()
   }, { merge: true });
-  batch.delete(db.collection("officerNominations").doc(uid));
   await Promise.all([auth.setCustomUserClaims(uid, claims), batch.commit()]);
   const updatedProfile = { ...targetData, role, officerTitle: role === "officer" ? "Officer" : "" };
   await syncLeaderboardProfile(uid, updatedProfile);
@@ -1255,6 +1319,12 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   } catch (error) {
     console.error("Master Members officer title sync failed", error);
   }
+  await db.collection("officerRosterAudit").add({
+    action: role === "officer" ? "officer-granted" : "officer-revoked",
+    targetUid: uid,
+    updatedBy: caller.uid,
+    updatedAt: FieldValue.serverTimestamp()
+  });
   return { uid, role, leadership: "", canManageOfficers: false };
 });
 
@@ -1272,30 +1342,34 @@ export const assignMemberLeadership = onCall(callableOptions, async (request) =>
     loadLeadershipRows()
   ]);
   const targetData = targetSnapshot.data() || {};
-  const fingerprint = cleanText(targetData.ufidFingerprint, 64).toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
-    throw new HttpsError("failed-precondition", "That member must finish UFID setup before being linked to an officer role.");
-  }
   const slot = leadershipRows.find((entry) => entry.row === row);
-  if (!slot || slot.active || /^[a-f0-9]{64}$/.test(slot.fingerprint)) {
+  // Holding a different seat is a conflict. Re-linking the seat someone already
+  // holds is a repair, and has to stay possible when the sheet drifts from Firestore.
+  if (targetData.leadership && slot && targetData.leadership !== leadershipForRole(slot.title)) {
+    throw new HttpsError("failed-precondition", "That account already holds a different leadership seat. Open that seat first.");
+  }
+  if (!slot || slot.active || slot.linkedUid) {
     throw new HttpsError("failed-precondition", "That leadership role is no longer pending. Refresh the roster.");
   }
-  if (leadershipRows.some((entry) => entry.row !== row && entry.fingerprint === fingerprint)) {
-    throw new HttpsError("already-exists", "That UFID is already linked to another leadership role.");
+  if (leadershipRows.some((entry) => entry.row !== row && entry.linkedUid === uid)) {
+    throw new HttpsError("already-exists", "That account is already linked to another leadership role.");
   }
 
-  const access = resolvedAccess({}, { role: slot.title });
+  const access = resolvedAccess({
+    leadership: leadershipForRole(slot.title),
+    roleOverride: "officer",
+    officerTitle: slot.title
+  });
   await updateSheetValues([
-    { range: `'${officerRosterSheetName}'!B${row}`, values: [[fingerprint]] },
-    { range: `'${officerRosterSheetName}'!D${row}:E${row}`, values: [["Yes", "Verified through secure officer management"]] }
+    { range: `'${officerRosterSheetName}'!B1`, values: [["Linked Account"]] },
+    { range: `'${officerRosterSheetName}'!B${row}`, values: [[uid]] },
+    { range: `'${officerRosterSheetName}'!D${row}:E${row}`, values: [["Yes", "Linked through officer management"]] }
   ]);
-  officerRosterCache = { expiresAt: 0, entries: [] };
 
   const updatedProfile = {
     ...targetData,
     ...access,
-    ufidMatched: true,
-    roleOverride: FieldValue.delete(),
+    roleOverride: "officer",
     roleUpdatedBy: caller.uid,
     updatedAt: FieldValue.serverTimestamp()
   };
@@ -1303,7 +1377,7 @@ export const assignMemberLeadership = onCall(callableOptions, async (request) =>
     db.collection("users").doc(uid).set(updatedProfile, { merge: true }),
     setAccessClaims(targetUser, access)
   ]);
-  const synchronizedProfile = { ...targetData, ...access, ufidMatched: true };
+  const synchronizedProfile = { ...targetData, ...access };
   await syncLeaderboardProfile(uid, synchronizedProfile);
   try {
     await syncExistingMasterMemberProfile(uid, synchronizedProfile);
@@ -1322,27 +1396,86 @@ export const assignMemberLeadership = onCall(callableOptions, async (request) =>
   return { profile: publicProfile(uid, synchronizedProfile), slot: { row, name: slot.name, title: slot.title } };
 });
 
-export const nominateOfficer = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
-  const uid = cleanText(request.data?.uid, 160);
-  if (!uid || uid === caller.uid) throw new HttpsError("invalid-argument", "Choose another member.");
-  const [targetUser, targetProfile, callerProfile] = await Promise.all([
-    auth.getUser(uid),
-    db.collection("users").doc(uid).get(),
-    db.collection("users").doc(caller.uid).get()
-  ]);
-  if (targetProfile.data()?.leadership || profileRole(targetProfile.data()?.role) === "officer") {
-    throw new HttpsError("failed-precondition", "That account is already an officer.");
+// Who currently holds a seat. Column B records the account id for seats linked
+// through the app; seats linked before that fall back to a lookup by the role
+// the sheet lists, then to a uid the caller supplies.
+async function leadershipSeatHolder(slot, requestedUid = "") {
+  if (requestedUid) return requestedUid;
+  const columnUid = /^[a-f0-9]{64}$/.test(slot.linkedUid) ? "" : slot.linkedUid;
+  if (columnUid) return columnUid;
+  const leadership = leadershipForRole(slot.title);
+  const query = leadership
+    ? db.collection("users").where("leadership", "==", leadership)
+    : db.collection("users").where("officerTitle", "==", slot.title);
+  const snapshot = await query.limit(2).get();
+  if (snapshot.size === 1) return snapshot.docs[0].id;
+  return requestedUid;
+}
+
+async function remainingOfficerManagers(excludedUid) {
+  const snapshot = await db.collection("users").where("canManageOfficers", "==", true).limit(10).get();
+  return snapshot.docs.filter((doc) => doc.id !== excludedUid).length;
+}
+
+// Opening a seat clears it on the Current Leadership tab and drops the holder to
+// a plain officer. The President or Treasurer can demote them the rest of the way
+// afterwards; ending a term should not silently remove someone from the team.
+export const unassignMemberLeadership = onCall(callableOptions, async (request) => {
+  const caller = requireOfficerManager(request);
+  const row = Number(request.data?.row);
+  if (!Number.isInteger(row) || row < 2 || row > 250) {
+    throw new HttpsError("invalid-argument", "Choose a leadership seat to open.");
   }
-  await db.collection("officerNominations").doc(uid).set({
-    uid,
-    status: "pending",
-    nominatedBy: caller.uid,
-    nominatedByName: cleanText(callerProfile.data()?.displayName || caller.token.name || caller.token.email, 80),
-    createdAt: FieldValue.serverTimestamp(),
+  const leadershipRows = await loadLeadershipRows();
+  const slot = leadershipRows.find((entry) => entry.row === row);
+  if (!slot) throw new HttpsError("not-found", "That leadership row is no longer in the sheet. Refresh the roster.");
+  if (!slot.active && !slot.linkedUid) throw new HttpsError("failed-precondition", "That seat is already open.");
+
+  const uid = await leadershipSeatHolder(slot, cleanText(request.data?.uid, 160));
+  if (uid && uid === caller.uid) {
+    throw new HttpsError("failed-precondition", "Ask the other manager to open your own seat.");
+  }
+  if (uid && canManageOfficerRoles({ leadership: leadershipForRole(slot.title) })
+    && await remainingOfficerManagers(uid) === 0) {
+    throw new HttpsError("failed-precondition", "Link another President or Treasurer before opening this seat, or the club loses officer management.");
+  }
+
+  await updateSheetValues([
+    { range: `'${officerRosterSheetName}'!B1`, values: [["Linked Account"]] },
+    { range: `'${officerRosterSheetName}'!B${row}`, values: [[""]] },
+    { range: `'${officerRosterSheetName}'!D${row}:E${row}`, values: [["No", "Seat opened through officer management"]] }
+  ]);
+
+  const holderSnapshot = uid ? await db.collection("users").doc(uid).get() : null;
+  // Only step an actual officer down. Naming an account that is already a member
+  // must never quietly promote them.
+  if (uid && holderSnapshot?.data()?.role === "officer") {
+    const targetUser = await auth.getUser(uid);
+    const targetData = holderSnapshot.data() || {};
+    const access = resolvedAccess({ roleOverride: "officer", officerTitle: "Officer" });
+    const updatedProfile = { ...targetData, ...access, roleOverride: "officer", roleUpdatedBy: caller.uid, updatedAt: FieldValue.serverTimestamp() };
+    await Promise.all([
+      db.collection("users").doc(uid).set(updatedProfile, { merge: true }),
+      setAccessClaims(targetUser, access)
+    ]);
+    await syncLeaderboardProfile(uid, { ...targetData, ...access });
+    try {
+      await syncExistingMasterMemberProfile(uid, { ...targetData, ...access });
+    } catch (error) {
+      console.error("Master Members leadership removal sync failed", error);
+    }
+  }
+
+  await db.collection("officerRosterAudit").add({
+    action: "leadership-slot-opened",
+    targetUid: uid || "",
+    leadershipRow: row,
+    officerName: slot.name,
+    officerTitle: slot.title,
+    updatedBy: caller.uid,
     updatedAt: FieldValue.serverTimestamp()
-  }, { merge: true });
-  return { uid, officerNomination: "pending" };
+  });
+  return { row, uid, demoted: Boolean(uid) };
 });
 
 function normalizedClientLocation(value = {}) {
@@ -1590,15 +1723,22 @@ export const finishPasskeyRegistration = onCall(callableOptions, async (request)
     createdAt: FieldValue.serverTimestamp(),
     lastUsedAt: null
   };
+  // Registering the same authenticator twice refreshes the stored credential but
+  // must not inflate the count, or the number of devices shown drifts upward.
+  const credentialRef = db.collection("passkeyCredentials").doc(credential.id);
+  const alreadyRegistered = (await credentialRef.get()).exists;
   const batch = db.batch();
-  batch.set(db.collection("passkeyCredentials").doc(credential.id), credentialData);
+  batch.set(credentialRef, credentialData);
   batch.set(db.collection("users").doc(caller.uid).collection("passkeys").doc(credential.id), {
     transports: credentialData.transports,
     deviceType: credentialDeviceType,
     backedUp: credentialBackedUp,
     createdAt: FieldValue.serverTimestamp()
   });
-  batch.set(db.collection("users").doc(caller.uid), { passkeyCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  batch.set(db.collection("users").doc(caller.uid), {
+    ...(alreadyRegistered ? {} : { passkeyCount: FieldValue.increment(1) }),
+    updatedAt: FieldValue.serverTimestamp()
+  }, { merge: true });
   batch.delete(challengeRef);
   await batch.commit();
   return { verified: true };

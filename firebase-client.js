@@ -35,6 +35,7 @@ let mockProfile = null;
 let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true, requireLocation: false };
 let mockMembers = [];
 let mockLeadershipSlots = [];
+let mockLeadershipRoster = [];
 let mockLeaderboard = { entries: [], participantCount: 0 };
 let mockLeaderboardReads = 0;
 let mockOfficerResources = [
@@ -66,7 +67,6 @@ let mockOfficerEventOperations = {
   locations: ["Malachowsky Hall", "Larsen Hall", "Reitz Student Union", "Marston Science Library"],
   updatedAt: new Date().toISOString()
 };
-let mockUfidDirectory = new Map();
 let mockUsernameDirectory = new Map();
 
 if (!testMode) {
@@ -98,11 +98,9 @@ function normalizedProfile(profile = {}) {
     leadership,
     officerTitle: String(profile.officerTitle || ""),
     canManageOfficers: profile.canManageOfficers === true || leadership === "president" || leadership === "treasurer",
-    ufidStatus: ["required", "matched", "member"].includes(profile.ufidStatus) ? profile.ufidStatus : "member",
     checkedInEvents,
     points: checkedInEvents.length,
-    passkeyCount: Number(profile.passkeyCount) || 0,
-    officerNomination: profile.officerNomination === "pending" ? "pending" : ""
+    passkeyCount: Number(profile.passkeyCount) || 0
   };
 }
 
@@ -124,7 +122,6 @@ function mockSignIn(profile = {}) {
     leadership: profile.leadership || "",
     officerTitle: profile.officerTitle || "",
     canManageOfficers: profile.canManageOfficers === true,
-    ufidStatus: profile.ufidStatus || (profile.role === "officer" ? "matched" : "member"),
     checkedInEvents: profile.checkedInEvents || [],
     points: profile.points,
     passkeyCount: profile.passkeyCount || 0
@@ -157,13 +154,16 @@ if (testMode) {
     signOut: () => { mockProfile = null; emitMockSession(); },
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
-    setLeadershipSlots: (slots) => { mockLeadershipSlots = slots.map((slot) => ({ ...slot, row: Number(slot.row) })); },
+    setLeadershipSlots: (slots) => {
+      mockLeadershipSlots = slots.map((slot) => ({ ...slot, row: Number(slot.row) }));
+      mockLeadershipRoster = mockLeadershipSlots.map((slot) => ({ ...slot, active: false, linked: false, pending: true }));
+    },
+    setLeadershipRoster: (seats) => { mockLeadershipRoster = seats.map((seat) => ({ ...seat, row: Number(seat.row) })); },
     setLeaderboard: (snapshot) => { mockLeaderboard = normalizedLeaderboard(snapshot); },
     setOfficerResources: (resources) => { mockOfficerResources = resources; },
     setOfficerEventOperations: (operations) => { mockOfficerEventOperations = structuredClone(operations); },
     getLeaderboardReads: () => mockLeaderboardReads,
     resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
-    setUfidDirectory: (entries) => { mockUfidDirectory = new Map(Object.entries(entries || {})); },
     setUsernameDirectory: (entries) => { mockUsernameDirectory = new Map(Object.entries(entries || {})); }
   };
 }
@@ -230,7 +230,7 @@ export async function signInWithEmail(identifier, password) {
   if (!email) throw new Error("The username or password is incorrect.");
   if (testMode) {
     const username = String(identifier).includes("@") ? "" : String(identifier).trim().toLowerCase();
-    mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email, ufidStatus: "member" });
+    mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email });
     return;
   }
   await signInWithEmailAndPassword(auth, email, password);
@@ -242,19 +242,17 @@ function generatedAccountPassword() {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export async function createEmailAccount({ username, email, password, ufid, method = "password" }) {
+export async function createEmailAccount({ username, email, password, method = "password" }) {
   const normalizedUsername = String(username || "").trim().toLowerCase();
   if (testMode) {
     if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
     mockUsernameDirectory.set(normalizedUsername, email);
-    mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email, ufidStatus: "required" });
-    const profile = await verifyUfid(ufid);
+    mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email });
     if (method === "passkey") {
-      mockProfile = normalizedProfile({ ...profile, passkeyCount: 1 });
+      mockProfile = normalizedProfile({ ...mockProfile, passkeyCount: 1 });
       emitMockSession();
-      return mockProfile;
     }
-    return profile;
+    return mockProfile;
   }
   const accountPassword = method === "passkey" ? generatedAccountPassword() : password;
   const credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
@@ -265,15 +263,37 @@ export async function createEmailAccount({ username, email, password, ufid, meth
     throw error;
   }
   await updateProfile(credential.user, { displayName: normalizedUsername });
-  await callable("ensureUserProfile")();
-  const profile = await verifyUfid(ufid);
+  const result = await callable("ensureUserProfile")();
+  const profile = normalizedProfile(result.data);
   return method === "passkey" ? registerPasskey() : profile;
 }
 
+// A reset request always reports the same result, so the form cannot be used to
+// discover which usernames or addresses have FQC accounts. Accounts created with
+// a passkey hold a random password nobody knows, so this doubles as the way to
+// set a first password on a device that has no passkey.
 export async function requestPasswordReset(identifier) {
-  const email = await emailForLoginIdentifier(identifier);
-  if (!email) throw new Error("Enter a valid username or UF email.");
-  if (testMode) return { email };
+  const value = String(identifier || "").trim();
+  if (!value) throw new Error("Enter your username or UF email.");
+  if (testMode) return { sent: true, email: value };
+  try {
+    const email = await emailForLoginIdentifier(value);
+    if (email) await sendPasswordResetEmail(auth, email);
+  } catch (error) {
+    console.debug("Password reset lookup did not resolve", error);
+  }
+  return { sent: true };
+}
+
+// Same email, requested from inside a signed-in session, where there is no
+// account to enumerate and a real failure should be reported.
+export async function sendPasswordSetupEmail() {
+  if (testMode) {
+    if (!mockProfile) throw new Error("Sign in first.");
+    return { email: mockProfile.email };
+  }
+  const email = auth.currentUser?.email;
+  if (!email) throw new Error("Sign in again, then request the password link.");
   await sendPasswordResetEmail(auth, email);
   return { email };
 }
@@ -315,6 +335,10 @@ export async function logOut() {
 
 export async function updateProfileName(displayName) {
   if (testMode) {
+    const key = String(displayName || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const taken = mockMembers.some((member) => member.uid !== mockProfile?.uid
+      && String(member.displayName || "").trim().toLowerCase().replace(/\s+/g, " ") === key);
+    if (taken) throw new Error("Another member is already using that display name.");
     mockProfile = { ...mockProfile, displayName };
     mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
     mockLeaderboard = normalizedLeaderboard({
@@ -324,35 +348,6 @@ export async function updateProfileName(displayName) {
     return normalizedProfile(mockProfile);
   }
   const result = await callable("updateUserProfile")({ displayName });
-  return normalizedProfile(result.data);
-}
-
-export async function verifyUfid(ufid) {
-  if (testMode) {
-    const match = mockUfidDirectory.get(String(ufid));
-    const officerTitle = String(match?.officerTitle || "");
-    const leadership = officerTitle.toLowerCase() === "president"
-      ? "president"
-      : officerTitle.toLowerCase() === "vice president"
-        ? "vice_president"
-        : officerTitle.toLowerCase() === "treasurer" ? "treasurer" : "";
-    mockProfile = normalizedProfile({
-      ...mockProfile,
-      role: match ? "officer" : "member",
-      officerTitle,
-      leadership,
-      canManageOfficers: leadership === "president" || leadership === "treasurer",
-      ufidStatus: match ? "matched" : "member"
-    });
-    mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
-    mockLeaderboard = normalizedLeaderboard({
-      entries: mockLeaderboard.entries.map((entry) => entry.uid === mockProfile.uid ? { ...entry, role: mockProfile.role } : entry)
-    });
-    emitMockSession();
-    return mockProfile;
-  }
-  const result = await callable("claimUfidRole")({ ufid });
-  await auth.currentUser?.getIdToken(true);
   return normalizedProfile(result.data);
 }
 
@@ -406,11 +401,18 @@ export async function updateCheckInLocationRequirement(requireLocation) {
 }
 
 export async function loadMembers() {
-  if (testMode) return { members: mockMembers.map(normalizedProfile), leadershipSlots: mockLeadershipSlots.map((slot) => ({ ...slot })) };
+  if (testMode) {
+    return {
+      members: mockMembers.map(normalizedProfile),
+      leadershipSlots: mockLeadershipSlots.map((slot) => ({ ...slot })),
+      leadershipRoster: mockLeadershipRoster.map((seat) => ({ ...seat }))
+    };
+  }
   const result = await callable("listMembers")();
   return {
     members: (result.data.members || []).map(normalizedProfile),
-    leadershipSlots: Array.isArray(result.data.leadershipSlots) ? result.data.leadershipSlots : []
+    leadershipSlots: Array.isArray(result.data.leadershipSlots) ? result.data.leadershipSlots : [],
+    leadershipRoster: Array.isArray(result.data.leadershipRoster) ? result.data.leadershipRoster : []
   };
 }
 
@@ -468,6 +470,42 @@ export async function saveOfficerBudgetItem(item) {
   return result.data;
 }
 
+export async function deleteOfficerBudgetItem(row) {
+  if (testMode) {
+    const target = Number(row);
+    const removed = mockOfficerEventOperations.budgetItems.find((entry) => entry.row === target);
+    mockOfficerEventOperations.budgetItems = mockOfficerEventOperations.budgetItems.filter((entry) => entry.row !== target);
+    const event = mockOfficerEventOperations.events.find((entry) => entry.id === removed?.eventId);
+    if (event) {
+      const items = mockOfficerEventOperations.budgetItems.filter((entry) => entry.eventId === event.id);
+      event.plannedBudget = items.reduce((sum, entry) => sum + (Number(entry.plannedCost) || 0), 0);
+      event.actualSpend = items.reduce((sum, entry) => sum + (Number(entry.actualCost) || 0), 0);
+      event.remainingBudget = event.plannedBudget - event.actualSpend;
+    }
+    return { removed: true, row: target };
+  }
+  const result = await callable("deleteOfficerBudgetItem")({ row: Number(row) });
+  return result.data;
+}
+
+export async function removeClubMember(uid) {
+  if (testMode) {
+    if (!mockProfile?.canManageOfficers) throw new Error("Only the President or Treasurer can remove a member.");
+    const target = mockMembers.find((member) => member.uid === uid);
+    if (!target) throw new Error("That member is no longer in the directory.");
+    if (target.uid === mockProfile.uid) throw new Error("You cannot remove your own account.");
+    if (target.leadership) throw new Error("President, Vice President, and Treasurer accounts are protected.");
+    mockMembers = mockMembers.filter((member) => member.uid !== uid);
+    mockLeaderboard = normalizedLeaderboard({
+      entries: mockLeaderboard.entries.filter((entry) => entry.uid !== uid),
+      participantCount: Math.max(0, mockLeaderboard.participantCount - 1)
+    });
+    return { removed: true, uid, displayName: target.displayName };
+  }
+  const result = await callable("removeMember")({ uid });
+  return result.data;
+}
+
 export async function updateEventRsvp(eventId, going) {
   if (testMode) {
     const event = mockOfficerEventOperations.events.find((entry) => entry.id === eventId);
@@ -484,9 +522,12 @@ export async function updateEventRsvp(eventId, going) {
 
 export async function changeMemberRole(uid, role) {
   if (testMode) {
-    if (!mockProfile?.canManageOfficers) throw new Error("Only the President or Treasurer can change officer roles.");
+    if (mockProfile?.role !== "officer") throw new Error("Officer access is required.");
+    if (role !== "officer" && !mockProfile?.canManageOfficers) {
+      throw new Error("Only the President or Treasurer can remove an officer role.");
+    }
     mockMembers = mockMembers.map((member) => member.uid === uid
-      ? { ...member, role: role === "officer" ? "officer" : "member", officerNomination: "" }
+      ? { ...member, role: role === "officer" ? "officer" : "member" }
       : member);
     return mockMembers.find((member) => member.uid === uid);
   }
@@ -500,7 +541,12 @@ export async function assignLeadershipRole(uid, row) {
     const slot = mockLeadershipSlots.find((entry) => entry.row === Number(row));
     const member = mockMembers.find((entry) => entry.uid === uid);
     if (!slot || !member) throw new Error("Choose a pending leadership role and a member account.");
-    if (member.ufidStatus === "required") throw new Error("That member must finish UFID setup before being linked to an officer role.");
+    const seatLeadership = /^president$/i.test(slot.title) ? "president"
+      : /^vice[ -]?president$/i.test(slot.title) ? "vice_president"
+        : /^treasurer$/i.test(slot.title) ? "treasurer" : "";
+    if (member.leadership && member.leadership !== seatLeadership) {
+      throw new Error("That account already holds a different leadership seat.");
+    }
     const title = String(slot.title || "Officer");
     const leadership = /^president$/i.test(title) ? "president"
       : /^vice[ -]?president$/i.test(title) ? "vice_president"
@@ -510,24 +556,39 @@ export async function assignLeadershipRole(uid, row) {
       role: "officer",
       leadership,
       officerTitle: title,
-      canManageOfficers: leadership === "president" || leadership === "treasurer",
-      ufidStatus: "matched"
+      canManageOfficers: leadership === "president" || leadership === "treasurer"
     });
     mockMembers = mockMembers.map((entry) => entry.uid === uid ? profile : entry);
     mockLeadershipSlots = mockLeadershipSlots.filter((entry) => entry.row !== Number(row));
+    mockLeadershipRoster = mockLeadershipRoster.map((seat) => seat.row === Number(row)
+      ? { ...seat, active: true, linked: true, pending: false }
+      : seat);
     return { profile, slot };
   }
   const result = await callable("assignMemberLeadership")({ uid, row: Number(row) });
   return result.data;
 }
 
-export async function recommendOfficer(uid) {
+export async function openLeadershipSeat(row, uid = "") {
   if (testMode) {
-    if (mockProfile?.role !== "officer") throw new Error("Officer access is required.");
-    mockMembers = mockMembers.map((member) => member.uid === uid ? { ...member, officerNomination: "pending" } : member);
-    return { uid, officerNomination: "pending" };
+    if (!mockProfile?.canManageOfficers) throw new Error("Only the President or Treasurer can change officer roles.");
+    const seat = mockLeadershipRoster.find((entry) => entry.row === Number(row));
+    if (!seat || seat.pending) throw new Error("That seat is already open.");
+    mockLeadershipRoster = mockLeadershipRoster.map((entry) => entry.row === Number(row)
+      ? { ...entry, active: false, linked: false, pending: true }
+      : entry);
+    if (!mockLeadershipSlots.some((entry) => entry.row === Number(row))) {
+      mockLeadershipSlots = [...mockLeadershipSlots, { row: Number(row), name: seat.name, title: seat.title }];
+    }
+    const holder = mockMembers.find((member) => member.uid === uid)
+      || mockMembers.find((member) => member.officerTitle === seat.title);
+    if (holder) {
+      const demoted = normalizedProfile({ ...holder, leadership: "", officerTitle: "Officer", canManageOfficers: false });
+      mockMembers = mockMembers.map((member) => member.uid === demoted.uid ? demoted : member);
+    }
+    return { row: Number(row), uid: holder?.uid || "", demoted: Boolean(holder) };
   }
-  const result = await callable("nominateOfficer")({ uid });
+  const result = await callable("unassignMemberLeadership")({ row: Number(row), uid });
   return result.data;
 }
 
