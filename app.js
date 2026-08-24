@@ -31,9 +31,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.11.0";
+const APP_VERSION = "2.12.0";
 const APP_RELEASE_DATE = "August 14, 2026";
 const RELEASE_HISTORY = [
+  ["2.12.0", "Enforced the UF email requirement on the server, so a new account cannot be opened with a non-UF address by going around the browser"],
   ["2.11.0", "Added an emailed password link so a passkey member can get in on a device that has no passkey, spelled that out on the login screen, stopped the reset form revealing which accounts exist, and stopped re-registering a device inflating the passkey count"],
   ["2.10.0", "Removed UFID verification everywhere. Every new account starts as a member, any officer can make a member an officer, and the President or Treasurer still handles leadership seats, demotions, and removals. Passkey, Face ID, and Touch ID sign-in are unchanged."],
   ["2.9.3", "Capped the leaderboard at ten with a scrollable full-standings popup instead of one long scroll"],

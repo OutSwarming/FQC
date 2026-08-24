@@ -220,6 +220,21 @@ test("treasurer money edits keep itemized values and reject incomplete rows", ()
   assert.throws(() => budgetItemData({ eventId: "fqc-2026-09-03-general-meeting", event: "General Meeting", date: "2026-09-03", item: "" }), /budget item name/);
 });
 
+test("only UF addresses can open a new account, with named exceptions", async () => {
+  const { assertEligibleSignupEmail } = await import("./index.js");
+  assert.doesNotThrow(() => assertEligibleSignupEmail("gator@ufl.edu"));
+  assert.doesNotThrow(() => assertEligibleSignupEmail("Gator@UFL.edu"));
+  assert.throws(() => assertEligibleSignupEmail("someone@gmail.com"), /UF email/);
+  assert.throws(() => assertEligibleSignupEmail("someone@notufl.edu"), /UF email/);
+  assert.throws(() => assertEligibleSignupEmail("ufl.edu"), /UF email/);
+  assert.throws(() => assertEligibleSignupEmail(""), /UF email/);
+
+  process.env.FQC_EMAIL_ALLOWLIST = "founder@gmail.com, other@example.com";
+  assert.doesNotThrow(() => assertEligibleSignupEmail("founder@gmail.com"));
+  assert.throws(() => assertEligibleSignupEmail("stranger@gmail.com"), /UF email/);
+  delete process.env.FQC_EMAIL_ALLOWLIST;
+});
+
 test("usernames are normalized, constrained, and reserve trusted club names", () => {
   assert.equal(usernameForInput(" Quantum.Gator "), "quantum.gator");
   assert.equal(usernameForInput("two"), "two");

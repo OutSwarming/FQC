@@ -69,6 +69,23 @@ const callableOptions = {
   maxInstances: 10
 };
 
+// The browser checks for a UF address at signup, but that check is only a
+// courtesy: anything calling Firebase Auth directly skips it. New accounts are
+// gated here as well. Accounts that already exist are left alone, and
+// FQC_EMAIL_ALLOWLIST carries named exceptions.
+export function assertEligibleSignupEmail(email) {
+  const value = cleanText(email, 180).toLowerCase();
+  const allowlist = String(process.env.FQC_EMAIL_ALLOWLIST || "")
+    .toLowerCase()
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (allowlist.includes(value)) return;
+  if (!/^[^\s@]+@ufl\.edu$/.test(value)) {
+    throw new HttpsError("permission-denied", "FQC accounts use a UF email ending in @ufl.edu.");
+  }
+}
+
 function requireAuth(request) {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Sign in is required.");
   return request.auth;
@@ -833,6 +850,7 @@ async function ensureProfileForUser(userRecord) {
   const userRef = db.collection("users").doc(userRecord.uid);
   const snapshot = await userRef.get();
   const existing = snapshot.exists ? snapshot.data() : {};
+  if (!snapshot.exists) assertEligibleSignupEmail(userRecord.email);
   const access = resolvedAccess(existing);
   const data = {
     username: usernameForInput(existing.username),
@@ -872,6 +890,7 @@ export const claimUsername = onCall(callableOptions, async (request) => {
   if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
   const usernameRef = db.collection("usernameDirectory").doc(username);
   const userRef = db.collection("users").doc(caller.uid);
+  if (!(await userRef.get()).exists) assertEligibleSignupEmail(caller.token.email);
   await db.runTransaction(async (transaction) => {
     const [usernameSnapshot, userSnapshot] = await Promise.all([
       transaction.get(usernameRef),
