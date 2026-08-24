@@ -2419,6 +2419,18 @@ function renderSettings() {
       ${renderAccountSettings()}
       ${renderInstallCard()}
       ${renderOfficerSettings()}
+      <section class="section contact-settings">
+        <div class="section-header">
+          <div>
+            <p class="section-kicker">Get in touch</p>
+            <h2>Contact</h2>
+            <p>Questions, ideas, or something not working? Email the FQC officers and we’ll get back to you.</p>
+          </div>
+        </div>
+        <a class="secondary-button" href="mailto:officers@flqcs.com">
+          <svg><use href="#icon-mail"></use></svg><span>officers@flqcs.com</span>
+        </a>
+      </section>
       <details class="section settings-group" ${disclosureAttrs("settings-updates")}>
         <summary><span><p class="section-kicker">App shell</p><strong>Updates</strong></span><small>v${APP_VERSION}</small></summary>
         <div class="settings-group-content">
