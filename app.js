@@ -92,6 +92,11 @@ const UF_CAMPUS_BOUNDS = Object.freeze({
   east: -82.31
 });
 
+// A default view over the core campus so the map always renders tiles even
+// before any pins exist — e.g. a cold first load whose bundled fallback
+// schedule is all past events (0 upcoming = 0 markers = nothing to fit).
+const UF_CAMPUS_CENTER = Object.freeze({ lat: 29.647, lng: -82.346, zoom: 15 });
+
 function isUfCampusCoordinate(lat, lng) {
   return Number.isFinite(lat) &&
     Number.isFinite(lng) &&
@@ -1568,6 +1573,8 @@ function initEventMap() {
   }
 
   eventMap = window.L.map(mapElement, {
+    center: [UF_CAMPUS_CENTER.lat, UF_CAMPUS_CENTER.lng],
+    zoom: UF_CAMPUS_CENTER.zoom,
     zoomControl: false,
     attributionControl: true,
     scrollWheelZoom: false,
