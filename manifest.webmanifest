@@ -1,17 +1,39 @@
 {
+  "id": "/",
   "name": "Florida Quantum Computing",
   "short_name": "FQC",
   "description": "Explore Florida Quantum Computing events, dates, and meeting locations.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#f4f7fc",
-  "theme_color": "#5476f2",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0b0b2c",
+  "theme_color": "#10113f",
   "icons": [
     {
-      "src": "/assets/fqc-badge.png?v=23",
-      "sizes": "900x900",
+      "src": "/assets/fqc-app-icon-192.png?v=29",
+      "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/assets/fqc-app-icon-512.png?v=29",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/fqc-app-icon.png?v=29",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/fqc-app-icon-maskable-512.png?v=29",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

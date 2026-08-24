@@ -1,6 +1,6 @@
-const CACHE_NAME = "fqc-app-v280-officer-profile";
+const CACHE_NAME = "fqc-app-v293-leaderboard-popup";
 const ASSETS = [
-  "/assets/fqc-badge.png?v=250"
+  "/assets/fqc-app-icon-192.png?v=29"
 ];
 
 self.addEventListener("install", (event) => {
