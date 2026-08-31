@@ -68,6 +68,7 @@ let mockOfficerEventOperations = {
   updatedAt: new Date().toISOString()
 };
 let mockUsernameDirectory = new Map();
+let mockUsernameReservations = new Map();
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
@@ -79,6 +80,26 @@ if (!testMode) {
 
 function callable(name) {
   return httpsCallable(functions, name);
+}
+
+function isTransientFirebaseError(error) {
+  const code = String(error?.code || "");
+  return ["unavailable", "deadline-exceeded", "internal", "network-request-failed"]
+    .some((value) => code.includes(value));
+}
+
+function shortRetryDelay() {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 350));
+}
+
+async function retryOnceWhenTransient(action) {
+  try {
+    return await action();
+  } catch (error) {
+    if (!isTransientFirebaseError(error)) throw error;
+    await shortRetryDelay();
+    return action();
+  }
 }
 
 function normalizedEventIds(eventIds = []) {
@@ -164,7 +185,10 @@ if (testMode) {
     setOfficerEventOperations: (operations) => { mockOfficerEventOperations = structuredClone(operations); },
     getLeaderboardReads: () => mockLeaderboardReads,
     resetLeaderboardReads: () => { mockLeaderboardReads = 0; },
-    setUsernameDirectory: (entries) => { mockUsernameDirectory = new Map(Object.entries(entries || {})); }
+    setUsernameDirectory: (entries) => {
+      mockUsernameDirectory = new Map(Object.entries(entries || {}));
+      mockUsernameReservations = new Map();
+    }
   };
 }
 
@@ -185,7 +209,7 @@ export function observeSession(callback, onError = () => {}) {
       return;
     }
     try {
-      const result = await callable("ensureUserProfile")();
+      const result = await retryOnceWhenTransient(() => callable("ensureUserProfile")());
       await user.getIdToken(true);
       callback({ user, profile: normalizedProfile(result.data) });
     } catch (error) {
@@ -214,14 +238,21 @@ async function emailForLoginIdentifier(identifier) {
   const value = String(identifier || "").trim().toLowerCase();
   if (value.includes("@")) return value;
   if (testMode) return String(mockUsernameDirectory.get(value) || "");
-  const result = await callable("resolveLoginIdentifier")({ identifier: value });
+  const result = await retryOnceWhenTransient(() => callable("resolveLoginIdentifier")({ identifier: value }));
   return String(result.data?.email || "");
 }
 
-export async function checkUsername(username) {
+export async function checkUsername(username, reservationToken = "") {
   const normalized = String(username || "").trim().toLowerCase();
-  if (testMode) return { username: normalized, available: !mockUsernameDirectory.has(normalized) };
-  const result = await callable("checkUsernameAvailability")({ username: normalized });
+  if (testMode) {
+    if (mockUsernameDirectory.has(normalized)) return { username: normalized, available: false };
+    const existing = mockUsernameReservations.get(normalized);
+    if (existing && existing !== reservationToken) return { username: normalized, available: false };
+    const token = existing || `test-reservation:${normalized}`;
+    mockUsernameReservations.set(normalized, token);
+    return { username: normalized, available: true, reservationToken: token };
+  }
+  const result = await callable("checkUsernameAvailability")({ username: normalized, reservationToken });
   return result.data;
 }
 
@@ -242,11 +273,13 @@ function generatedAccountPassword() {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export async function createEmailAccount({ username, email, password, method = "password" }) {
+export async function createEmailAccount({ username, email, password, method = "password", reservationToken = "" }) {
   const normalizedUsername = String(username || "").trim().toLowerCase();
   if (testMode) {
     if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
+    if (mockUsernameReservations.get(normalizedUsername) !== reservationToken) throw new Error("Your username reservation expired. Choose the username again.");
     mockUsernameDirectory.set(normalizedUsername, email);
+    mockUsernameReservations.delete(normalizedUsername);
     mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email });
     if (method === "passkey") {
       mockProfile = normalizedProfile({ ...mockProfile, passkeyCount: 1 });
@@ -257,7 +290,7 @@ export async function createEmailAccount({ username, email, password, method = "
   const accountPassword = method === "passkey" ? generatedAccountPassword() : password;
   const credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
   try {
-    await callable("claimUsername")({ username: normalizedUsername });
+    await callable("claimUsername")({ username: normalizedUsername, reservationToken });
   } catch (error) {
     await deleteUser(credential.user).catch(() => {});
     throw error;
@@ -599,10 +632,11 @@ export function readableAuthError(error) {
   if (code.includes("operation-not-allowed")) return "This sign-in method is still being configured.";
   if (code.includes("account-exists-with-different-credential")) return "That email already uses another sign-in method. Sign in with the original method first.";
   if (code.includes("email-already-in-use")) return "An account already exists for that email. Use Log In or Forgot Password.";
-  if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) return "The email or password is incorrect.";
+  if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found") || code.includes("not-found")) return "The username, UF email, or password is incorrect.";
   if (code.includes("weak-password")) return "Use a password with at least eight characters.";
   if (code.includes("invalid-email")) return "Enter a valid email address.";
   if (code.includes("too-many-requests")) return "Too many attempts. Wait a moment and try again.";
+  if (isTransientFirebaseError(error)) return "FQC could not reach sign-in. Check your connection and try once more.";
   if (code.includes("unauthenticated")) return "Your session expired. Sign in again.";
   if (code.includes("permission-denied")) return "Your account does not have permission for that action.";
   if (error?.name === "NotAllowedError") return "Face ID, Touch ID, or the passkey prompt was cancelled.";

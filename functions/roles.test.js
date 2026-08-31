@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   budgetItemData,
   buildLeaderboardEntries,
+  canUseUsernameReservation,
   canManageOfficerRoles,
   displayNameKey,
   distanceMilesBetween,
   isSafeEventId,
+  isActiveUsernameReservation,
   leadershipForRole,
   leadershipRosterFromRows,
   leadershipRowsFromValues,
@@ -18,6 +20,7 @@ import {
   pointsForEvents,
   resolvedAccess,
   sheetColumnLetter,
+  usernameReservationHash,
   usernameForInput
 } from "./index.js";
 
@@ -241,4 +244,21 @@ test("usernames are normalized, constrained, and reserve trusted club names", ()
   assert.equal(usernameForInput("no spaces"), "");
   assert.equal(usernameForInput("admin"), "");
   assert.equal(usernameForInput("a"), "");
+});
+
+test("username reservations are private, exclusive, and expire", () => {
+  const token = "browser-only-reservation-token";
+  const now = Date.now();
+  const reservation = {
+    reservationHash: usernameReservationHash(token),
+    reservationExpiresAt: now + 60_000
+  };
+
+  assert.equal(reservation.reservationHash.length, 64);
+  assert.notEqual(reservation.reservationHash, token);
+  assert.equal(isActiveUsernameReservation(reservation, now), true);
+  assert.equal(canUseUsernameReservation(reservation, token, now), true);
+  assert.equal(canUseUsernameReservation(reservation, "another-browser", now), false);
+  assert.equal(isActiveUsernameReservation(reservation, now + 60_001), false);
+  assert.equal(canUseUsernameReservation(reservation, token, now + 60_001), false);
 });

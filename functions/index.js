@@ -33,6 +33,7 @@ const sheetsAuth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/sp
 const eventStatuses = Object.freeze(["Planning", "Planned", "Room pending", "Confirmed", "In progress", "Completed", "Cancelled"]);
 const safeEventIdPattern = /^[a-z0-9][a-z0-9-]{2,80}$/i;
 const maxDisplayNameLength = 80;
+const usernameReservationLifetimeMs = 10 * 60 * 1000;
 const driveResourceUrl = (fileId) => `https://drive.google.com/open?id=${fileId}`;
 export const officerResourceCatalog = Object.freeze([
   { id: "general-onboarding", title: "General Onboarding", kind: "Google Doc", category: "Getting Started", roles: ["general"], featured: ["all"], summary: "Start here for the club-wide officer onboarding process.", url: driveResourceUrl("1QTB_FgUUzLY6x3gb9Qy4VXjBkdCuMak9Qd8OhEhA-DM") },
@@ -116,6 +117,31 @@ export function usernameForInput(value) {
   const username = cleanText(value, 24).toLowerCase();
   if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)) return "";
   return reservedUsernames.has(username) ? "" : username;
+}
+
+export function usernameReservationHash(token) {
+  const value = cleanText(token, 180);
+  return value ? createHash("sha256").update(value).digest("hex") : "";
+}
+
+function timestampMillis(value) {
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (Number.isFinite(Number(value?._seconds))) return Number(value._seconds) * 1000;
+  if (Number.isFinite(Number(value))) return Number(value);
+  return 0;
+}
+
+export function isActiveUsernameReservation(data, now = Date.now()) {
+  return Boolean(cleanText(data?.reservationHash, 64)) && timestampMillis(data?.reservationExpiresAt) > now;
+}
+
+export function canUseUsernameReservation(data, token, now = Date.now()) {
+  return isActiveUsernameReservation(data, now)
+    && usernameReservationHash(token) === cleanText(data?.reservationHash, 64);
+}
+
+function isMissingAuthUser(error) {
+  return String(error?.code || "").includes("user-not-found");
 }
 
 function profileRole(value) {
@@ -880,13 +906,52 @@ export const ensureUserProfile = onCall(callableOptions, async (request) => {
 export const checkUsernameAvailability = onCall(callableOptions, async (request) => {
   const username = usernameForInput(request.data?.username);
   if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
-  const snapshot = await db.collection("usernameDirectory").doc(username).get();
-  return { username, available: !snapshot.exists };
+  const suppliedToken = cleanText(request.data?.reservationToken, 180);
+  const usernameRef = db.collection("usernameDirectory").doc(username);
+  const snapshot = await usernameRef.get();
+  const claimedUid = cleanText(snapshot.data()?.uid, 160);
+
+  // A deleted or rolled-back account must not hold a username forever. Verify
+  // claimed directory entries against Firebase Auth and remove only the exact
+  // stale claim we inspected, so a concurrent valid claim cannot be erased.
+  if (claimedUid) {
+    try {
+      await auth.getUser(claimedUid);
+      return { username, available: false };
+    } catch (error) {
+      if (!isMissingAuthUser(error)) throw new HttpsError("unavailable", "Username checking is temporarily unavailable. Try again.");
+      await db.runTransaction(async (transaction) => {
+        const current = await transaction.get(usernameRef);
+        if (cleanText(current.data()?.uid, 160) === claimedUid) transaction.delete(usernameRef);
+      });
+    }
+  }
+
+  const candidateToken = `${randomUUID()}${randomUUID()}`;
+  const now = Date.now();
+  return db.runTransaction(async (transaction) => {
+    const current = await transaction.get(usernameRef);
+    const data = current.data() || {};
+    if (cleanText(data.uid, 160)) return { username, available: false };
+    if (isActiveUsernameReservation(data, now)) {
+      if (canUseUsernameReservation(data, suppliedToken, now)) {
+        return { username, available: true, reservationToken: suppliedToken };
+      }
+      return { username, available: false };
+    }
+    transaction.set(usernameRef, {
+      reservationHash: usernameReservationHash(candidateToken),
+      reservationExpiresAt: Timestamp.fromMillis(now + usernameReservationLifetimeMs),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    return { username, available: true, reservationToken: candidateToken };
+  });
 });
 
 export const claimUsername = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
   const username = usernameForInput(request.data?.username);
+  const reservationToken = cleanText(request.data?.reservationToken, 180);
   if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
   const usernameRef = db.collection("usernameDirectory").doc(username);
   const userRef = db.collection("users").doc(caller.uid);
@@ -896,12 +961,24 @@ export const claimUsername = onCall(callableOptions, async (request) => {
       transaction.get(usernameRef),
       transaction.get(userRef)
     ]);
-    if (usernameSnapshot.exists && usernameSnapshot.data()?.uid !== caller.uid) {
+    const reservation = usernameSnapshot.data() || {};
+    const heldByUid = cleanText(reservation.uid, 160);
+    if (heldByUid && heldByUid !== caller.uid) {
       throw new HttpsError("already-exists", "That username is already taken.");
+    }
+    if (heldByUid !== caller.uid && !canUseUsernameReservation(reservation, reservationToken)) {
+      throw new HttpsError("failed-precondition", isActiveUsernameReservation(reservation)
+        ? "That username is being used in another signup. Try another."
+        : "Your username reservation expired. Choose the username again.");
     }
     const previous = usernameForInput(userSnapshot.data()?.username);
     if (previous && previous !== username) transaction.delete(db.collection("usernameDirectory").doc(previous));
-    transaction.set(usernameRef, { uid: caller.uid, updatedAt: FieldValue.serverTimestamp() });
+    transaction.set(usernameRef, {
+      uid: caller.uid,
+      reservationHash: FieldValue.delete(),
+      reservationExpiresAt: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
     transaction.set(userRef, { username, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
   });
   await auth.updateUser(caller.uid, { displayName: username });
@@ -916,7 +993,18 @@ export const resolveLoginIdentifier = onCall(callableOptions, async (request) =>
   const snapshot = await db.collection("usernameDirectory").doc(username).get();
   const uid = cleanText(snapshot.data()?.uid, 160);
   if (!uid) throw new HttpsError("not-found", "The username or password is incorrect.");
-  const userRecord = await auth.getUser(uid);
+  let userRecord;
+  try {
+    userRecord = await auth.getUser(uid);
+  } catch (error) {
+    if (!isMissingAuthUser(error)) throw new HttpsError("unavailable", "Sign-in is temporarily unavailable. Try again.");
+    await db.runTransaction(async (transaction) => {
+      const usernameRef = db.collection("usernameDirectory").doc(username);
+      const current = await transaction.get(usernameRef);
+      if (cleanText(current.data()?.uid, 160) === uid) transaction.delete(usernameRef);
+    });
+    throw new HttpsError("not-found", "The username or password is incorrect.");
+  }
   if (!userRecord.email) throw new HttpsError("not-found", "The username or password is incorrect.");
   return { email: userRecord.email };
 });

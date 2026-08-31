@@ -31,9 +31,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.12.0";
-const APP_RELEASE_DATE = "August 14, 2026";
+const APP_VERSION = "2.13.0";
+const APP_RELEASE_DATE = "August 30, 2026";
 const RELEASE_HISTORY = [
+  ["2.13.0", "Made GBM signups reliable by reserving usernames for ten minutes, cleaning stale deleted-account names, and improving login recovery and error messages"],
   ["2.12.0", "Enforced the UF email requirement on the server, so a new account cannot be opened with a non-UF address by going around the browser"],
   ["2.11.0", "Added an emailed password link so a passkey member can get in on a device that has no passkey, spelled that out on the login screen, stopped the reset form revealing which accounts exist, and stopped re-registering a device inflating the passkey count"],
   ["2.10.0", "Removed UFID verification everywhere. Every new account starts as a member, any officer can make a member an officer, and the President or Treasurer still handles leadership seats, demotions, and removals. Passkey, Face ID, and Touch ID sign-in are unchanged."],
@@ -139,6 +140,7 @@ const state = {
   signupStep: 1,
   signupEmail: "",
   signupUsername: "",
+  signupUsernameReservationToken: "",
   signupMethod: "passkey",
   authUser: null,
   memberRole: "member",
@@ -1808,7 +1810,9 @@ async function runAuthAction(action, successMessage = "", workingMessage = "Upda
   showActionFeedback("working", workingMessage);
   try {
     const result = await action();
-    showActionFeedback("success", successMessage || "Done — your change is confirmed.");
+    if (successMessage !== null) {
+      showActionFeedback("success", successMessage || "Done — your change is confirmed.");
+    }
     return result;
   } catch (error) {
     state.authError = readableAuthError(error);
@@ -2674,7 +2678,7 @@ function renderSignupWizard() {
         <div class="form-row">
           <label for="signup-username">Username</label>
           <input id="signup-username" type="text" inputmode="text" autocomplete="username" value="${escapeHtml(state.signupUsername)}" minlength="3" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9._]{1,22}[A-Za-z0-9]" placeholder="quantumgator" required autofocus />
-          <small>3–24 letters, numbers, periods, or underscores.</small>
+          <small>3–24 letters, numbers, periods, or underscores. We reserve it for 10 minutes while you finish.</small>
         </div>
         <div class="signup-actions"><button class="secondary-button" id="signup-back-email" type="button">Back</button><button class="primary-button" type="submit" ${state.authBusy ? "disabled" : ""}>Check username</button></div>
       </form>
@@ -2686,7 +2690,7 @@ function renderSignupWizard() {
     ${signupProgress()}
     <form class="email-auth-form signup-step" id="signup-security-form">
       <div class="signup-step-copy"><p class="section-kicker">Step 3 of 3</p><h3>Secure your account</h3><p>Use a passkey for Face ID, Touch ID, or your device lock—or create a private password. You can add the other one later from Settings.</p></div>
-      <div class="signup-summary"><span>${escapeHtml(state.signupEmail)}</span><strong>@${escapeHtml(state.signupUsername)}</strong></div>
+      <div class="signup-summary"><span>${escapeHtml(state.signupEmail)}</span><strong>@${escapeHtml(state.signupUsername)} · reserved</strong></div>
       <fieldset class="signup-methods">
         <legend>Choose how to sign in first</legend>
         <label class="signup-method${state.signupMethod === "passkey" ? " selected" : ""}${passkeyAvailable ? "" : " unavailable"}">
@@ -2956,13 +2960,18 @@ function bindViewEvents() {
   document.querySelector("#signup-username-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const username = document.querySelector("#signup-username")?.value.trim().toLowerCase() || "";
+    if (username !== state.signupUsername) state.signupUsernameReservationToken = "";
     state.signupUsername = username;
     if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)) {
       state.authError = "Use 3–24 letters, numbers, periods, or underscores.";
       render();
       return;
     }
-    const result = await runAuthAction(() => checkUsername(username));
+    const result = await runAuthAction(
+      () => checkUsername(username, state.signupUsernameReservationToken),
+      null,
+      "Reserving your username…"
+    );
     if (!result) return;
     if (!result.available) {
       state.authError = "That username is already taken. Try another.";
@@ -2970,8 +2979,10 @@ function bindViewEvents() {
       return;
     }
     state.signupUsername = result.username;
+    state.signupUsernameReservationToken = result.reservationToken || "";
     state.signupStep = 3;
     state.authError = "";
+    showActionFeedback("success", "Username reserved for 10 minutes.");
     render();
   });
   document.querySelector("#signup-back-username")?.addEventListener("click", () => {
@@ -2995,7 +3006,13 @@ function bindViewEvents() {
       return;
     }
     const profile = await runAuthAction(
-      () => createEmailAccount({ username: state.signupUsername, email: state.signupEmail, password, method: state.signupMethod }),
+      () => createEmailAccount({
+        username: state.signupUsername,
+        email: state.signupEmail,
+        password,
+        method: state.signupMethod,
+        reservationToken: state.signupUsernameReservationToken
+      }),
       state.signupMethod === "passkey" ? "Account and passkey created." : "Account created securely."
     );
     if (profile) {
@@ -3004,6 +3021,11 @@ function bindViewEvents() {
       state.signupStep = 1;
       state.signupEmail = "";
       state.signupUsername = "";
+      state.signupUsernameReservationToken = "";
+      render();
+    } else if (/username reservation/i.test(state.authError)) {
+      state.signupUsernameReservationToken = "";
+      state.signupStep = 2;
       render();
     }
   });

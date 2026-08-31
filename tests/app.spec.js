@@ -587,7 +587,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.12.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.13.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -969,6 +969,8 @@ test("account creation is an inviting three-step UF email, username, and securit
   await page.getByLabel("Username", { exact: true }).fill("newgator");
   await page.getByRole("button", { name: "Check username" }).click();
   await expect(page.getByText("Step 3 of 3")).toBeVisible();
+  await expect(page.getByText("@newgator · reserved")).toBeVisible();
+  await expect(page.locator("#action-feedback")).toContainText("Username reserved for 10 minutes");
   await expect(page.getByRole("radio", { name: /Passkey/ })).toBeChecked();
   await expect(page.getByLabel("UFID verification")).toHaveCount(0);
   await page.getByRole("radio", { name: /Private password/ }).check();
