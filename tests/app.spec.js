@@ -1,19 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
-const createThreeStepAccount = async (page, { email = "new.gator@ufl.edu", username = "newgator", method = "passkey" } = {}) => {
+const createTwoStepAccount = async (page, { email = "new.gator@ufl.edu", password = "quantum-safe-password", addPasskey = false } = {}) => {
   await page.getByRole("tab", { name: "Create Account" }).click();
   await page.getByLabel("UF email", { exact: true }).fill(email);
-  await page.getByRole("button", { name: "Next: choose a username" }).click();
-  await page.getByLabel("Username", { exact: true }).fill(username);
-  await page.getByRole("button", { name: "Check username" }).click();
-  if (method === "password") {
-    await page.getByRole("radio", { name: /Private password/ }).check();
-    await page.locator("#signup-password").fill("quantum-safe-password");
-    await page.getByRole("button", { name: "Create account", exact: true }).click();
-  } else {
-    await page.getByRole("button", { name: "Create with passkey" }).click();
-  }
+  await page.getByRole("button", { name: "Next: create a password" }).click();
+  await page.locator("#signup-password").fill(password);
+  await page.locator("#signup-password-confirm").fill(password);
+  if (addPasskey) await page.getByLabel(/Add Face ID \/ Touch ID/).check();
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
 };
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
@@ -544,6 +539,27 @@ test("display name takes any characters within the limit but not one already in 
   await expect(page.getByText("Use 2 to 80 characters for your display name.")).toBeVisible();
 });
 
+test("a member can change the automatic username later from Settings", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ jordan: "jordan@ufl.edu", taken: "taken@ufl.edu" });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-username", username: "jordan", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" });
+  });
+  await page.getByRole("button", { name: "Open settings" }).click();
+
+  const username = page.getByLabel("Login username");
+  await expect(username).toHaveValue("jordan");
+  await username.fill("taken");
+  await page.getByRole("button", { name: "Change Username" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("That username is already taken.");
+
+  await username.fill("jordan.q");
+  await page.getByRole("button", { name: "Change Username" }).click();
+  await expect(page.locator("#action-feedback")).toContainText("Username updated");
+  await expect(page.getByLabel("Login username")).toHaveValue("jordan.q");
+  await expect(page.locator(".settings-account-summary")).toContainText("@jordan.q");
+});
+
 test("account management and updates are both collapsible", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "member-1", displayName: "Jordan", email: "jordan@ufl.edu", role: "member" }));
@@ -587,7 +603,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.13.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.14.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -939,7 +955,7 @@ test("a long leaderboard previews ten and opens the rest in a scrollable popup",
   await expect(section.locator(".leader-row")).toHaveCount(10);
 });
 
-test("account creation is an inviting three-step UF email, username, and security flow", async ({ page }) => {
+test("account creation is a clean two-step UF email and confirmed-password flow", async ({ page }) => {
   await navButton(page, "Profile").click();
   await expect(page.getByRole("tab", { name: "Log In" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("Username or UF email")).toBeVisible();
@@ -958,26 +974,29 @@ test("account creation is an inviting three-step UF email, username, and securit
   await page.locator("#signup-modal-backdrop").click({ position: { x: 4, y: 4 } });
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
   await page.getByRole("tab", { name: "Create Account" }).click();
-  await expect(page.getByText("Step 1 of 3")).toBeVisible();
-  await page.getByLabel("UF email", { exact: true }).fill("new.gator@ufl.edu");
-  await page.getByRole("button", { name: "Next: choose a username" }).click();
-  await expect(page.getByText("Step 2 of 3")).toBeVisible();
+  await expect(page.getByText("Step 1 of 2")).toBeVisible();
+  await expect(page.getByText("Two quick steps: your UF email and a password.")).toBeVisible();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "taken@ufl.edu" }));
-  await page.getByLabel("Username", { exact: true }).fill("taken");
-  await page.getByRole("button", { name: "Check username" }).click();
-  await expect(page.getByText("That username is already taken. Try another.")).toBeVisible();
-  await page.getByLabel("Username", { exact: true }).fill("newgator");
-  await page.getByRole("button", { name: "Check username" }).click();
-  await expect(page.getByText("Step 3 of 3")).toBeVisible();
-  await expect(page.getByText("@newgator · reserved")).toBeVisible();
-  await expect(page.locator("#action-feedback")).toContainText("Username reserved for 10 minutes");
-  await expect(page.getByRole("radio", { name: /Passkey/ })).toBeChecked();
+  await page.getByLabel("UF email", { exact: true }).fill("taken@ufl.edu");
+  await page.getByRole("button", { name: "Next: create a password" }).click();
+  await expect(page.getByText("An account already uses this UF email username. Log in or use Forgot password.")).toBeVisible();
+  await page.getByLabel("UF email", { exact: true }).fill("new.gator@ufl.edu");
+  await page.getByRole("button", { name: "Next: create a password" }).click();
+  await expect(page.getByText("Step 2 of 2")).toBeVisible();
+  await expect(page.getByText("@new.gator")).toBeVisible();
+  await expect(page.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel(/Add Face ID \/ Touch ID/)).not.toBeChecked();
   await expect(page.getByLabel("UFID verification")).toHaveCount(0);
-  await page.getByRole("radio", { name: /Private password/ }).check();
   await page.locator("#signup-password").fill("quantum-safe-password");
+  await page.locator("#signup-password-confirm").fill("different-password");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await expect(page.getByText("The passwords do not match yet.")).toBeVisible();
+  await page.locator("#signup-password-confirm").fill("quantum-safe-password");
+  await expect(page.getByText("Passwords match.")).toBeVisible();
+  await page.getByLabel(/Add Face ID \/ Touch ID/).check();
   await page.getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "newgator" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "new.gator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
 });
 
@@ -1321,7 +1340,7 @@ test("officer controls list every leadership seat, linked and pending alike", as
 
 test("a brand new account is always a plain member with no officer controls", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await createThreeStepAccount(page, { email: "hopeful@ufl.edu", username: "hopeful" });
+  await createTwoStepAccount(page, { email: "hopeful@ufl.edu" });
   await expect(page.locator(".profile-role-line").getByText("Member", { exact: true })).toBeVisible();
   await expect(page.locator(".officer-settings-group")).toHaveCount(0);
   await page.getByRole("button", { name: "Open settings" }).click();

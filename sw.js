@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v294-login-reliability";
+const CACHE_NAME = "fqc-app-v295-two-step-signup";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

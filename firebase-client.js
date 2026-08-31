@@ -384,6 +384,26 @@ export async function updateProfileName(displayName) {
   return normalizedProfile(result.data);
 }
 
+export async function updateUsername(username) {
+  const normalizedUsername = String(username || "").trim().toLowerCase();
+  if (testMode) {
+    const holderEmail = mockUsernameDirectory.get(normalizedUsername);
+    if (holderEmail && holderEmail !== mockProfile?.email) throw new Error("That username is already taken.");
+    const previous = String(mockProfile?.username || "");
+    if (previous && mockUsernameDirectory.get(previous) === mockProfile?.email) mockUsernameDirectory.delete(previous);
+    mockUsernameDirectory.set(normalizedUsername, mockProfile?.email || "");
+    mockProfile = { ...mockProfile, username: normalizedUsername };
+    mockMembers = mockMembers.map((member) => member.uid === mockProfile.uid ? mockProfile : member);
+    emitMockSession();
+    return normalizedProfile(mockProfile);
+  }
+  const reservation = await checkUsername(normalizedUsername);
+  if (!reservation?.available) throw new Error("That username is already taken.");
+  await callable("claimUsername")({ username: normalizedUsername, reservationToken: reservation.reservationToken });
+  const refreshed = await callable("ensureUserProfile")();
+  return normalizedProfile(refreshed.data);
+}
+
 export async function recordCheckIn(location = null) {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
