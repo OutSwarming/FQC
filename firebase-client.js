@@ -9,8 +9,7 @@ import {
   setPersistence,
   signInWithCustomToken,
   signInWithEmailAndPassword,
-  signOut,
-  updateProfile
+  signOut
 } from "firebase/auth";
 import { doc, getDoc, getFirestore, onSnapshot } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -64,6 +63,7 @@ let mockOfficerEventOperations = {
     { row: 2, eventId: "fqc-2026-03-03-ionq", event: "IonQ Quantum Networking Speaker Session", date: "2026-03-03", item: "Speaker catering", quantity: 1, unit: "order", unitCost: 80, plannedCost: 80, actualCost: 0, fundingSource: "Operational Funding", status: "Estimate", notes: "Confirm final receipt." }
   ],
   totals: { baseFunding: 1050, operationalFunding: 2490, totalApproved: 3540, plannedSpend: 220, actualSpend: 40, availableAfterActual: 3500, uncommittedAfterPlan: 3320 },
+  attendanceSync: { state: "current", processed: 0, remaining: false, lastError: "", lastSuccessAt: "" },
   locations: ["Malachowsky Hall", "Larsen Hall", "Reitz Student Union", "Marston Science Library"],
   updatedAt: new Date().toISOString()
 };
@@ -101,6 +101,20 @@ async function retryOnceWhenTransient(action) {
     await shortRetryDelay();
     return action();
   }
+}
+
+async function retryAccountFinalization(action) {
+  let lastError;
+  for (const delay of [0, 350, 900, 1800]) {
+    if (delay) await new Promise((resolve) => globalThis.setTimeout(resolve, delay));
+    try {
+      return await action();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFirebaseError(error)) throw error;
+    }
+  }
+  throw lastError;
 }
 
 function normalizedEventIds(eventIds = []) {
@@ -278,11 +292,23 @@ function generatedAccountPassword() {
 }
 
 export async function createEmailAccount({ username, email, password, method = "password", reservationToken = "" }) {
-  const normalizedUsername = String(username || "").trim().toLowerCase();
+  let normalizedUsername = String(username || "").trim().toLowerCase();
   if (testMode) {
+    const automaticUsername = normalizedUsername === String(email || "").trim().toLowerCase().split("@")[0];
+    if (mockUsernameDirectory.has(normalizedUsername)
+      && automaticUsername) {
+      const base = normalizedUsername;
+      for (let suffix = 2; suffix <= 100; suffix += 1) {
+        const suffixText = `.${suffix}`;
+        const candidate = `${base.slice(0, 24 - suffixText.length).replace(/[._]+$/g, "")}${suffixText}`;
+        if (!mockUsernameDirectory.has(candidate)) {
+          normalizedUsername = candidate;
+          break;
+        }
+      }
+    }
     if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
-    if (normalizedUsername !== String(email || "").trim().toLowerCase().split("@")[0]
-      && mockUsernameReservations.get(normalizedUsername) !== reservationToken) {
+    if (!automaticUsername && mockUsernameReservations.get(normalizedUsername) !== reservationToken) {
       throw new Error("Your username reservation expired. Choose the username again.");
     }
     mockUsernameDirectory.set(normalizedUsername, email);
@@ -311,15 +337,16 @@ export async function createEmailAccount({ username, email, password, method = "
   let credential;
   try {
     credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
-    await callable("claimUsername")({ username: normalizedUsername, reservationToken });
-    await updateProfile(credential.user, { displayName: normalizedUsername });
-    const result = await callable("ensureUserProfile")();
+    const result = await retryAccountFinalization(() => callable("finalizeAccount")({ username: normalizedUsername }));
     const profile = normalizedProfile(result.data);
     settleAccountCreation(profile);
     return method === "passkey" ? registerPasskey() : profile;
   } catch (error) {
     rejectAccountCreation(error);
-    if (credential?.user) await deleteUser(credential.user).catch(() => {});
+    const code = String(error?.code || "");
+    if (credential?.user && (code.includes("permission-denied") || code.includes("invalid-argument"))) {
+      await deleteUser(credential.user).catch(() => {});
+    }
     throw error;
   } finally {
     globalThis.setTimeout(() => {

@@ -603,7 +603,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.15.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.16.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -976,15 +976,6 @@ test("account creation is a clean two-step UF email and confirmed-password flow"
   await page.getByRole("tab", { name: "Create Account" }).click();
   await expect(page.getByText("Step 1 of 2")).toBeVisible();
   await expect(page.getByText("Two quick steps: your UF email and a password.")).toBeVisible();
-  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "taken@ufl.edu" }));
-  await page.getByLabel("UF email", { exact: true }).fill("taken@ufl.edu");
-  await page.getByRole("button", { name: "Next: create a password" }).click();
-  await expect(page.getByText("Step 2 of 2")).toBeVisible();
-  await page.locator("#signup-password").fill("quantum-safe-password");
-  await page.locator("#signup-password-confirm").fill("quantum-safe-password");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await expect(page.locator("#action-feedback")).toContainText("That username is already taken.");
-  await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByLabel("UF email", { exact: true }).fill("new.gator@ufl.edu");
   await page.getByRole("button", { name: "Next: create a password" }).click();
   await expect(page.getByText("Step 2 of 2")).toBeVisible();
@@ -1003,6 +994,19 @@ test("account creation is a clean two-step UF email and confirmed-password flow"
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "new.gator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
+});
+
+test("an automatic username collision never blocks account creation", async ({ page }) => {
+  await navButton(page, "Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "another.member@ufl.edu" }));
+  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.getByLabel("UF email", { exact: true }).fill("taken@ufl.edu");
+  await page.getByRole("button", { name: "Next: create a password" }).click();
+  await page.locator("#signup-password").fill("quantum-safe-password");
+  await page.locator("#signup-password-confirm").fill("quantum-safe-password");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "taken.2" })).toBeVisible();
 });
 
 test("forgot password accepts a username or UF email", async ({ page }) => {

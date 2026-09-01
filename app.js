@@ -31,9 +31,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.15.0";
+const APP_VERSION = "2.16.0";
 const APP_RELEASE_DATE = "September 1, 2026";
 const RELEASE_HISTORY = [
+  ["2.16.0", "Rebuilt account creation and event check-in for crowded meetings with retryable profile setup, collision-safe usernames, independent leaderboard updates, cached location checks, and five-minute batched attendance Sheet sync"],
   ["2.15.0", "Fixed the production account-creation transaction, removed the signup reservation round trip, and stopped duplicate profile setup during account creation so crowded GBMs can sign up reliably"],
   ["2.14.0", "Simplified signup to UF email and a confirmed password, automatically uses the UF email name as the username, offers Face ID or Touch ID as an optional add-on, and moved username changes into Settings"],
   ["2.13.0", "Made GBM signups reliable by reserving usernames for ten minutes, cleaning stale deleted-account names, and improving login recovery and error messages"],
@@ -676,6 +677,8 @@ let renderedView = "";
 let installPrompt = null;
 let savedMapView = null;
 let mapPinSignature = "";
+let cachedCheckInLocation = null;
+let checkInLocationPromise = null;
 
 function isInstalledApp() {
   return window.matchMedia?.("(display-mode: standalone)").matches === true
@@ -875,6 +878,9 @@ function setView(view) {
   }
   if (state.memberRole === "officer" && !state.members.length && (state.view === "settings" || state.view === "profile")) {
     queueMicrotask(refreshMemberDirectory);
+  }
+  if (state.view === "checkin" && state.loggedIn && state.checkInOpen && state.checkInRequireLocation) {
+    queueMicrotask(() => currentCheckInLocation().catch(() => {}));
   }
 }
 
@@ -1830,19 +1836,26 @@ async function runAuthAction(action, successMessage = "", workingMessage = "Upda
 
 function currentCheckInLocation() {
   if (!navigator.geolocation) return Promise.reject(new Error("Location services are not available on this device."));
-  return new Promise((resolve, reject) => {
+  if (cachedCheckInLocation && Date.now() - cachedCheckInLocation.savedAt < 120000) {
+    return Promise.resolve(cachedCheckInLocation.value);
+  }
+  if (checkInLocationPromise) return checkInLocationPromise;
+  checkInLocationPromise = new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition((position) => {
-      resolve({
+      const value = {
         lat: position.coords.latitude,
         lng: position.coords.longitude,
         accuracy: position.coords.accuracy
-      });
+      };
+      cachedCheckInLocation = { value, savedAt: Date.now() };
+      resolve(value);
     }, (error) => {
       if (error.code === 1) reject(new Error("Allow location access to check in, then try again."));
       else if (error.code === 3) reject(new Error("Location took too long. Move near a window and try again."));
       else reject(new Error("Your location could not be determined. Check location services and try again."));
     }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 });
-  });
+  }).finally(() => { checkInLocationPromise = null; });
+  return checkInLocationPromise;
 }
 
 async function refreshMemberDirectory() {
@@ -1994,9 +2007,13 @@ function renderOfficerWorkspace() {
     .filter(isOfficerEventCompleted)
     .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.time).localeCompare(String(a.time)));
   const visibleCurrentEvents = state.showAllOfficerEvents ? currentEvents : currentEvents.slice(0, 4);
+  const attendanceSync = operations?.attendanceSync || { state: "current", remaining: false };
+  const attendanceSyncLabel = attendanceSync.state === "retrying"
+    ? "Attendance Sheet retrying"
+    : attendanceSync.remaining ? "Attendance Sheet catching up" : "Attendance Sheet current";
   return `
     <section class="section officer-operations">
-      <div class="section-header officer-operations-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div></div>
+      <div class="section-header officer-operations-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div><span class="attendance-sync-pill state-${escapeHtml(attendanceSync.state)}">${escapeHtml(attendanceSyncLabel)}</span></div>
       <datalist id="uf-location-options">${(operations?.locations || []).map((location) => `<option value="${escapeHtml(location)}"></option>`).join("")}</datalist>
       <details class="officer-event-group" ${disclosureAttrs("officer-group-current", true)}>
         <summary><span><strong>Current Events</strong><small>${currentEvents.length} scheduled</small></span></summary>

@@ -1823,6 +1823,25 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
 
 .officer-operations { display: grid; gap: 16px; }
 .officer-operations-header { align-items: start; }
+.attendance-sync-pill {
+  align-items: center;
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
+  border-radius: 999px;
+  color: var(--success);
+  display: inline-flex;
+  font-size: .7rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: .5rem .65rem;
+  white-space: nowrap;
+}
+.attendance-sync-pill.state-retrying,
+.attendance-sync-pill.state-catching-up {
+  background: color-mix(in srgb, #f2b84b 14%, var(--surface));
+  border-color: color-mix(in srgb, #f2b84b 42%, var(--border));
+  color: #a56b00;
+}
 
 .officer-event-group {
   overflow: hidden;

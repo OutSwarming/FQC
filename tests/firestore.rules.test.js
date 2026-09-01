@@ -30,6 +30,9 @@ beforeEach(async () => {
     await setDoc(doc(database, "events", "gbm-1", "checkins", "member-1"), { uid: "member-1" });
     await setDoc(doc(database, "passkeyCredentials", "credential-1"), { uid: "member-1" });
     await setDoc(doc(database, "usernameDirectory", "member"), { uid: "member-1" });
+    await setDoc(doc(database, "leaderboardUpdates", "member-1"), { entry: { uid: "member-1" } });
+    await setDoc(doc(database, "attendanceSyncQueue", "sync-1"), { uid: "member-1", eventId: "gbm-1" });
+    await setDoc(doc(database, "system", "attendanceSyncStatus"), { state: "current" });
   });
 });
 
@@ -71,6 +74,17 @@ test("the aggregate leaderboard costs one signed-in document read and remains se
   await assertFails(getDoc(doc(publicDatabase, "system", "leaderboardData")));
   await assertFails(setDoc(doc(memberDatabase, "system", "leaderboardData"), { entries: [] }, { merge: true }));
   await assertFails(getDoc(doc(publicDatabase, "users", "member-1")));
+});
+
+test("deferred scaling queues remain server-only", async () => {
+  const memberDatabase = testEnvironment.authenticatedContext("member-1", { role: "member" }).firestore();
+  const officerDatabase = testEnvironment.authenticatedContext("officer-1", { role: "officer" }).firestore();
+  for (const database of [memberDatabase, officerDatabase]) {
+    await assertFails(getDoc(doc(database, "leaderboardUpdates", "member-1")));
+    await assertFails(getDoc(doc(database, "attendanceSyncQueue", "sync-1")));
+    await assertFails(getDoc(doc(database, "system", "attendanceSyncStatus")));
+    await assertFails(setDoc(doc(database, "attendanceSyncQueue", "fake"), { uid: "member-1" }));
+  }
 });
 
 test("members read their own attendance and officers can read attendance", async () => {
