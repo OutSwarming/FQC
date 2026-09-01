@@ -69,6 +69,7 @@ let mockOfficerEventOperations = {
 };
 let mockUsernameDirectory = new Map();
 let mockUsernameReservations = new Map();
+let pendingAccountCreation = null;
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
@@ -209,9 +210,12 @@ export function observeSession(callback, onError = () => {}) {
       return;
     }
     try {
-      const result = await retryOnceWhenTransient(() => callable("ensureUserProfile")());
+      const profile = pendingAccountCreation
+        ? await pendingAccountCreation.promise
+        : normalizedProfile((await retryOnceWhenTransient(() => callable("ensureUserProfile")())).data);
+      if (auth.currentUser?.uid !== user.uid) return;
       await user.getIdToken(true);
-      callback({ user, profile: normalizedProfile(result.data) });
+      callback({ user, profile });
     } catch (error) {
       onError(error);
     }
@@ -277,7 +281,10 @@ export async function createEmailAccount({ username, email, password, method = "
   const normalizedUsername = String(username || "").trim().toLowerCase();
   if (testMode) {
     if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
-    if (mockUsernameReservations.get(normalizedUsername) !== reservationToken) throw new Error("Your username reservation expired. Choose the username again.");
+    if (normalizedUsername !== String(email || "").trim().toLowerCase().split("@")[0]
+      && mockUsernameReservations.get(normalizedUsername) !== reservationToken) {
+      throw new Error("Your username reservation expired. Choose the username again.");
+    }
     mockUsernameDirectory.set(normalizedUsername, email);
     mockUsernameReservations.delete(normalizedUsername);
     mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email });
@@ -288,17 +295,37 @@ export async function createEmailAccount({ username, email, password, method = "
     return mockProfile;
   }
   const accountPassword = method === "passkey" ? generatedAccountPassword() : password;
-  const credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
+  let settleAccountCreation;
+  let rejectAccountCreation;
+  const creation = {
+    promise: new Promise((resolve, reject) => {
+      settleAccountCreation = resolve;
+      rejectAccountCreation = reject;
+    })
+  };
+  // The Auth state listener fires as soon as Firebase creates the credential.
+  // Make it await this single account setup pipeline instead of racing a second
+  // profile write before the username has been claimed.
+  creation.promise.catch(() => {});
+  pendingAccountCreation = creation;
+  let credential;
   try {
+    credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
     await callable("claimUsername")({ username: normalizedUsername, reservationToken });
+    await updateProfile(credential.user, { displayName: normalizedUsername });
+    const result = await callable("ensureUserProfile")();
+    const profile = normalizedProfile(result.data);
+    settleAccountCreation(profile);
+    return method === "passkey" ? registerPasskey() : profile;
   } catch (error) {
-    await deleteUser(credential.user).catch(() => {});
+    rejectAccountCreation(error);
+    if (credential?.user) await deleteUser(credential.user).catch(() => {});
     throw error;
+  } finally {
+    globalThis.setTimeout(() => {
+      if (pendingAccountCreation === creation) pendingAccountCreation = null;
+    }, 5000);
   }
-  await updateProfile(credential.user, { displayName: normalizedUsername });
-  const result = await callable("ensureUserProfile")();
-  const profile = normalizedProfile(result.data);
-  return method === "passkey" ? registerPasskey() : profile;
 }
 
 // A reset request always reports the same result, so the form cannot be used to
@@ -655,7 +682,7 @@ export function readableAuthError(error) {
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found") || code.includes("not-found")) return "The username, UF email, or password is incorrect.";
   if (code.includes("weak-password")) return "Use a password with at least eight characters.";
   if (code.includes("invalid-email")) return "Enter a valid email address.";
-  if (code.includes("too-many-requests")) return "Too many attempts. Wait a moment and try again.";
+  if (code.includes("too-many-requests")) return "Firebase is temporarily limiting signups or sign-ins on this network. Wait a moment, or switch between UF Wi-Fi and cellular data, then try again.";
   if (isTransientFirebaseError(error)) return "FQC could not reach sign-in. Check your connection and try once more.";
   if (code.includes("unauthenticated")) return "Your session expired. Sign in again.";
   if (code.includes("permission-denied")) return "Your account does not have permission for that action.";

@@ -21,6 +21,7 @@ import {
   resolvedAccess,
   sheetColumnLetter,
   usernameReservationHash,
+  usernameForSignupEmail,
   usernameForInput
 } from "./index.js";
 
@@ -244,6 +245,17 @@ test("usernames are normalized, constrained, and reserve trusted club names", ()
   assert.equal(usernameForInput("no spaces"), "");
   assert.equal(usernameForInput("admin"), "");
   assert.equal(usernameForInput("a"), "");
+  assert.equal(usernameForSignupEmail("New.Gator@ufl.edu"), "new.gator");
+  assert.equal(usernameForSignupEmail("person@gmail.com"), "");
+  assert.equal(usernameForSignupEmail("president@ufl.edu"), "");
+});
+
+test("automatic UF usernames stay independent at event signup scale", () => {
+  const usernames = Array.from({ length: 1_000 }, (_, index) => (
+    usernameForSignupEmail(`gator${String(index).padStart(4, "0")}@ufl.edu`)
+  ));
+  assert.equal(usernames.every(Boolean), true);
+  assert.equal(new Set(usernames).size, usernames.length);
 });
 
 test("username reservations are private, exclusive, and expire", () => {

@@ -119,6 +119,12 @@ export function usernameForInput(value) {
   return reservedUsernames.has(username) ? "" : username;
 }
 
+export function usernameForSignupEmail(email) {
+  const value = cleanText(email, 180).toLowerCase();
+  if (!/^[^\s@]+@ufl\.edu$/.test(value)) return "";
+  return usernameForInput(value.split("@")[0]);
+}
+
 export function usernameReservationHash(token) {
   const value = cleanText(token, 180);
   return value ? createHash("sha256").update(value).digest("hex") : "";
@@ -963,20 +969,19 @@ export const claimUsername = onCall(callableOptions, async (request) => {
     ]);
     const reservation = usernameSnapshot.data() || {};
     const heldByUid = cleanText(reservation.uid, 160);
+    const previous = usernameForInput(userSnapshot.data()?.username);
+    const isAutomaticFirstClaim = !previous && username === usernameForSignupEmail(caller.token.email);
     if (heldByUid && heldByUid !== caller.uid) {
       throw new HttpsError("already-exists", "That username is already taken.");
     }
-    if (heldByUid !== caller.uid && !canUseUsernameReservation(reservation, reservationToken)) {
+    if (heldByUid !== caller.uid && !isAutomaticFirstClaim && !canUseUsernameReservation(reservation, reservationToken)) {
       throw new HttpsError("failed-precondition", isActiveUsernameReservation(reservation)
         ? "That username is being used in another signup. Try another."
         : "Your username reservation expired. Choose the username again.");
     }
-    const previous = usernameForInput(userSnapshot.data()?.username);
     if (previous && previous !== username) transaction.delete(db.collection("usernameDirectory").doc(previous));
     transaction.set(usernameRef, {
       uid: caller.uid,
-      reservationHash: FieldValue.delete(),
-      reservationExpiresAt: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp()
     });
     transaction.set(userRef, { username, updatedAt: FieldValue.serverTimestamp() }, { merge: true });

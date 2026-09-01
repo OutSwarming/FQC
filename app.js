@@ -3,7 +3,6 @@ import "leaflet/dist/leaflet.css";
 import {
   assignLeadershipRole,
   openLeadershipSeat,
-  checkUsername,
   changeMemberRole,
   createEmailAccount,
   deleteOfficerBudgetItem,
@@ -32,9 +31,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.14.0";
-const APP_RELEASE_DATE = "August 30, 2026";
+const APP_VERSION = "2.15.0";
+const APP_RELEASE_DATE = "September 1, 2026";
 const RELEASE_HISTORY = [
+  ["2.15.0", "Fixed the production account-creation transaction, removed the signup reservation round trip, and stopped duplicate profile setup during account creation so crowded GBMs can sign up reliably"],
   ["2.14.0", "Simplified signup to UF email and a confirmed password, automatically uses the UF email name as the username, offers Face ID or Touch ID as an optional add-on, and moved username changes into Settings"],
   ["2.13.0", "Made GBM signups reliable by reserving usernames for ten minutes, cleaning stale deleted-account names, and improving login recovery and error messages"],
   ["2.12.0", "Enforced the UF email requirement on the server, so a new account cannot be opened with a non-UF address by going around the browser"],
@@ -142,7 +142,6 @@ const state = {
   signupStep: 1,
   signupEmail: "",
   signupUsername: "",
-  signupUsernameReservationToken: "",
   signupAddPasskey: false,
   authUser: null,
   memberRole: "member",
@@ -2931,7 +2930,7 @@ function bindViewEvents() {
     const password = document.querySelector("#auth-password")?.value || "";
     await runAuthAction(() => signInWithEmail(identifier, password));
   });
-  document.querySelector("#signup-email-form")?.addEventListener("submit", async (event) => {
+  document.querySelector("#signup-email-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const email = document.querySelector("#signup-email")?.value.trim().toLowerCase() || "";
     if (!/^[^\s@]+@ufl\.edu$/i.test(email)) {
@@ -2940,30 +2939,16 @@ function bindViewEvents() {
       return;
     }
     const username = email.split("@")[0];
-    if (email !== state.signupEmail) state.signupUsernameReservationToken = "";
     state.signupEmail = email;
     state.signupUsername = username;
-    if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)) {
+    if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)
+      || ["admin", "administrator", "fqc", "officer", "president", "support", "treasurer"].includes(username)) {
       state.authError = "This UF email cannot make an automatic username. Contact an FQC officer for help.";
       render();
       return;
     }
-    const result = await runAuthAction(
-      () => checkUsername(username, state.signupUsernameReservationToken),
-      null,
-      "Checking your UF email…"
-    );
-    if (!result) return;
-    if (!result.available) {
-      state.authError = "An account already uses this UF email username. Log in or use Forgot password.";
-      render();
-      return;
-    }
-    state.signupUsername = result.username;
-    state.signupUsernameReservationToken = result.reservationToken || "";
     state.signupStep = 2;
     state.authError = "";
-    showActionFeedback("success", "UF email confirmed.");
     render();
   });
   document.querySelector("#signup-back-email")?.addEventListener("click", () => {
@@ -3015,8 +3000,7 @@ function bindViewEvents() {
         username: state.signupUsername,
         email: state.signupEmail,
         password,
-        method: "password",
-        reservationToken: state.signupUsernameReservationToken
+        method: "password"
       }),
       "Account created securely."
     );
@@ -3026,7 +3010,6 @@ function bindViewEvents() {
       state.signupStep = 1;
       state.signupEmail = "";
       state.signupUsername = "";
-      state.signupUsernameReservationToken = "";
       state.signupAddPasskey = false;
       render();
       if (shouldAddPasskey) {
@@ -3040,10 +3023,6 @@ function bindViewEvents() {
           render();
         }
       }
-    } else if (/username reservation/i.test(state.authError)) {
-      state.signupUsernameReservationToken = "";
-      state.signupStep = 1;
-      render();
     }
   });
   document.querySelector("#forgot-password")?.addEventListener("click", async () => {
