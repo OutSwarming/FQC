@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.9";
+const APP_VERSION = "2.26.10";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.10", "Raised the expanded event sheet and faded map controls during expansion"],
   ["2.26.9", "Smoothed rapid event-sheet swipes, direction changes, and interrupted snap animations"],
   ["2.26.8", "Added subtle blue shading to calendar days with events in Light mode"],
   ["2.26.7", "Made the selected navigation bubble clearer in both themes and faded the event swipe hint during expansion"],
@@ -1496,12 +1497,13 @@ function getMobileEventSheetMetrics() {
   const dock = document.querySelector('.bottom-nav');
   const dockClearance = dock ? dock.getBoundingClientRect().height + (parseFloat(getComputedStyle(dock).bottom) || 0) + 8 : 96;
   const availableHeight = Math.max(0, explorer ? explorer.getBoundingClientRect().height - dockClearance : window.innerHeight - 160);
-  // Extend beneath the dock without moving the familiar top of each preview.
-  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25 + dockClearance, medium: availableHeight * .5 + dockClearance, high: Math.max(0, availableHeight - 8) + dockClearance };
+  // Keep a narrow map strip in the expanded state; preview heights stay unchanged.
+  const explorerHeight = availableHeight + dockClearance;
+  const high = Math.max(0, explorerHeight - Math.min(48, Math.max(24, explorerHeight * .065)));
+  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25 + dockClearance, medium: availableHeight * .5 + dockClearance, high };
   const low = Math.min(190, Math.max(154, availableHeight * 0.24));
   const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
-  const high = Math.max(medium + 112, availableHeight * 0.78);
-  return { closed: 0, low: low + dockClearance, medium: medium + dockClearance, high: Math.min(high, availableHeight - 92) + dockClearance };
+  return { closed: 0, low: low + dockClearance, medium: medium + dockClearance, high };
 }
 
 function setMobileEventSheetMode(mode, options = {}) {
@@ -1519,6 +1521,8 @@ function setMobileEventSheetMode(mode, options = {}) {
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
   explorer.dataset.dockHidden = String(nextMode === "high");
+  explorer.dataset.mapControlsHidden = String(nextMode === "high");
+  explorer.style.setProperty("--event-map-controls-opacity", nextMode === "high" ? "0" : "1");
   planner.style.setProperty("--event-snap-duration", `${options.immediate ? 0 : options.duration ?? 320}ms`);
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
   planner.classList.toggle("event-sheet-dragging", options.dragging === true);
@@ -1618,6 +1622,8 @@ function bindMobileEventSheet() {
     const expansion = Math.max(0, Math.min(1, (height - metrics.medium) / (metrics.high - metrics.medium)));
     explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
     planner.style.setProperty("--event-hint-opacity", String(Math.max(0, 1 - expansion / .6)));
+    explorer.style.setProperty("--event-map-controls-opacity", String(Math.max(0, 1 - expansion / .6)));
+    explorer.dataset.mapControlsHidden = String(expansion >= .6);
     // Release the dock during expansion, before pointerup. Separate thresholds
     // prevent flicker when the finger pauses or reverses near the boundary.
     const hideThreshold = explorer.dataset.dockHidden === "true" ? .12 : .28;

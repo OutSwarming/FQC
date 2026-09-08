@@ -2490,6 +2490,16 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   .event-detail-card { padding: 14px; border-radius: 14px; }
   .event-detail-meta,
   .event-detail-focus { display: none; }
+  .event-explorer :is(.map-status, .leaflet-control-zoom) {
+    opacity: var(--event-map-controls-opacity, 1);
+    visibility: visible;
+    transition: opacity 180ms ease, visibility 0s 180ms;
+  }
+  .event-explorer[data-map-controls-hidden="true"] :is(.map-status, .leaflet-control-zoom) {
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .event-explorer:has(.event-sheet-dragging) :is(.map-status, .leaflet-control-zoom) { transition: none; }
   .map-status { top: 10px; left: 10px; }
   .leaflet-control-zoom { margin-top: 10px !important; margin-right: 10px !important; }
   .section-header { display: grid; }

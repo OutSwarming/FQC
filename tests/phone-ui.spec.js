@@ -915,16 +915,28 @@ test('event dock leaves and returns while the finger is still holding the sheet'
     return handle.dispatchEvent(type, { button: 0, pointerId: 91, pointerType: 'touch', clientX: start.x, clientY: y });
   };
   await send('pointerdown', start.y);
-  await send('pointermove', Math.max(8, start.y - 220));
+  await send('pointermove', Math.max(8, start.y - 320));
   await expect(page.locator('.event-planner')).toHaveClass(/event-sheet-dragging/);
   await expect(page.locator('.bottom-nav')).toBeHidden();
   await expect(handle.locator('small')).toHaveCSS('opacity', '0');
+  await expect(page.locator('.map-status')).toBeHidden();
+  await expect(page.locator('.leaflet-control-zoom')).toBeHidden();
   // Reverse without lifting: the navigation and hint must return before release too.
   await send('pointermove', start.y);
   await expect(page.locator('.bottom-nav')).toBeVisible();
   await expect.poll(() => handle.locator('small').evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(.99);
+  await expect(page.locator('.map-status')).toBeVisible();
+  await expect(page.locator('.leaflet-control-zoom')).toBeVisible();
   await send('pointerup', start.y);
   await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
+  await handle.press('ArrowUp');
+  await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'high');
+  await page.waitForTimeout(350);
+  const gap = await page.locator('.event-planner').evaluate(el => el.getBoundingClientRect().top - document.querySelector('#event-map').getBoundingClientRect().top);
+  expect(gap).toBeGreaterThanOrEqual(23);
+  expect(gap).toBeLessThanOrEqual(49);
+  await expect(page.locator('.map-status')).toBeHidden();
+  await expect(page.locator('.leaflet-control-zoom')).toBeHidden();
 });
 
 test('Android touch drags the navigation bubble from capsule padding and cancels cleanly', async ({ page, browserName }) => {
