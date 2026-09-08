@@ -415,3 +415,46 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
   expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test('map touch defaults cannot start the iOS loupe and taps still reach pins and controls once', async ({ page }) => {
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => {
+    window.__touchDefaults = [];
+    document.addEventListener('touchstart', event => {
+      if (event.target.closest('#event-map')) window.__touchDefaults.push(event.defaultPrevented);
+    });
+    // A stale selection must be cleared when touching the map.
+    const range = document.createRange(); range.selectNodeContents(document.querySelector('.map-status'));
+    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  });
+  const p = await mapPoint(page);
+  await page.touchscreen.tap(p.x, p.y);
+  await expect.poll(() => page.evaluate(() => window.__touchDefaults.length)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__touchDefaults.every(Boolean))).toBe(true);
+  expect(await page.evaluate(() => getSelection().isCollapsed)).toBe(true);
+  expect(await page.locator('.leaflet-tile-pane').evaluate(el => getComputedStyle(el).pointerEvents)).toBe('none');
+  await page.locator('.event-map-pin').first().tap();
+  await expect(page.locator('.event-map-pin.active')).toHaveCount(1);
+  await expect(page.locator('.event-intro h2')).toContainText('Quantum Workshop');
+  const before = await zoom(page);
+  await page.getByRole('button', { name: 'Zoom in', exact: true }).tap();
+  await expect.poll(() => zoom(page)).toBeCloseTo(before + 1, 5);
+  await page.waitForTimeout(350);
+  expect(await zoom(page)).toBeCloseTo(before + 1, 5);
+  await page.getByRole('button', { name: 'Zoom out', exact: true }).tap();
+  await expect.poll(() => zoom(page)).toBeCloseTo(before, 5);
+  // The guard must be removed with the old map and rebound to the next one.
+  await nav(page, 'Hackathon').click();
+  await nav(page, 'Home').click();
+  const again = await mapPoint(page);
+  await page.touchscreen.tap(again.x, again.y);
+  expect(await page.evaluate(() => window.__touchDefaults.every(Boolean))).toBe(true);
+  // Editable controls elsewhere keep their native selection and focus behavior.
+  await nav(page, 'Profile').click();
+  const email = page.locator('#auth-identifier');
+  await email.tap();
+  await email.fill('member@ufl.edu');
+  await expect(email).toHaveValue('member@ufl.edu');
+  await expect(email).toBeFocused();
+});

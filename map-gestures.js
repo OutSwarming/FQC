@@ -1,5 +1,40 @@
 import L from 'leaflet';
 
+// WebKit's selection loupe can ignore user-select/touch-callout CSS. Cancel
+// native touch defaults (not propagation) so Leaflet still pans and pinches.
+// iOS then suppresses compatibility clicks, so relay only short, unmoved taps.
+// https://bugs.webkit.org/show_bug.cgi?id=231161
+function bindMapTouchSelectionGuard(container, suppressTap) {
+  let tap = null;
+  const editable = target => target.closest?.('input, textarea, select, [contenteditable="true"]');
+  const start = event => {
+    if (editable(event.target)) { tap = null; return; }
+    event.preventDefault();
+    container.ownerDocument.getSelection()?.removeAllRanges();
+    const first = event.touches[0];
+    tap = event.touches.length === 1 ? { target: event.target, id: first.identifier, x: first.clientX, y: first.clientY, time: performance.now(), moved: false } : null;
+  };
+  const move = event => {
+    if (editable(event.target)) return;
+    event.preventDefault();
+    if (!tap) return;
+    const first = [...event.touches].find(point => point.identifier === tap.id);
+    if (!first || event.touches.length !== 1) { tap = null; return; }
+    if (Math.hypot(first.clientX - tap.x, first.clientY - tap.y) > 4) tap.moved = true;
+  };
+  const end = event => {
+    if (editable(event.target)) return;
+    event.preventDefault();
+    const finished = tap;
+    tap = null;
+    if (!finished || event.type === 'touchcancel' || event.touches.length || finished.moved || performance.now() - finished.time >= 350 || suppressTap(finished.target) || !finished.target.isConnected) return;
+    finished.target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, detail: 0, clientX: finished.x, clientY: finished.y }));
+  };
+  const handlers = [['touchstart', start], ['touchmove', move], ['touchend', end], ['touchcancel', end]];
+  handlers.forEach(([name, handler]) => container.addEventListener(name, handler, { capture: true, passive: false }));
+  return () => handlers.forEach(([name, handler]) => container.removeEventListener(name, handler, true));
+}
+
 // Leaflet 1.9's non-animated pinch end calls _resetView, which fires
 // viewprereset and discards every tile. Settle the existing view instead so
 // loaded parent/child tiles remain visible while replacement tiles arrive.
@@ -146,7 +181,7 @@ export function bindMapQuickZoom(map) {
     animateZoom(event.containerPoint, map.getZoom() + direction);
   };
   const preventSelection = event => {
-    if (!event.target.closest?.('.leaflet-control-attribution')) event.preventDefault();
+    if (!event.target.closest?.('input, textarea, select, [contenteditable="true"]')) event.preventDefault();
   };
   // Native wheel zoom calls setZoomAround repeatedly. With CSS zoom disabled,
   // that resets the view and removes loaded tiles during trackpad reversals.
@@ -189,8 +224,10 @@ export function bindMapQuickZoom(map) {
   container.addEventListener('contextmenu', preventSelection);
   container.addEventListener('dragstart', preventSelection);
   container.addEventListener('wheel', wheel, { passive: false });
+  const removeTouchSelectionGuard = bindMapTouchSelectionGuard(container, target => performance.now() < suppressUntil && !ignore(target));
   map.on('dblclick', doubleClick);
   map.on('unload', () => {
+    removeTouchSelectionGuard();
     cancelAnimationFrame(frame); motion = null; touch = null;
     for (const [name, handler] of [['pointerdown', down], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['click', suppressClick], ['dblclick', suppressClick]]) container.removeEventListener(name, handler, true);
     for (const [name, handler] of [['selectstart', preventSelection], ['contextmenu', preventSelection], ['dragstart', preventSelection], ['wheel', wheel]]) container.removeEventListener(name, handler);

@@ -2774,11 +2774,12 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 }
 
 /* Map gestures must not start text selection, image dragging, or iOS's loupe. */
-#event-map, #event-map * {
+.event-map-shell, .event-map-shell * {
   user-select: none; -webkit-user-select: none;
   -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
 }
 #event-map img { -webkit-user-drag: none; }
+#event-map .leaflet-tile-pane { pointer-events: none; }
 
 /* The source crops already remove empty margins; keep the whole banner group visible. */
 .hack-hero-shot img { aspect-ratio: 1.4; }
