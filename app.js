@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.9";
+const APP_VERSION = "2.25.10";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.10", "Reset pin selections to List and softened the event controls as the sheet expands"],
   ["2.25.9", "Centered mobile map pins in one smooth movement while preserving the current zoom"],
   ["2.25.8", "Extended event previews behind navigation with a fading content hint and no map showing underneath"],
   ["2.25.7", "Restored medium-height Home previews and kept navigation visible until the event list expands for reading"],
@@ -806,7 +807,11 @@ function pastEvents(now = new Date()) {
 }
 
 function eventsForMode(mode = state.eventMode) {
-  return mode === "past" ? pastEvents() : upcomingEvents();
+  if (mode === "past") return pastEvents();
+  const upcoming = upcomingEvents();
+  const selected = events.find(event => event.id === state.selectedEventId);
+  // A historical-only pin still has an honest, labelled selection in List.
+  return mode === "list" && selected && isPastEvent(selected) ? [selected, ...upcoming] : upcoming;
 }
 
 function ensureSelectedEventForMode() {
@@ -1132,7 +1137,7 @@ function renderHome() {
             </div>
 
             <div class="event-mode-panel" data-event-panel="list" ${state.eventMode === "list" ? "" : "hidden"}>
-              ${currentEvents.length ? `<div class="event-list" aria-label="Upcoming events">${currentEvents.map(renderEventCard).join("")}</div>` : '<p class="calendar-empty">No upcoming events are scheduled yet. Completed events are saved under Past.</p>'}
+              ${renderEventList()}
             </div>
 
             <div class="event-mode-panel" data-event-panel="calendar" ${state.eventMode === "calendar" ? "" : "hidden"}>
@@ -1174,6 +1179,13 @@ function renderSelectedEventIntro() {
       <strong>${eventDataSource === EVENT_DATA_SOURCE ? "Google Sheet connected" : "Schedule ready offline"}</strong>
     </div>
   `;
+}
+
+function renderEventList() {
+  const list = eventsForMode("list");
+  return list.length
+    ? `<div class="event-list" aria-label="Event list">${list.map(event => renderEventCard(event, { past: isPastEvent(event) })).join("")}</div>`
+    : '<p class="calendar-empty">No upcoming events are scheduled yet. Completed events are saved under Past.</p>';
 }
 
 function renderEventCard(event, options = {}) {
@@ -1311,9 +1323,10 @@ function renderSelectedEventDetails() {
   `;
 }
 
-function setEventMode(mode) {
+function setEventMode(mode, options = {}) {
   state.eventMode = ["calendar", "past"].includes(mode) ? mode : "list";
-  ensureSelectedEventForMode();
+  if (options.selectedEventId) state.selectedEventId = options.selectedEventId;
+  else ensureSelectedEventForMode();
   saveState();
   document.querySelectorAll("[data-event-tab]").forEach((tab) => {
     tab.setAttribute("aria-selected", String(tab.dataset.eventTab === state.eventMode));
@@ -1321,9 +1334,9 @@ function setEventMode(mode) {
   document.querySelectorAll("[data-event-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
-  drawMapMarkers();
-  selectEvent(state.selectedEventId, { focusMap: false, highlightMap: false });
-  if (isMobileEventSheetViewport()) {
+  selectEvent(state.selectedEventId, { focusMap: false, highlightMap: false, preserveMode: true });
+  drawMapMarkers({ preserveView: options.fromMap === true });
+  if (isMobileEventSheetViewport() && !options.fromMap) {
     const nextSheetMode = state.eventMode === "calendar" || state.eventMode === "past" || mobileEventSheetMode === "high"
       ? "high"
       : "medium";
@@ -1346,8 +1359,8 @@ function shiftCalendarMonth(offset) {
 function selectEvent(eventId, options = {}) {
   const selectedEvent = events.find((event) => event.id === eventId);
   if (!selectedEvent) return;
-  const nextMode = isPastEvent(selectedEvent) ? "past" : state.eventMode === "past" ? "list" : state.eventMode;
-  if (nextMode !== state.eventMode) setEventMode(nextMode);
+  const nextMode = options.fromMap ? "list" : options.preserveMode ? state.eventMode : isPastEvent(selectedEvent) ? "past" : state.eventMode === "past" ? "list" : state.eventMode;
+  if (nextMode !== state.eventMode) setEventMode(nextMode, { selectedEventId: eventId, fromMap: options.fromMap });
   state.selectedEventId = eventId;
   if (state.eventMode === "calendar") state.calendarMonth = selectedEvent.date.slice(0, 7);
   saveState();
@@ -1365,6 +1378,15 @@ function selectEvent(eventId, options = {}) {
   eventMarkers.forEach((marker, locationId) => {
     marker.getElement()?.querySelector(".event-map-pin")?.classList.toggle("active", locationId === highlightedMapLocationId);
   });
+
+  const listPanel = document.querySelector('[data-event-panel="list"]');
+  if (listPanel) {
+    listPanel.innerHTML = renderEventList();
+    listPanel.querySelectorAll('[data-select-event]').forEach(button => {
+      button.addEventListener("click", () => selectEvent(button.dataset.selectEvent));
+    });
+    bindRsvpEvents(listPanel);
+  }
 
   const details = document.querySelector("#event-details");
   if (details) {
@@ -1858,8 +1880,10 @@ function drawMapMarkers({ preserveView = false } = {}) {
     marker.on("click", () => {
       // Tapping a location keeps the current pick when it already lives there,
       // otherwise it opens the soonest event at that spot.
-      const alreadyHere = locationEvents.some((event) => event.id === state.selectedEventId);
-      selectEvent(alreadyHere ? state.selectedEventId : locationEvents[0].id, { revealSheet: true });
+      const upcomingHere = upcomingEvents().filter(event => getEventLocation(event).id === location.id);
+      const candidates = upcomingHere.length ? upcomingHere : locationEvents;
+      const selected = candidates.find(event => event.id === state.selectedEventId) || candidates[0];
+      selectEvent(selected.id, { revealSheet: true, fromMap: true });
     });
     eventMarkers.set(location.id, marker);
     bounds.push([location.lat, location.lng]);

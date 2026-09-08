@@ -437,6 +437,52 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
   }
 });
 
+test.describe('pin navigation between event views', () => {
+  test.use({ serviceWorkers: 'block' });
+  test('pins reset Past and Calendar to List and keep historical-only selections labelled', async ({ page }) => {
+    const header = '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"';
+    const rows = [
+      '"Reitz archive","2020-03-01","6:00 PM","Reitz Student Union","2315","Past workshop","Yes","reitz-archive"',
+      '"Larsen archive","2020-03-02","6:00 PM","Larsen Hall","234","Past workshop","Yes","larsen-archive"',
+      '"Next Reitz workshop","2027-03-24","6:00 PM","Reitz Student Union","2315","Upcoming workshop","Yes","reitz-next"'
+    ];
+    await page.route('https://docs.google.com/spreadsheets/**', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
+      ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
+      : new URL(route.request().url()).searchParams.get('sheet') === 'UF Locations'
+        ? route.fulfill({ status: 200, contentType: 'text/csv', body: '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive","29.64631","-82.34788"\n"Larsen Hall","968 Center Drive","29.64311","-82.34738"' })
+        : route.fallback());
+    await page.reload();
+    await goTab(page, 'Home');
+    for (const [tab, location, title] of [['Past', 'reitz-student-union', 'Next Reitz workshop'], ['Calendar', 'reitz-student-union', 'Next Reitz workshop'], ['Past', 'larsen-hall', 'Larsen archive']]) {
+      if (await page.locator('.event-planner').getAttribute('data-sheet-mode') === 'low') await page.locator('#event-sheet-handle').tap();
+      await page.getByRole('tab', { name: new RegExp('^' + tab) }).tap();
+      const p = await mapPoint(page);
+      await page.touchscreen.tap(p.x, p.y);
+      await page.waitForTimeout(450);
+      const pin = page.locator(`.event-map-pin[data-location-id="${location}"]`);
+      // Short landscape maps may need a pan to expose a pin behind the dock.
+      await pin.evaluate(el => {
+        const box = el.getBoundingClientRect();
+        if (!el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))) {
+          const map = window.__FQC_MAP__;
+          const area = map.getContainer().getBoundingClientRect();
+          map.panBy([0, box.y + box.height / 2 - (area.y + area.height * .35)], { animate: false });
+        }
+      });
+      await pin.tap();
+      await expect(page.locator('[data-event-tab="list"]')).toHaveAttribute('aria-selected', 'true');
+      await expect(page.locator('[data-event-panel="past"]')).toBeHidden();
+      await expect(page.locator('.event-intro h2')).toHaveText(title);
+      await page.locator('#event-sheet-handle').tap();
+      await expect(page.locator('.event-tabs-sticky')).toHaveCSS('opacity', '1');
+    }
+    const historical = page.locator('[data-event-panel="list"] [data-event-card="larsen-archive"]');
+    await expect(historical.locator('.event-past-label')).toHaveText('Past');
+    await expect(historical.locator('[data-rsvp]')).toHaveCount(0);
+    await expect(page.locator('[data-event-panel="list"] [data-event-card="reitz-next"]')).toHaveCount(1);
+  });
+});
+
 test('mobile pin centering uses one movement without zooming or a second correction', async ({ page }) => {
   await goTab(page, 'Home');
   const background = await mapPoint(page);
