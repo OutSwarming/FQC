@@ -2251,7 +2251,20 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     min-height: 0;
     border-radius: 16px 16px 0 0;
   }
-  .event-map-shell .leaflet-bottom { bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom))); }
+  .event-map-shell .leaflet-bottom { bottom: 0; }
+  .event-explorer > .event-map-credit {
+    position: absolute;
+    z-index: 610;
+    right: 2px;
+    bottom: 0;
+    margin: 0;
+    padding: 0 3px;
+    font: 10px / 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    white-space: nowrap;
+    border-radius: 3px 0 0;
+    pointer-events: auto;
+  }
+  .event-map-credit a { color: var(--accent-strong); }
 
   .event-planner {
     position: absolute;

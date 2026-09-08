@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.10";
+const APP_VERSION = "2.25.11";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.11", "Placed map attribution below the mobile navigation in the bottom-right corner"],
   ["2.25.10", "Reset pin selections to List and softened the event controls as the sheet expands"],
   ["2.25.9", "Centered mobile map pins in one smooth movement while preserving the current zoom"],
   ["2.25.8", "Extended event previews behind navigation with a fading content hint and no map showing underneath"],
@@ -1777,6 +1778,19 @@ function revealApp() {
   }, wait);
 }
 
+function positionMapAttribution() {
+  if (!eventMap?.attributionControl) return;
+  const credit = eventMap.attributionControl.getContainer();
+  const mobile = isMobileEventSheetViewport();
+  const parent = mobile
+    ? document.querySelector(".event-explorer")
+    : eventMap.getContainer().querySelector(".leaflet-bottom.leaflet-right");
+  if (!credit || !parent) return;
+  credit.classList.toggle("event-map-credit", mobile);
+  if (credit.parentElement !== parent) parent.appendChild(credit);
+}
+window.addEventListener("resize", positionMapAttribution);
+
 function initEventMap() {
   const mapElement = document.querySelector("#event-map");
   if (!mapElement || !window.L) {
@@ -1788,6 +1802,7 @@ function initEventMap() {
   // A container can host only one Leaflet map; if one is already bound here the
   // map is live, so reveal and bail instead of throwing "already initialized".
   if (mapElement._leaflet_id) {
+    positionMapAttribution();
     revealApp();
     return;
   }
@@ -1830,7 +1845,7 @@ function initEventMap() {
     updateWhenZooming: true,
     updateInterval: 80,
     keepBuffer: 3,
-    attribution: "&copy; OpenStreetMap contributors"
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(eventMap);
 
   eventMap.on("click", () => {
@@ -1838,6 +1853,7 @@ function initEventMap() {
     if (isMobileEventSheetViewport()) setMobileEventSheetMode("closed");
   });
 
+  positionMapAttribution();
   drawMapMarkers();
   window.__FQC_MAP__ = eventMap;
   window.setTimeout(() => eventMap?.invalidateSize(), 120);

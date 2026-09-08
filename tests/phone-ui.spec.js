@@ -406,9 +406,12 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
       await expect.poll(() => planner.evaluate(el => Math.round(innerHeight - el.getBoundingClientRect().bottom))).toBe(0);
       expect(await planner.evaluate(el => {
         const map = document.querySelector('#event-map').getBoundingClientRect();
-        // Both corners outside the capsule and the bottom safe area must hit the sheet.
+        // The sheet covers both corners; the map credit may sit above it.
         return [map.left + 4, map.right - 4].every(x =>
-          [innerHeight - 2, document.querySelector('.bottom-nav').getBoundingClientRect().top - 2].every(y => el.contains(document.elementFromPoint(x, y))));
+          [innerHeight - 2, document.querySelector('.bottom-nav').getBoundingClientRect().top - 2].every(y => {
+            const hit = document.elementFromPoint(x, y);
+            return el.contains(hit) || Boolean(hit?.closest('.event-map-credit'));
+          }));
       })).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
     }
