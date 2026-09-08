@@ -1093,3 +1093,19 @@ test('short fast flicks retain the middle stop in both directions', async ({ pag
     await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
   }
 });
+
+test('one event check-in tap records attendance inside the expanded phone sheet', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: 'phone-attendance', displayName: 'Phone Member', email: 'phone@ufl.edu', role: 'member' });
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId: 'phone-workshop', open: true, requireLocation: false });
+  });
+  await goTab(page, 'Events');
+  await page.getByRole('tab', { name: 'List', exact: true }).tap();
+  const button = page.locator('[data-event-checkin="phone-workshop"]').first();
+  await button.tap();
+  await expect(button).toHaveText('Checked in');
+  await expect(button).toBeDisabled();
+  await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'high');
+  await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
+  await expect(page.locator('#action-feedback')).toContainText('1 point added');
+});

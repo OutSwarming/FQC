@@ -3,7 +3,6 @@ import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
 const openActiveCheckIn = async (page) => {
-  if (await page.locator('[data-screen="checkin"]').count()) return;
   await navButton(page, "Events").click();
   await page.locator('[data-event-checkin]:not([disabled])').first().click({ force: true });
 };
@@ -656,7 +655,7 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await secondEvent.locator("summary").first().click();
   await secondEvent.getByRole("button", { name: "Start Event Check-In" }).click();
   await openActiveCheckIn(page);
-  await expect(page.getByRole("heading", { name: "GBM 3: Quantum Technology Today" })).toBeVisible();
+  await expect(page.locator('[data-event-checkin="fqc-2026-04-14-gbm-3"]').first()).toHaveText("Checked in");
 
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.locator(".officer-settings-group")).toBeVisible();
@@ -861,20 +860,16 @@ test("treasurer budget lines use dropdowns and can be added or removed", async (
   await expect(eventCard.getByText("Poster printing")).toHaveCount(0);
 });
 
-test("member login enables event check-in and shows a member profile", async ({ page }) => {
+test("member login completes event check-in directly and shows a member profile", async ({ page }) => {
   await openActiveCheckIn(page);
   await expect(page.getByRole("heading", { name: "Sign in to check in" })).toBeVisible();
-  await page.getByRole("button", { name: "Sign in to check in", exact: true }).click();
+  await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Log In", exact: true }).click();
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page.getByText("Member", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Officer Command Center" })).toHaveCount(0);
-  await expect(page.getByText("All Officer Documents", { exact: true })).toHaveCount(0);
-
-  await openActiveCheckIn(page);
-  await page.getByRole("button", { name: "I’m Here" }).click();
-  await expect(page.getByRole("button", { name: "Checked In" })).toBeDisabled();
-  await expect(page.getByText("Attendance recorded for Passkey Member.")).toBeVisible();
+  await expect(page.locator('[data-event-checkin]').first()).toHaveText('Checked in');
+  await expect(page.locator('[data-event-checkin]').first()).toBeDisabled();
+  await expect(page.locator('[data-screen="home"]')).toBeVisible();
+  await expect(page.locator('#check-in-now')).toHaveCount(0);
 
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Open settings" }).click();
@@ -921,7 +916,7 @@ test("leaderboard uses one cached read and awards one point per unique event", a
   await expect.poll(() => page.evaluate(() => window.__FQC_AUTH_TEST_API__.getLeaderboardReads())).toBe(1);
 
   await openActiveCheckIn(page);
-  await page.getByRole("button", { name: "I’m Here" }).click();
+  await expect(page.locator('[data-event-checkin]').first()).toHaveText("Checked in");
   await navButton(page, "Profile").click();
   await expect(page.getByText("2 points from verified event check-ins")).toBeVisible();
   await expect(page.locator(".leader-row.current-user")).toContainText("2 PTS");
@@ -1549,19 +1544,23 @@ test('event check-in replaces RSVP only for the open event and survives closing 
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
   await expect(card.locator('[data-rsvp]')).toHaveText('Going');
   await page.evaluate(eventId => window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId, open: true }), first);
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ requireLocation: true });
+    navigator.geolocation.getCurrentPosition = callback => { window.__finishLocation = callback; };
+  });
   await card.locator('[data-event-checkin]').dispatchEvent('click');
-  await expect(page.locator('.checkin-hero h2')).toHaveText('IonQ Quantum Networking Speaker Session');
-  // Another session must not silently redirect attendance to the new event.
+  await expect(card.locator('[data-event-checkin]')).toHaveText('Checking in…');
+  await expect(card.locator('[data-event-checkin]')).toBeDisabled();
+  await card.locator('[data-event-checkin]').dispatchEvent('click');
+  await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
+  // A different open session must not receive the pending attendance request.
   await page.evaluate(eventId => window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId, open: true }), second);
-  await expect(page.getByRole('heading', { name: 'Check-in isn’t open for this event' })).toBeVisible();
-  await expect(page.locator('#check-in-now')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Back to Events', exact: true }).click();
   await expect(card.locator('[data-rsvp]')).toHaveText('Going');
+  await page.evaluate(() => window.__finishLocation({ coords: { latitude: 29.646, longitude: -82.347, accuracy: 15 } }));
+  await expect(page.locator('#action-feedback')).toContainText('no longer open');
   await page.locator(`[data-event-card="${second}"]`).first().locator('[data-event-checkin]').dispatchEvent('click');
-  await page.getByRole('button', { name: 'I’m Here', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Checked In', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Back to Events', exact: true }).click();
   await expect(page.locator(`[data-event-card="${second}"]`).first().locator('[data-event-checkin]')).toHaveText('Checked in');
+  await expect(page.locator('[data-screen="home"]')).toBeVisible();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId: 'unknown-event', open: true }));
   await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
 });
@@ -1644,4 +1643,42 @@ test("navigation stays horizontally fixed across tabs and scrollbar changes", as
       expect(Math.abs(rect.width - initial.width)).toBeLessThan(.1);
     }
   }
+});
+
+test('direct check-in retries denied location and ignores duplicate taps while pending', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: 'retry-member', displayName: 'Retry Member', email: 'retry@ufl.edu', role: 'member' });
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ open: true, requireLocation: true });
+    window.__locationCalls = 0;
+    navigator.geolocation.getCurrentPosition = (success, failure) => {
+      window.__locationCalls++;
+      window.__locationSuccess = success;
+      window.__locationFailure = failure;
+    };
+  });
+  const button = page.locator('[data-event-checkin]').first();
+  await button.dispatchEvent('click');
+  await button.dispatchEvent('click');
+  await expect(button).toBeDisabled();
+  expect(await page.evaluate(() => window.__locationCalls)).toBe(1);
+  await page.evaluate(() => window.__locationFailure({ code: 1 }));
+  await expect(page.locator('#action-feedback')).toContainText('Allow location access');
+  await expect(button).toBeEnabled();
+  await button.dispatchEvent('click');
+  await page.evaluate(() => window.__locationSuccess({ coords: { latitude: 29.646, longitude: -82.347, accuracy: 15 } }));
+  await expect(button).toHaveText('Checked in');
+  await expect(button).toBeDisabled();
+  await expect(page.locator('#action-feedback')).toContainText('1 point added');
+  await expect(page.locator('[data-screen="home"]')).toBeVisible();
+  await expect(page.locator('#check-in-now')).toHaveCount(0);
+});
+
+test('creating an account finishes the pending event check-in without a second attendance button', async ({ page }) => {
+  await openActiveCheckIn(page);
+  await page.getByRole('button', { name: 'Log In', exact: true }).click();
+  await createSimpleAccount(page, { email: 'attendance.new@ufl.edu' });
+  await expect(page.locator('[data-event-checkin]').first()).toHaveText('Checked in');
+  await expect(page.locator('[data-event-checkin]').first()).toBeDisabled();
+  await expect(page.locator('[data-screen="home"]')).toBeVisible();
+  await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
 });

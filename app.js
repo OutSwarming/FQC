@@ -36,9 +36,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.12";
+const APP_VERSION = "2.26.13";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.13", "Recorded attendance directly from the event Check In button"],
   ["2.26.12", "Balanced sheet travel and momentum so short swipes keep the middle stop"],
   ["2.26.11", "Committed navigation drags only on release and let fast sheet flicks skip the middle position"],
   ["2.26.10", "Raised the expanded event sheet and faded map controls during expansion"],
@@ -117,7 +118,7 @@ const RELEASE_HISTORY = [
   ["1.6.0", "Unified UF event map, list, calendar, and mobile bottom sheet"],
   ["1.5.0", "Google Sheets event updates and UF campus locations"]
 ];
-const allowedViews = new Set(["about", "hackathon", "home", "checkin", "profile", "settings"]);
+const allowedViews = new Set(["about", "hackathon", "home", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const EVENTS_SHEET_NAME = "Events";
@@ -170,7 +171,7 @@ function readJson(key, fallback) {
 function viewFromLocation() {
   const hash = window.location.hash.slice(1);
   if (allowedViews.has(hash)) return hash;
-  if (hash === "events") return "home";
+  if (hash === "events" || hash === "checkin") return "home";
   if (hash === "hackathon-interest") return "hackathon";
   if (/^\/about\/?$/.test(window.location.pathname)) return "about";
   if (/^\/events\/?$/.test(window.location.pathname)) return "home";
@@ -232,7 +233,6 @@ const state = {
   budgetBreakdownOpen: false,
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
-  checkInTargetEventId: "",
   checkInRequireLocation: true,
   checkedInEvents: [],
   memberPoints: 0,
@@ -721,7 +721,6 @@ const titles = {
   about: "About",
   hackathon: "Hackathon",
   home: "Events",
-  checkin: "Check In",
   profile: "Profile",
   settings: "Settings"
 };
@@ -968,9 +967,7 @@ function setView(view, { history = true } = {}) {
   if (state.memberRole === "officer" && !state.members.length && (state.view === "settings" || state.view === "profile")) {
     queueMicrotask(refreshMemberDirectory);
   }
-  if (state.view === "checkin" && state.loggedIn && state.checkInOpen && state.checkInRequireLocation) {
-    queueMicrotask(() => currentCheckInLocation().catch(() => {}));
-  }
+
 }
 
 function isDisclosureOpen(key, defaultOpen = false) {
@@ -1014,12 +1011,12 @@ function render() {
   title.textContent = titles[state.view] || "Events";
   settingsToggle.hidden = state.view === "settings";
   navItems.forEach((item) => {
-    const active = item.dataset.view === (state.view === "checkin" ? "home" : state.view);
+    const active = item.dataset.view === state.view;
     item.classList.toggle("active", active);
     item.setAttribute("aria-current", active ? "page" : "false");
   });
 
-  const navIndex = navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view));
+  const navIndex = navItems.findIndex((item) => item.dataset.view === state.view);
   bottomNav.dataset.settings = String(navIndex < 0);
   if (navIndex >= 0) {
     bottomNav.style.setProperty("--nav-index", navIndex);
@@ -1030,7 +1027,6 @@ function render() {
     about: renderAbout,
     hackathon: renderHackathon,
     home: renderHome,
-    checkin: renderCheckIn,
     profile: renderProfile,
     settings: renderSettings
   };
@@ -1259,20 +1255,69 @@ function renderEventAction(event, { compact = false, past = isPastEvent(event) }
   const buttonClass = compact ? "event-rsvp-mini" : "primary-button";
   if (isEventCheckInOpen(event.id)) {
     const checkedIn = state.checkedInEvents.includes(event.id);
-    return `<button class="${buttonClass}${checkedIn ? " going" : ""}" type="button" data-event-checkin="${event.id}" aria-label="${checkedIn ? "Checked in to" : "Check in to"} ${escapeHtml(event.title)}" ${checkedIn ? "disabled" : ""}>${checkedIn ? "Checked in" : "Check in"}</button>`;
+    const pending = pendingCheckIns.has(`${state.authUser?.uid}:${event.id}`);
+    return `<button class="${buttonClass}${checkedIn ? " going" : ""}" type="button" data-event-checkin="${event.id}" aria-label="${checkedIn ? "Checked in to" : "Check in to"} ${escapeHtml(event.title)}" ${checkedIn || pending ? "disabled" : ""} aria-busy="${pending}">${checkedIn ? "Checked in" : pending ? "Checking in…" : "Check in"}</button>`;
   }
   if (past) return `<span class="${compact ? "event-past-label" : "event-detail-past-label"}">${compact ? "Past" : "Past event"}</span>`;
   const going = state.rsvps.includes(event.id);
   return `<button class="${buttonClass}${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${going ? "Going" : "RSVP"}</button>`;
 }
 
-function openEventCheckIn(eventId) {
+const pendingCheckIns = new Set();
+function refreshCheckInButtons() {
+  document.querySelectorAll("[data-event-checkin]").forEach(button => {
+    const id = button.dataset.eventCheckin;
+    const checked = state.checkedInEvents.includes(id);
+    const pending = pendingCheckIns.has(`${state.authUser?.uid}:${id}`);
+    button.disabled = checked || pending || !isEventCheckInOpen(id);
+    button.textContent = checked ? "Checked in" : pending ? "Checking in…" : "Check in";
+    button.classList.toggle("going", checked);
+    button.classList.toggle("is-working", pending);
+    button.setAttribute("aria-busy", String(pending));
+    button.setAttribute("aria-label", `${checked ? "Checked in to" : "Check in to"} ${getEvent(id).title}`);
+  });
+}
+
+async function openEventCheckIn(eventId) {
   if (!isEventCheckInOpen(eventId)) {
     showActionFeedback("error", "Check-in is no longer open for this event.");
     return;
   }
-  state.checkInTargetEventId = eventId;
-  setView("checkin");
+  if (!state.loggedIn) {
+    state.pendingIntent = { type: "checkin", eventId };
+    state.authPromptOpen = true;
+    state.authPromptAction = "checkin";
+    state.authPromptEventId = eventId;
+    render();
+    return;
+  }
+  const uid = state.authUser?.uid;
+  const requestKey = `${uid}:${eventId}`;
+  if (pendingCheckIns.has(requestKey) || state.checkedInEvents.includes(eventId)) return;
+  pendingCheckIns.add(requestKey);
+  refreshCheckInButtons();
+  showActionFeedback("working", state.checkInRequireLocation ? "Checking location…" : "Saving your attendance…");
+  try {
+    const location = state.checkInRequireLocation ? await currentCheckInLocation() : null;
+    if (state.authUser?.uid !== uid) return;
+    if (!isEventCheckInOpen(eventId)) throw new Error("Check-in is no longer open for this event.");
+    const result = await recordCheckIn(location, eventId);
+    if (state.authUser?.uid !== uid) return;
+    if (result?.eventId !== eventId) throw new Error("We couldn’t confirm attendance. Please try again.");
+    if (!state.checkedInEvents.includes(eventId)) state.checkedInEvents = [...state.checkedInEvents, eventId];
+    state.memberPoints = Number(result.points) || state.checkedInEvents.length;
+    if (result.leaderboard) {
+      state.leaderboardEntries = result.leaderboard.entries || [];
+      state.leaderboardParticipantCount = result.leaderboard.participantCount || state.leaderboardEntries.length;
+      state.leaderboardLoaded = true;
+    }
+    showActionFeedback("success", result.awarded === false ? "You were already checked in." : "Checked in — 1 point added.");
+  } catch (error) {
+    if (state.authUser?.uid === uid) showActionFeedback("error", readableAuthError(error));
+  } finally {
+    pendingCheckIns.delete(requestKey);
+    refreshCheckInButtons();
+  }
 }
 
 function renderEventCard(event, options = {}) {
@@ -2321,64 +2366,6 @@ function renderAuthLoading(screen) {
   `;
 }
 
-function renderCheckIn() {
-  const targetEventId = state.checkInTargetEventId || state.activeCheckInEventId;
-  state.checkInTargetEventId = targetEventId;
-  const open = isEventCheckInOpen(targetEventId);
-  const back = '<button class="secondary-button" data-back-events type="button">Back to Events</button>';
-  if (!open) return `<section class="view" data-screen="checkin"><section class="section checkin-hero"><div class="checkin-status closed"><span></span>Check-in closed</div><h2>Check-in isn’t open for this event</h2><p>Return to Events for the latest schedule</p>${back}</section></section>`;
-  if (!state.authReady) return renderAuthLoading("checkin");
-  if (!state.loggedIn) {
-    return `
-      <section class="view" data-screen="checkin">
-        <section class="section checkin-gate">
-          <div class="checkin-icon"><svg><use href="#icon-check"></use></svg></div>
-          <p class="section-kicker">Attendance</p>
-          <h2>Sign in to check in</h2>
-          <p>Use your FQC profile for tabling, GBMs, workshops, speaker sessions, and socials.</p>
-          <button class="primary-button" id="go-to-login" type="button">Sign in to check in</button>${back}
-        </section>
-      </section>
-    `;
-  }
-
-  const event = getEvent(targetEventId);
-  const location = getEventLocation(event);
-  const checkedIn = state.checkedInEvents.includes(event.id);
-  return `
-    <section class="view" data-screen="checkin">
-      <section class="section checkin-hero">
-        <div class="checkin-status ${state.checkInOpen ? "live" : "closed"}"><span></span>${state.checkInOpen ? "Check-in open" : "No check-in open"}</div>
-        ${state.checkInOpen ? `
-          <p class="section-kicker">Current FQC event</p>
-          <h2>${escapeHtml(event.title)}</h2>
-          <div class="checkin-meta">
-            <span>${escapeHtml(event.time)}</span>
-            <span>${escapeHtml(location.name)}</span>
-            <span>${escapeHtml(event.room)}</span>
-          </div>
-          <p>${escapeHtml(event.description)}</p>
-          <p class="checkin-location-note"><svg><use href="#icon-location"></use></svg>${state.checkInRequireLocation
-            ? "I’m Here checks that this device is within 2 miles. Your precise location is not saved."
-            : "Online-event mode is on. Location verification is disabled club-wide."}</p>
-          <button class="primary-button checkin-button${checkedIn ? " going" : ""}" id="check-in-now" type="button" ${checkedIn ? "disabled" : ""}>
-            <svg><use href="#icon-check"></use></svg><span>${checkedIn ? "Checked In" : "I’m Here"}</span>
-          </button>
-          ${checkedIn ? `<p class="checkin-confirmation">Attendance recorded for ${escapeHtml(state.memberName)}.</p>` : ""}
-        ` : `
-          <h2>Nothing active right now</h2>
-          <p>An officer will open this screen when tabling or an FQC event begins.</p>
-        `}
-      </section>
-      ${back}
-      <section class="section identity-card">
-        <span class="role-badge ${state.memberRole}">${roleLabel()}</span>
-        <div><strong>${escapeHtml(state.memberName)}</strong><p>${escapeHtml(roleLabel())} · Signed in and ready for attendance.</p></div>
-      </section>
-    </section>
-  `;
-}
-
 function renderOfficerWorkspace() {
   const operations = state.officerOperations;
   if (state.officerOperationsLoading && !operations) {
@@ -2833,7 +2820,7 @@ function renderOfficerSettings() {
       <div class="settings-group-content">
         <p>These switches apply to the whole club, not just this device. Members never see this section.</p>
         <label class="settings-switch-row" for="checkin-location-required">
-          <span><strong>Require members to be within 2 miles</strong><small>Checked once when they tap I’m Here; precise coordinates are not stored.</small></span>
+          <span><strong>Require members to be within 2 miles</strong><small>Checked when they tap Check in; precise coordinates are not stored.</small></span>
           <input id="checkin-location-required" type="checkbox" role="switch" ${state.checkInRequireLocation ? "checked" : ""} ${state.authBusy ? "disabled" : ""} />
         </label>
         <p class="officer-settings-note">Members are managed from the leaderboard on the Profile screen — tap anyone in the standings to open their profile.</p>
@@ -3222,17 +3209,6 @@ function bindViewEvents() {
   bindRsvpEvents();
   bindMobileEventSheet();
 
-  document.querySelector("#go-to-login")?.addEventListener("click", () => {
-    if (!state.loggedIn) {
-      state.pendingIntent = { type: "checkin", eventId: state.checkInTargetEventId };
-      state.authPromptOpen = true;
-      state.authPromptAction = "checkin";
-      state.authPromptEventId = "";
-      render();
-      return;
-    }
-    setView("profile");
-  });
   document.querySelector("#settings-go-to-login")?.addEventListener("click", () => setView("profile"));
   document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.settingsReturnView));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
@@ -3404,51 +3380,6 @@ function bindViewEvents() {
     const profile = await runAuthAction(registerPasskey, "Passkey added. You can now use Face ID, Touch ID, or your device lock to sign in.");
     if (profile) {
       applyMemberProfile(profile);
-      render();
-    }
-  });
-
-  document.querySelector("#check-in-now")?.addEventListener("click", async () => {
-    const targetEventId = state.checkInTargetEventId;
-    if (!state.loggedIn || !isEventCheckInOpen(targetEventId)) return;
-    const button = document.querySelector("#check-in-now");
-    const label = button?.querySelector("span");
-    if (button) {
-      button.disabled = true;
-      button.classList.add("is-working");
-    }
-    if (label) label.textContent = state.checkInRequireLocation ? "Checking location…" : "Saving check-in…";
-    showActionFeedback("working", state.checkInRequireLocation ? "Checking that you’re within two miles…" : "Saving your attendance…");
-    let result = null;
-    try {
-      const location = state.checkInRequireLocation ? await currentCheckInLocation() : null;
-      if (state.checkInRequireLocation) {
-        if (label) label.textContent = "Saving attendance…";
-        showActionFeedback("working", "Location confirmed — saving attendance…");
-      }
-      if (!isEventCheckInOpen(targetEventId)) throw new Error("Check-in is no longer open for this event.");
-      result = await recordCheckIn(location, targetEventId);
-    } catch (error) {
-      state.authError = readableAuthError(error);
-      showActionFeedback("error", state.authError);
-      if (button?.isConnected) {
-        button.disabled = false;
-        button.classList.remove("is-working");
-      }
-      if (label?.isConnected) label.textContent = "I’m Here";
-      return;
-    }
-    if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
-      state.checkedInEvents = [...state.checkedInEvents, result.eventId];
-    }
-    if (result?.eventId) {
-      state.memberPoints = Number(result.points) || state.checkedInEvents.length;
-      if (result.leaderboard) {
-        state.leaderboardEntries = result.leaderboard.entries || [];
-        state.leaderboardParticipantCount = result.leaderboard.participantCount || state.leaderboardEntries.length;
-        state.leaderboardLoaded = true;
-      }
-      showActionFeedback("success", result.awarded === false ? "You were already checked in." : "Checked in — 1 point added.");
       render();
     }
   });
@@ -3732,7 +3663,7 @@ function finishNavDrag(event) {
     suppressNavClickUntil = performance.now() + 350;
     if (event.type === "pointerup") setView(navItems[Math.round(drag.index)].dataset.view);
     else {
-      const index = Math.max(0, navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view)));
+      const index = Math.max(0, navItems.findIndex((item) => item.dataset.view === state.view));
       bottomNav.style.setProperty("--nav-index", index);
       navSlider.value = String(index);
       navSlider.setAttribute("aria-valuetext", navItems[index].textContent.trim());
@@ -3827,7 +3758,12 @@ async function resumePendingIntent() {
     await toggleRsvp(intent.eventId);
     return;
   }
-  if (intent.type === "checkin") openEventCheckIn(intent.eventId);
+  if (intent.type === "checkin") {
+    state.authPromptOpen = false;
+    state.signupOpen = false;
+    setView("home");
+    await openEventCheckIn(intent.eventId);
+  }
 }
 
 observeSession((session) => {
