@@ -3227,3 +3227,27 @@ input, textarea, [contenteditable]:not([contenteditable="false"]),
 }
 
 #browser-appearance-help[hidden] { display: none; }
+
+/* Compact officer editing without shrinking touch targets or input text. */
+.officer-operations, .settings-view { overflow-anchor: none; }
+.officer-event-body { gap: 10px; padding: 12px; }
+.officer-event-stats > span { padding: 8px; gap: 2px; }
+.officer-event-form { gap: 10px; }
+.officer-event-form .officer-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.officer-event-form input, .officer-event-form select { min-width: 0; min-height: 44px; padding: 9px 10px; font-size: 16px; }
+.officer-event-form textarea { min-height: 76px; padding: 10px; font-size: 16px; }
+.officer-event-form .form-row label { font-size: .78rem; margin-bottom: 4px; }
+.officer-room-options { border-top: 1px solid var(--line); }
+.officer-room-options > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-height: 44px; cursor: pointer; font-weight: 650; }
+.officer-room-options > summary small { font-size: .72rem; font-weight: 400; color: var(--muted); }
+.officer-room-options > .officer-form-grid { padding-top: 8px; }
+.settings-view { gap: 12px; }
+.settings-view .appearance-settings { padding: 16px; }
+.settings-view .appearance-settings > p { margin: 6px 0 12px; }
+.settings-view .settings-group > summary { min-height: 56px; padding: 12px 16px; gap: 10px; }
+.settings-view .settings-group-content { gap: 10px; }
+.settings-view .settings-group-content .form-row { margin-block: 0; }
+@media (max-width: 360px) {
+  .officer-event-form .officer-form-grid { column-gap: 8px; }
+  .officer-event-form input, .officer-event-form select { padding-inline: 6px; }
+}

@@ -36,9 +36,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.13";
+const APP_VERSION = "2.26.14";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.14", "Streamlined officer events and Settings with focused sections and preserved drafts"],
   ["2.26.13", "Recorded attendance directly from the event Check In button"],
   ["2.26.12", "Balanced sheet travel and momentum so short swipes keep the middle stop"],
   ["2.26.11", "Committed navigation drags only on release and let fast sheet flicks skip the middle position"],
@@ -968,6 +969,33 @@ function setView(view, { history = true } = {}) {
     queueMicrotask(refreshMemberDirectory);
   }
 
+}
+
+const officerFormDrafts = new Map();
+function officerDraftKey(form) {
+  return form.hasAttribute("data-officer-event-form") ? `event:${form.dataset.officerEventForm}` : `budget:${form.dataset.budgetEvent}:${form.dataset.budgetItemForm}`;
+}
+function bindExclusiveSections(selector) {
+  const sections = [...document.querySelectorAll(selector)];
+  for (const section of sections) {
+    section.querySelector(":scope > summary")?.addEventListener("click", event => {
+      event.preventDefault();
+      const opening = !section.open;
+      const top = section.getBoundingClientRect().top;
+      if (opening) {
+        for (const other of sections) {
+          if (other === section || !other.open) continue;
+          other.open = false;
+          if (other.dataset.disclosure) state.openDisclosures[other.dataset.disclosure] = false;
+        }
+      }
+      section.open = opening;
+      if (section.dataset.disclosure) state.openDisclosures[section.dataset.disclosure] = opening;
+      if (opening && section.dataset.officerEvent) state.selectedOfficerEventId = section.dataset.officerEvent;
+      // Compensate for the closed card above, keeping the clicked heading in place.
+      window.scrollBy({ top: section.getBoundingClientRect().top - top, behavior: "instant" });
+    });
+  }
 }
 
 function isDisclosureOpen(key, defaultOpen = false) {
@@ -2463,17 +2491,22 @@ function renderOfficerEventForm(event = {}, creating = false) {
   return `
     <form class="officer-event-form" id="${escapeHtml(formId)}" data-officer-event-form="${escapeHtml(event.id || "new")}">
       <div class="officer-form-grid">
-        <div class="form-row"><label>Event name</label><input name="title" aria-label="Event name" value="${escapeHtml(event.title || "")}" maxlength="120" required /></div>
-        <div class="form-row"><label>Status</label><select name="eventStatus" aria-label="Status">${eventStatusOptions(event.eventStatus)}</select></div>
+        <div class="form-row officer-form-wide"><label>Event name</label><input name="title" aria-label="Event name" value="${escapeHtml(event.title || "")}" maxlength="120" required /></div>
         <div class="form-row"><label>Date</label><input name="date" aria-label="Date" type="date" value="${escapeHtml(event.date || "")}" required /></div>
         <div class="form-row"><label>Time</label><input name="time" aria-label="Time" value="${escapeHtml(event.time || "")}" placeholder="6:00 PM" required /></div>
         <div class="form-row officer-form-wide"><label>Location / room</label><input name="location" aria-label="Location / room" list="uf-location-options" value="${escapeHtml(event.location || "")}" placeholder="Reitz G320" required /></div>
-        <div class="form-row"><label>Backup room</label><input name="backupRoom" aria-label="Backup room" value="${escapeHtml(event.backupRoom || "")}" placeholder="Larsen 234" /></div>
+        <div class="form-row"><label>Status</label><select name="eventStatus" aria-label="Status">${eventStatusOptions(event.eventStatus)}</select></div>
         <div class="form-row"><label>Expected attendance</label><input name="attendance" aria-label="Expected attendance" inputmode="numeric" value="${escapeHtml(event.attendance || "")}" /></div>
-        <div class="form-row"><label>Room status</label><input name="roomStatus" aria-label="Room status" value="${escapeHtml(event.roomStatus || "")}" placeholder="Submitted / Confirmed" /></div>
-        <div class="form-row"><label>Backup status</label><input name="backupRoomStatus" aria-label="Backup status" value="${escapeHtml(event.backupRoomStatus || "")}" placeholder="Not submitted" /></div>
         <div class="form-row officer-form-wide"><label>Officer notes for this event</label><textarea name="notes" aria-label="Officer notes for this event" maxlength="1200" placeholder="Decisions, next steps, room details, catering owner…">${escapeHtml(event.notes || "")}</textarea></div>
       </div>
+      <details class="officer-room-options" ${disclosureAttrs(`officer-room-${event.id || "new"}`)}>
+        <summary>Room planning <small>Backup room & confirmations</small></summary>
+        <div class="officer-form-grid">
+        <div class="form-row"><label>Backup room</label><input name="backupRoom" aria-label="Backup room" value="${escapeHtml(event.backupRoom || "")}" placeholder="Larsen 234" /></div>
+        <div class="form-row"><label>Room status</label><input name="roomStatus" aria-label="Room status" value="${escapeHtml(event.roomStatus || "")}" placeholder="Submitted / Confirmed" /></div>
+        <div class="form-row"><label>Backup status</label><input name="backupRoomStatus" aria-label="Backup status" value="${escapeHtml(event.backupRoomStatus || "")}" placeholder="Not submitted" /></div>
+        </div>
+      </details>
       <button class="primary-button" type="submit"><svg><use href="#icon-check"></use></svg><span>${creating ? "Create Event" : "Save Event Details"}</span></button>
     </form>
   `;
@@ -2526,11 +2559,11 @@ function renderOfficerEventCard(event, allBudgetItems) {
   const completed = isOfficerEventCompleted(event);
   const budgetSummary = `${formatMoney(event.plannedBudget)} planned · ${formatMoney(event.actualSpend)} actual`;
   return `
-    <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" ${disclosureAttrs(`officer-card-${event.id}`, event.id === state.selectedOfficerEventId)}>
+    <details class="officer-event-card" data-officer-event="${escapeHtml(event.id)}" data-disclosure="officer-card-${escapeHtml(event.id)}"${event.id === state.selectedOfficerEventId && isDisclosureOpen(`officer-card-${event.id}`, true) ? " open" : ""}>
       <summary>
         <span class="officer-event-date"><small>${escapeHtml(formatEventDate(event, { month: "short" }))}</small><strong>${escapeHtml(formatEventDate(event, { day: "2-digit" }))}</strong></span>
         <span class="officer-event-summary"><strong>${escapeHtml(event.title)}</strong><small>${escapeHtml(event.location || "Location pending")} · ${escapeHtml(event.time)}</small></span>
-        <span class="event-status-pill status-${escapeHtml(String(event.eventStatus || "planned").toLowerCase().replace(/[^a-z]+/g, "-"))}">${escapeHtml(event.eventStatus || "Planned")}</span>
+        <span class="event-status-pill status-${escapeHtml(String(event.eventStatus || "planned").toLowerCase().replace(/[^a-z]+/g, "-"))}">${state.checkInOpen && state.activeCheckInEventId === event.id ? "Check-in open" : escapeHtml(event.eventStatus || "Planned")}</span>
         <span class="officer-event-money"><small>Planned</small><strong>${formatMoney(event.plannedBudget)}</strong></span>
       </summary>
       <div class="officer-event-body">
@@ -2755,17 +2788,17 @@ function renderAccountSettings() {
         ${renderAuthFeedback()}
       </div>
     </details>
-    <details class="section settings-group passkey-card">
+    <details class="section settings-group passkey-card" ${disclosureAttrs("settings-passkeys")}>
       <summary><span><p class="section-kicker">Security</p><strong>Passkeys & Face ID</strong></span><small>${state.passkeyCount} ${state.passkeyCount === 1 ? "passkey" : "passkeys"}</small></summary>
       <div class="settings-group-content">
-        <p>Use Face ID, Touch ID, your screen lock, or a hardware security key to sign in. A passkey belongs to the device that made it unless your password manager syncs it, so add one on each device you use.</p>
+        <p>Sign in with Face ID, Touch ID or your device lock. Add a passkey on each device unless your password manager syncs it.</p>
         <button class="primary-button" id="register-passkey" type="button" ${state.authBusy || !supportsPasskeys() ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>${supportsPasskeys() ? "Set Up Face ID / Touch ID" : "Passkeys unavailable"}</span></button>
       </div>
     </details>
-    <details class="section settings-group password-card">
+    <details class="section settings-group password-card" ${disclosureAttrs("settings-password")}>
       <summary><span><p class="section-kicker">Security</p><strong>Password</strong></span><small>Backup sign-in</small></summary>
       <div class="settings-group-content">
-        <p>A password is how you get back in on a device that has no passkey — a borrowed laptop, a new phone, or a lost device. We email you a link to set one; it works whether or not you already have a password.</p>
+        <p>Set or reset your password by email to sign in on another device.</p>
         <button class="primary-button" id="send-password-link" type="button" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-check"></use></svg><span>Email Me a Password Link</span></button>
         <p class="field-hint">The link goes to ${escapeHtml(state.memberEmail || "your UF inbox")} and expires after a while. Ask for a new one any time.</p>
       </div>
@@ -2818,12 +2851,12 @@ function renderOfficerSettings() {
     <details class="section settings-group officer-settings-group" ${disclosureAttrs("settings-officer-controls")}>
       <summary><span><p class="section-kicker">Officers only</p><strong>Officer controls</strong></span><small>${escapeHtml(roleLabel())}</small></summary>
       <div class="settings-group-content">
-        <p>These switches apply to the whole club, not just this device. Members never see this section.</p>
+        <p>These controls apply club-wide.</p>
         <label class="settings-switch-row" for="checkin-location-required">
           <span><strong>Require members to be within 2 miles</strong><small>Checked when they tap Check in; precise coordinates are not stored.</small></span>
           <input id="checkin-location-required" type="checkbox" role="switch" ${state.checkInRequireLocation ? "checked" : ""} ${state.authBusy ? "disabled" : ""} />
         </label>
-        <p class="officer-settings-note">Members are managed from the leaderboard on the Profile screen — tap anyone in the standings to open their profile.</p>
+        <p class="officer-settings-note">Manage members by tapping their name in the Profile leaderboard.</p>
         ${renderLeadershipSlots()}
       </div>
     </details>
@@ -2857,7 +2890,7 @@ function renderSettings() {
           </button>
         </div>
       </details>
-      <details class="section settings-group version-history-settings">
+      <details class="section settings-group version-history-settings" ${disclosureAttrs("settings-history")}>
         <summary><span><p class="section-kicker">What changed</p><h2>Version History</h2></span><small>v${APP_VERSION}</small></summary>
         <div class="settings-group-content version-history">
           ${RELEASE_HISTORY.map(([version, summary], index) => `
@@ -2868,7 +2901,7 @@ function renderSettings() {
           `).join("")}
         </div>
       </details>
-      <details class="section advanced-settings">
+      <details class="section advanced-settings" ${disclosureAttrs("settings-advanced")}>
         <summary>Advanced settings</summary>
         <div class="advanced-settings-content">
           <h2>Reset this device</h2>
@@ -3384,6 +3417,18 @@ function bindViewEvents() {
     }
   });
 
+  bindExclusiveSections(".officer-event-card");
+  bindExclusiveSections(".settings-view > details");
+  document.querySelectorAll("[data-officer-event-form], [data-budget-item-form]").forEach(form => {
+    const key = officerDraftKey(form);
+    const draft = officerFormDrafts.get(key);
+    for (const input of form.querySelectorAll("[name]")) {
+      if (draft && input.name in draft) input.value = draft[input.name];
+    }
+    const remember = () => officerFormDrafts.set(key, Object.fromEntries(new FormData(form)));
+    form.addEventListener("input", remember);
+    form.addEventListener("change", remember);
+  });
   document.querySelectorAll("[data-disclosure]").forEach((details) => {
     details.addEventListener("toggle", () => {
       state.openDisclosures[details.dataset.disclosure] = details.open;
@@ -3398,6 +3443,7 @@ function bindViewEvents() {
       const eventId = form.dataset.officerEventForm === "new" ? "" : form.dataset.officerEventForm;
       const saved = await runAuthAction(() => saveOfficerEvent({ id: eventId, ...values }), eventId ? "Event details saved to Google Sheets." : "Event created in Google Sheets.");
       if (!saved) return;
+      officerFormDrafts.delete(officerDraftKey(form));
       state.officerOperationsLoaded = false;
       await refreshOfficerOperations(true, { silent: true });
       await refreshEventData("officer event save");
@@ -3414,6 +3460,7 @@ function bindViewEvents() {
       const row = form.dataset.budgetItemForm === "new" ? 0 : Number(form.dataset.budgetItemForm);
       const saved = await runAuthAction(() => saveOfficerBudgetItem({ row, eventId, event: eventRecord.title, date: eventRecord.date, ...values }), "Money changes saved to Google Sheets.");
       if (!saved) return;
+      officerFormDrafts.delete(officerDraftKey(form));
       state.officerOperationsLoaded = false;
       await refreshOfficerOperations(true, { silent: true });
       await refreshEventData("officer budget save");
@@ -3768,6 +3815,7 @@ async function resumePendingIntent() {
 
 observeSession((session) => {
   state.authReady = true;
+  if (state.authUser?.uid !== session?.user?.uid) officerFormDrafts.clear();
   state.authUser = session?.user || null;
   state.loggedIn = Boolean(session?.user);
   const nextInterestUid = session?.user?.uid || null;

@@ -1109,3 +1109,46 @@ test('one event check-in tap records attendance inside the expanded phone sheet'
   await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
   await expect(page.locator('#action-feedback')).toContainText('1 point added');
 });
+
+test('officer accordion preserves nested work and drafts while keeping one event open', async ({ page }, info) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setOfficerEventOperations({
+      events: ['a', 'b'].map((id, i) => ({ id: `focused-${id}`, row: i + 2, title: `Workshop ${id.toUpperCase()}`, date: `2027-03-${24 + i}`, time: '6:00 PM', location: 'Reitz G320', eventStatus: 'Planned', plannedBudget: 50, actualSpend: 0, remainingBudget: 50, rsvps: [], officerRsvps: [] })),
+      budgetItems: [], totals: {}, locations: ['Reitz G320']
+    });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: 'focused-officer', displayName: 'Officer', email: 'officer@ufl.edu', role: 'officer' });
+  });
+  await goTab(page, 'Profile');
+  const a = page.locator('[data-officer-event="focused-a"]'), b = page.locator('[data-officer-event="focused-b"]');
+  await expect(a).toHaveAttribute('open', '');
+  await a.getByText('Event details & notes', { exact: true }).click();
+  await a.getByLabel('Event name', { exact: true }).fill('Workshop A draft');
+  await a.getByText('Budget & purchases', { exact: true }).click();
+  const summary = b.locator(':scope > summary');
+  await summary.evaluate(el => el.scrollIntoView({ block: "center" }));
+  const top = (await summary.boundingBox()).y;
+  await summary.click();
+  await expect(a).not.toHaveAttribute('open');
+  await expect(b).toHaveAttribute('open', '');
+  expect(Math.abs((await summary.boundingBox()).y - top)).toBeLessThan(3);
+  // A live club update must not erase an unsaved edit in the collapsed card.
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
+  await a.locator(':scope > summary').click();
+  await expect(b).not.toHaveAttribute('open');
+  await expect(a.getByLabel('Event name', { exact: true })).toHaveValue('Workshop A draft');
+  await expect(a.locator('[data-disclosure="officer-budget-focused-a"]')).toHaveAttribute('open', '');
+  await expect(a.getByLabel('Backup room', { exact: true })).toBeHidden();
+  await a.getByText('Room planning', { exact: false }).click();
+  await expect(a.getByLabel('Backup room', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await a.screenshot({ path: `test-results/${info.project.name}-compact-officer-event.png` });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByLabel('Display name', { exact: true }).fill('Unsubmitted name');
+  await page.locator('[data-disclosure="settings-updates"] > summary').click();
+  await expect(page.locator('[data-disclosure="settings-account"]')).not.toHaveAttribute('open');
+  await page.locator('[data-disclosure="settings-officer-controls"] > summary').click();
+  await expect(page.locator('[data-disclosure="settings-updates"]')).not.toHaveAttribute('open');
+  await page.locator('[data-disclosure="settings-account"] > summary').click();
+  await expect(page.getByLabel('Display name', { exact: true })).toHaveValue('Unsubmitted name');
+  await page.screenshot({ path: `test-results/${info.project.name}-compact-settings.png` });
+});
