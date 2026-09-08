@@ -1,6 +1,6 @@
 /* Semantic surfaces, labels and actions; each has light and dark variants. */
 :root {
-  color-scheme: light;
+  color-scheme: only light;
   --bg: #f2f2f7; --surface: #ffffff; --surface-raised: #ffffff; --surface-soft: #f2f2f7;
   --ink: #1c1c1e; --muted: #636366; --line: #e5e5ea; --line-strong: #c7c7cc;
   --accent: #007aff; --accent-strong: #0066d6; --accent-soft: #e8f2ff; --cyan: #32ade6;
@@ -2542,7 +2542,8 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
 /* One continuous capsule, with a rounded moving selection and a quiet scrubber. */
 .bottom-nav {
   --nav-index: 1;
-  left: 50%; bottom: var(--nav-bottom-gap); width: min(calc(100% - 32px), 400px);
+  /* Viewport units keep the dock still when a tab adds or removes a scrollbar. */
+  left: 50vw; bottom: var(--nav-bottom-gap); width: min(calc(100vw - 32px), 400px);
   padding: 6px 6px 16px; gap: 0; grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid #ffffffa3; border-radius: 999px; transform: translateX(-50%); isolation: isolate;
   background: #f9f9f9b8; box-shadow: 0 8px 28px #0002, inset 0 1px 1px #ffffffe6, inset 0 -1px 1px #ffffff70;

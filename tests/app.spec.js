@@ -1585,3 +1585,63 @@ test('About preserves the club story while Hackathon has its own coming-soon pag
   await page.goto('/hackathon');
   await expect(navButton(page, 'Hackathon')).toHaveAttribute('aria-current', 'page');
 });
+
+
+test("desktop pins settle in one pan without changing zoom or correcting again", async ({ page }, info) => {
+  test.skip(info.project.name === 'mobile', 'Desktop map layout');
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => {
+    // Keep the fixture date while allowing Leaflet's animation clock to advance.
+    const FixtureDate = Date, fixedNow = Date.now(), start = performance.now();
+    window.Date = class extends FixtureDate {
+      constructor(...args) { super(...(args.length ? args : [fixedNow + performance.now() - start])); }
+      static now() { return fixedNow + performance.now() - start; }
+    };
+    const map = window.__FQC_MAP__;
+    const pin = document.querySelector('.event-map-pin');
+    const marker = Object.values(map._layers).find(layer => layer._icon?.contains(pin));
+    const location = marker.getLatLng();
+    map.stop();
+    map.setView([location.lat + .0008, location.lng - .0008], 15.5, { animate: false });
+    window.__pinMotion = { location, starts: 0, zooms: 0, points: [] };
+    map.on('movestart', () => window.__pinMotion.starts++);
+    map.on('zoomstart', () => window.__pinMotion.zooms++);
+    map.on('move', () => window.__pinMotion.points.push(map.latLngToContainerPoint(location)));
+  });
+  await page.locator('.event-map-pin').first().click();
+  await page.waitForTimeout(900);
+  const result = await page.evaluate(() => {
+    const map = window.__FQC_MAP__, motion = window.__pinMotion;
+    const details = document.querySelector('.event-details');
+    const visibleHeight = details.getClientRects().length ? details.getBoundingClientRect().top - map.getContainer().getBoundingClientRect().top : map.getSize().y;
+    const target = L.point(map.getSize().x / 2, Math.max(56, visibleHeight / 2));
+    const distances = motion.points.map(p => target.distanceTo(p));
+    return { starts: motion.starts, zooms: motion.zooms, zoom: map.getZoom(), error: target.distanceTo(map.latLngToContainerPoint(motion.location)), backwards: distances.some((d, i) => i > 0 && d > distances[i - 1] + 2) };
+  });
+  expect(result).toMatchObject({ starts: 1, zooms: 0, zoom: 15.5, backwards: false });
+  expect(result.error).toBeLessThan(2);
+});
+
+test("navigation stays horizontally fixed across tabs and scrollbar changes", async ({ page }) => {
+  await expect(page.locator('.app-splash')).toBeHidden();
+  const initial = await page.locator('.bottom-nav').boundingBox();
+  for (const [index, name] of ['About', 'Hackathon', 'Events', 'Profile', 'About'].entries()) {
+    // Reserve a classic scrollbar gutter even on hosts using overlay scrollbars.
+    await page.evaluate(index => { document.documentElement.style.scrollbarGutter = index % 2 ? 'auto' : 'stable'; }, index);
+    await navButton(page, name).click();
+    const positions = await page.evaluate(async () => {
+      const samples = [];
+      const start = performance.now();
+      while (performance.now() - start < 450) {
+        const rect = document.querySelector('.bottom-nav').getBoundingClientRect();
+        samples.push({ x: rect.x, width: rect.width });
+        await new Promise(requestAnimationFrame);
+      }
+      return samples;
+    });
+    for (const rect of positions) {
+      expect(Math.abs(rect.x - initial.x)).toBeLessThan(.1);
+      expect(Math.abs(rect.width - initial.width)).toBeLessThan(.1);
+    }
+  }
+});

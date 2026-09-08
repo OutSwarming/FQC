@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.2";
+const APP_VERSION = "2.26.3";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.3", "Centered map pins in one movement, stabilized navigation, and protected Light mode from automatic browser darkening"],
   ["2.26.2", "Separated About from the upcoming hackathon and added the FQC footer logo"],
   ["2.26.1", "Fixed flqcs.com sign-in and recovery after an account is deleted and re-created"],
   ["2.26.0", "Added event-specific check-in and About, Events, Hackathon, and Profile navigation"],
@@ -730,7 +731,6 @@ let mapInteractionActive = false;
 let deferredMapRender = false;
 let renderedMarkerSignature = "";
 let eventMarkers = new Map();
-let pendingMapPan = null;
 let renderedView = "";
 let installPrompt = null;
 let savedMapView = null;
@@ -984,8 +984,7 @@ function render() {
     savedMapView = { center: eventMap.getCenter(), zoom: eventMap.getZoom() };
     if (retainedMap) retainedMap.remove();
     else {
-      if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
-      eventMap.remove(); eventMap = null; eventMarkers = new Map(); renderedMarkerSignature = ""; pendingMapPan = null; mapInteractionActive = false;
+      eventMap.remove(); eventMap = null; eventMarkers = new Map(); renderedMarkerSignature = ""; mapInteractionActive = false;
     }
   }
 
@@ -1908,8 +1907,6 @@ function initEventMap() {
   eventMap.on("userzoomstart", () => {
     releaseHomeDefault();
     clearMapPinHighlight();
-    if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
-    pendingMapPan = null;
   });
   bindMapQuickZoom(eventMap);
   window.L.control.zoom({ position: "topright" }).addTo(eventMap);
@@ -1994,39 +1991,26 @@ function drawMapMarkers({ preserveView = false } = {}) {
 
 function focusSelectedEvent({ animate = true } = {}) {
   if (!eventMap) return;
-  const event = getEvent(state.selectedEventId);
-  const location = getEventLocation(event);
-  if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
-  pendingMapPan = null;
+  const location = getEventLocation(getEvent(state.selectedEventId));
   eventMap.stop();
+  const mapHeight = eventMap.getSize().y;
+  let visibleHeight = mapHeight;
   if (isMobileEventSheetViewport()) {
-    const planner = document.querySelector(".event-planner");
-    const mapHeight = eventMap.getSize().y;
-    // Use the sheet's destination height, not its animated intermediate size.
-    const sheetHeight = parseFloat(planner?.style.height) || 0;
-    const visibleCenterY = Math.max(56, (mapHeight - sheetHeight) / 2);
-    const zoom = eventMap.getZoom();
-    const center = eventMap.unproject(
-      eventMap.project([location.lat, location.lng], zoom).add([0, mapHeight / 2 - visibleCenterY]),
-      zoom
-    );
-    // One pan to the final position: no zoom flight or moveend correction.
-    eventMap.panTo(center, { animate: animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches, duration: 0.35 });
-    return;
+    // Use the sheet's destination, not its intermediate animated height.
+    visibleHeight -= parseFloat(document.querySelector(".event-planner")?.style.height) || 0;
+  } else {
+    const details = document.querySelector(".event-details");
+    if (details?.getClientRects().length) {
+      visibleHeight = Math.min(mapHeight, details.getBoundingClientRect().top - eventMap.getContainer().getBoundingClientRect().top);
+    }
   }
-  const zoom = Math.max(eventMap.getZoom(), 16);
-  if (!animate) {
-    const center = eventMap.unproject(eventMap.project([location.lat, location.lng], zoom).add([0, 105]), zoom);
-    eventMap.setView(center, zoom, { animate: false });
-    return;
-  }
-  pendingMapPan = () => {
-    if (!eventMap) return;
-    eventMap.panBy([0, 105], { animate: true, duration: 0.25 });
-    pendingMapPan = null;
-  };
-  eventMap.once("moveend", pendingMapPan);
-  eventMap.flyTo([location.lat, location.lng], zoom, { duration: 0.45 });
+  const visibleCenterY = Math.max(56, visibleHeight / 2);
+  const zoom = eventMap.getZoom();
+  const center = eventMap.unproject(
+    eventMap.project([location.lat, location.lng], zoom).add([0, mapHeight / 2 - visibleCenterY]), zoom
+  );
+  // One destination above any event overlay; preserve the reader's zoom.
+  eventMap.panTo(center, { animate: animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches, duration: 0.35 });
 }
 
 function renderMetrics(metrics) {

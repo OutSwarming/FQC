@@ -104,6 +104,9 @@ test('appearance follows the device and explicit preference survives reload', as
   await page.getByRole('radio', { name: 'Light', exact: true }).check();
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('html')).toHaveCSS('color-scheme', 'light only');
+  await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'light dark');
+  await expect(page.locator('.appearance-settings')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await page.getByRole('radio', { name: 'System', exact: true }).check();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce', contrast: 'more' });
@@ -859,4 +862,20 @@ test('event check-in and the new Hackathon destination fit every phone', async (
   await page.getByRole('button', { name: 'Back to Events', exact: true }).tap();
   await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
   await expect(page.locator('.event-list [data-rsvp]').first()).toHaveText('RSVP');
+});
+
+
+test('explicit Light resists Chromium automatic darkening on Android', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Chromium automatic darkening emulation');
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setAutoDarkModeOverride', { enabled: true });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('radio', { name: 'Light', exact: true }).check();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('html')).toHaveCSS('color-scheme', 'light only');
+  await page.reload();
+  await expect(page.locator('.app-splash')).toBeHidden();
+  await expect(page.getByRole('radio', { name: 'Light', exact: true })).toBeChecked();
+  await page.screenshot({ path: 'test-results/android-light-auto-dark.png', animations: 'disabled' });
 });
