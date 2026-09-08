@@ -1074,13 +1074,14 @@ test('fast scrubber movement renders only the final destination', async ({ page,
   expect(await page.evaluate(() => window.__screenRenders)).toBe(1);
 });
 
-test('short fast flicks skip the middle sheet position in both directions', async ({ page, browserName }) => {
+test('short fast flicks retain the middle stop in both directions', async ({ page, browserName }) => {
   await goTab(page, 'Events');
   const handle = page.locator('#event-sheet-handle'), planner = page.locator('.event-planner');
   await handle.press('ArrowDown');
   await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
   const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
   for (const direction of [-1, 1]) {
+    if (direction === 1) await handle.press('ArrowUp');
     await page.waitForTimeout(350);
     const box = await handle.boundingBox(), x = box.x + box.width / 2, y = box.y + 10;
     const send = async (type, at) => cdp
@@ -1089,6 +1090,6 @@ test('short fast flicks skip the middle sheet position in both directions', asyn
     await send('pointerdown', y);
     await send('pointermove', y + direction * 48);
     await send('pointerup', y + direction * 48);
-    await expect(planner).toHaveAttribute('data-sheet-mode', direction < 0 ? 'high' : 'low');
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
   }
 });

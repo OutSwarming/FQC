@@ -1,3 +1,4 @@
+import { chooseSheetDestination } from "./sheet-gesture.js";
 import { renderWorkshopStories, bindWorkshopStories } from "./workshop-stories.js";
 import { bindMapQuickZoom } from "./map-gestures.js";
 import L from "leaflet";
@@ -35,9 +36,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.11";
+const APP_VERSION = "2.26.12";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.12", "Balanced sheet travel and momentum so short swipes keep the middle stop"],
   ["2.26.11", "Committed navigation drags only on release and let fast sheet flicks skip the middle position"],
   ["2.26.10", "Raised the expanded event sheet and faded map controls during expansion"],
   ["2.26.9", "Smoothed rapid event-sheet swipes, direction changes, and interrupted snap animations"],
@@ -1697,7 +1699,6 @@ function bindMobileEventSheet() {
     planner.getBoundingClientRect();
     planner.classList.remove("event-sheet-dragging", "event-sheet-held");
     const distance = finished.startY - finished.lastY;
-    const meaningfulSwipe = Math.abs(distance) > 22;
     const releaseVelocity = event.type === "pointercancel" || performance.now() - finished.lastTime > 100 ? 0 : finished.velocity;
     if (!finished.moved) {
       // Resume the caught snap without resetting scroll or moving a tapped button.
@@ -1720,25 +1721,12 @@ function bindMobileEventSheet() {
       return;
     }
 
-    const nearestMode = MOBILE_EVENT_SHEET_MODES.slice(1).reduce((nearest, candidate) => (
-      Math.abs(finished.metrics[candidate] - finished.currentHeight) < Math.abs(finished.metrics[nearest] - finished.currentHeight)
-        ? candidate
-        : nearest
-    ), "medium");
-    let nextMode = nearestMode;
-
-    if (meaningfulSwipe && Math.abs(releaseVelocity) >= .9) {
-      // A deliberate flick travels directly to the end stop, including from low.
-      nextMode = releaseVelocity > 0 ? "high" : "low";
-    } else if (meaningfulSwipe && Math.abs(releaseVelocity) > 0.12) {
-      const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(finished.modeAtStart);
-      const nearestModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(nearestMode);
-      const directionalModeIndex = Math.max(1, Math.min(3, startModeIndex + (releaseVelocity > 0 ? 1 : -1)));
-      const nextModeIndex = releaseVelocity > 0
-        ? Math.max(nearestModeIndex, directionalModeIndex)
-        : Math.min(nearestModeIndex, directionalModeIndex);
-      nextMode = MOBILE_EVENT_SHEET_MODES[nextModeIndex];
-    }
+    const nextMode = chooseSheetDestination({
+      metrics: finished.metrics,
+      startHeight: finished.startHeight,
+      height: finished.currentHeight,
+      velocity: releaseVelocity
+    });
 
     const preserveScroll = nextMode === "high" && finished.scrollHandoff;
     const remainingDistance = Math.abs(finished.metrics[nextMode] - finished.currentHeight);
