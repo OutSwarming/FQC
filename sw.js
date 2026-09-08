@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v329-account-recovery";
+const CACHE_NAME = "fqc-app-v330-public-assets-only";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
@@ -30,11 +30,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Offline storage is for public build assets only, never account/API responses.
+  if (!requestUrl.pathname.startsWith("/assets/")) return;
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
         const contentType = response.headers.get("content-type") || "";
-        if (response.ok && !contentType.includes("text/html")) {
+        const cacheControl = response.headers.get("cache-control") || "";
+        if (response.ok && !contentType.includes("text/html") && !/no-store|private/i.test(cacheControl)) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         }

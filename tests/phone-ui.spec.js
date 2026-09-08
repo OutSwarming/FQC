@@ -879,3 +879,26 @@ test('explicit Light resists Chromium automatic darkening on Android', async ({ 
   await expect(page.getByRole('radio', { name: 'Light', exact: true })).toBeChecked();
   await page.screenshot({ path: 'test-results/android-light-auto-dark.png', animations: 'disabled' });
 });
+
+test('Samsung Internet offers Chrome installation without invoking the blocked installer', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Samsung install guidance branch');
+  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (Linux; Android 16; SM-S938B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/29.0 Chrome/136.0.0.0 Mobile Safari/537.36' }));
+  await page.reload();
+  await expect(page.locator('.app-splash')).toBeHidden();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.evaluate(() => {
+    window.__installCalls = 0;
+    const event = new Event('beforeinstallprompt', { cancelable: true });
+    event.prompt = () => { window.__installCalls++; };
+    event.userChoice = Promise.resolve({ outcome: 'accepted' });
+    window.dispatchEvent(event);
+  });
+  await page.locator('[data-disclosure="settings-install"] > summary').click();
+  const card = page.locator('.install-card');
+  await expect(card.getByRole('heading', { name: 'Install with Chrome' })).toBeVisible();
+  await expect(page.locator('#install-app')).toHaveCount(0);
+  await expect(card.getByRole('link', { name: 'Open in Chrome' })).toHaveAttribute('href', /package=com\.android\.chrome;/);
+  await expect(card).toContainText('Keep Play Protect enabled');
+  expect(await page.evaluate(() => window.__installCalls)).toBe(0);
+  await card.screenshot({ path: 'test-results/samsung-install-guidance.png' });
+});

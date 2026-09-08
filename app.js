@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.3";
+const APP_VERSION = "2.26.4";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.4", "Added a Chrome install option for Samsung Internet and tightened browser permissions and offline caching"],
   ["2.26.3", "Centered map pins in one movement, stabilized navigation, and protected Light mode from automatic browser darkening"],
   ["2.26.2", "Separated About from the upcoming hackathon and added the FQC footer logo"],
   ["2.26.1", "Fixed flqcs.com sign-in and recovery after an account is deleted and re-created"],
@@ -745,6 +746,10 @@ function isInstalledApp() {
   return window.matchMedia?.("(display-mode: standalone)").matches === true
     || window.matchMedia?.("(display-mode: fullscreen)").matches === true
     || window.navigator.standalone === true;
+}
+
+function isSamsungInternet() {
+  return /SamsungBrowser\//i.test(window.navigator.userAgent || "");
 }
 
 function isIosDevice() {
@@ -2756,6 +2761,17 @@ function renderInstallCard() {
       </section>
     `;
   }
+  // Samsung's browser-generated installer can be rejected by Play Protect.
+  // The web manifest cannot change that package's Android target SDK.
+  if (isSamsungInternet()) {
+    return `<section class="section install-card">
+      <div class="section-header"><div><p class="section-kicker">Home screen app</p><h2>Install with Chrome</h2>
+      <p>Samsung Internet may show a Play Protect warning when installing FQC. Use the latest Chrome to add it to your Home Screen.</p></div></div>
+      <a class="primary-button" href="intent://flqcs.com/#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=https%3A%2F%2Fflqcs.com%2F%23settings;end">Open in Chrome</a>
+      <ol class="install-steps"><li>In Chrome, open <strong>flqcs.com</strong>.</li><li>Open the menu and choose <strong>Add to Home screen</strong>, then <strong>Install</strong> if offered.</li></ol>
+      <p class="field-hint">Keep Play Protect enabled. You can keep using FQC here without installing.</p>
+    </section>`;
+  }
   return `
     <section class="section install-card">
       <div class="section-header">
@@ -3597,7 +3613,7 @@ function bindViewEvents() {
   });
 
   document.querySelector("#install-app")?.addEventListener("click", async () => {
-    if (!installPrompt) return;
+    if (!installPrompt || isSamsungInternet()) return;
     installPrompt.prompt();
     const choice = await installPrompt.userChoice.catch(() => null);
     installPrompt = null;
@@ -3664,7 +3680,7 @@ settingsToggle.addEventListener("click", () => setView("settings"));
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
-  installPrompt = event;
+  installPrompt = isSamsungInternet() ? null : event;
   if (state.view === "settings") render();
 });
 
