@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.7";
+const APP_VERSION = "2.26.8";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.8", "Added subtle blue shading to calendar days with events in Light mode"],
   ["2.26.7", "Made the selected navigation bubble clearer in both themes and faded the event swipe hint during expansion"],
   ["2.26.6", "Disabled long-press selection on app surfaces and clarified Samsung browser appearance controls"],
   ["2.26.5", "Moved navigation out of the way during sheet drags and restored Android capsule dragging"],

@@ -565,6 +565,11 @@ button.calendar-day { color: var(--ink); font-weight: 850; }
   -webkit-line-clamp: 2;
 }
 
+:root[data-theme="light"] .calendar-day.has-event:not(.selected) {
+  background: #eaf3ff;
+  border-color: #c5defb;
+}
+
 .calendar-day.has-event i {
   position: absolute;
   right: 7px;
