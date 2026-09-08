@@ -3180,3 +3180,10 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 @media (prefers-reduced-motion: reduce) {
   body:has(.events-home) .bottom-nav { transition: none !important; }
 }
+
+.hackathon-preview .hack-hero { min-height: min(66dvh, 650px); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 22px; }
+.hackathon-preview .hack-hero h2 { position: relative; z-index: 1; }
+.hackathon-preview .hack-origin, .hackathon-preview .hack-small { margin: 0; }
+.hackathon-preview .hack-state-mark { pointer-events: none; }
+
+.hackathon-preview .hack-small { color: #c4cad2; }

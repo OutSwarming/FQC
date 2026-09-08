@@ -224,7 +224,7 @@
           </span>
           <div>
             <p class="eyebrow">Florida Quantum Computing</p>
-            <h1 id="screen-title">Home</h1>
+            <h1 id="screen-title">Events</h1>
           </div>
         </div>
         <div class="topbar-actions">
@@ -238,23 +238,23 @@
     <!-- The shared dock is outside each screen's sizing and clipping context. -->
     <nav class="bottom-nav" aria-label="Primary">
       <span class="nav-glass-lens" aria-hidden="true"></span>
+      <button class="nav-item" type="button" data-view="about">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6"></path><path d="M12 7h.01"></path></svg>
+        <span>About</span>
+      </button>
+      <button class="nav-item active" type="button" data-view="home" aria-current="page">
+        <svg><use href="#icon-calendar"></use></svg>
+        <span>Events</span>
+      </button>
       <button class="nav-item" type="button" data-view="hackathon">
         <svg><use href="#icon-spark"></use></svg>
         <span>Hackathon</span>
-      </button>
-      <button class="nav-item active" type="button" data-view="home" aria-current="page">
-        <svg><use href="#icon-home"></use></svg>
-        <span>Home</span>
-      </button>
-      <button class="nav-item" type="button" data-view="checkin">
-        <svg><use href="#icon-check"></use></svg>
-        <span>Check In</span>
       </button>
       <button class="nav-item" type="button" data-view="profile">
         <svg><use href="#icon-user"></use></svg>
         <span>Profile</span>
       </button>
-      <input class="nav-slider" id="nav-slider" type="range" min="0" max="3" step="1" value="1" aria-label="Slide between tabs" aria-valuetext="Home" />
+      <input class="nav-slider" id="nav-slider" type="range" min="0" max="3" step="1" value="1" aria-label="Slide between tabs" aria-valuetext="Events" />
     </nav>
 
     <template id="metric-template">

@@ -33,6 +33,10 @@ test("Firebase onboarding, attendance, and resilient 10K export", { skip: !enabl
   assert.ok(signupMs < 600000);
   assert.equal(sheetRequests, 0);
   await db.collection("settings").doc("checkin").set({ open: true, eventId: "burst-event", requireLocation: false });
+  // Event-specific clients must not award attendance after an officer switches sessions.
+  await assert.rejects(recordEventCheckIn.run({ ...accounts[0], data: { eventId: "different-event" } }), /no longer open for this event/);
+  assert.equal((await db.collection("events").doc("burst-event").collection("checkins").get()).size, 0);
+  accounts[0].data.eventId = "burst-event";
   const checkinStarted = performance.now();
   await Promise.all(accounts.map((request) => recordEventCheckIn.run(request)));
   await Promise.all(accounts.map(async (request) => {

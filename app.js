@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.15";
+const APP_VERSION = "2.26.0";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.0", "Added event-specific check-in and About, Events, Hackathon, and Profile navigation"],
   ["2.25.15", "Slid the navigation down for expanded events and back up for previews"],
   ["2.25.14", "Opened Home on the next upcoming event with its pin centered and List selected"],
   ["2.25.13", "Kept map attribution below the event popup while retaining its bottom-right position"],
@@ -103,7 +104,7 @@ const RELEASE_HISTORY = [
   ["1.6.0", "Unified UF event map, list, calendar, and mobile bottom sheet"],
   ["1.5.0", "Google Sheets event updates and UF campus locations"]
 ];
-const allowedViews = new Set(["hackathon", "home", "checkin", "profile", "settings"]);
+const allowedViews = new Set(["about", "hackathon", "home", "checkin", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const EVENTS_SHEET_NAME = "Events";
@@ -156,7 +157,10 @@ function readJson(key, fallback) {
 function viewFromLocation() {
   const hash = window.location.hash.slice(1);
   if (allowedViews.has(hash)) return hash;
-  if (hash === "hackathon-interest") return "hackathon";
+  if (hash === "events") return "home";
+  if (hash === "hackathon-interest") return "about";
+  if (/^\/about\/?$/.test(window.location.pathname)) return "about";
+  if (/^\/events\/?$/.test(window.location.pathname)) return "home";
   if (/^\/hackathon\/?$/.test(window.location.pathname)) return "hackathon";
   return null;
 }
@@ -215,6 +219,7 @@ const state = {
   budgetBreakdownOpen: false,
   activeCheckInEventId: "fqc-2026-03-03-ionq",
   checkInOpen: false,
+  checkInTargetEventId: "",
   checkInRequireLocation: true,
   checkedInEvents: [],
   memberPoints: 0,
@@ -626,7 +631,6 @@ function applyEventData(nextData, options = {}) {
   eventDataUpdatedAt = options.updatedAt || new Date().toISOString();
 
   if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
-  if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
   if (!events.some((event) => event.date.startsWith(`${state.calendarMonth}-`))) {
     state.calendarMonth = events[0].date.slice(0, 7);
   }
@@ -695,13 +699,13 @@ loadCachedEventData();
 loadCachedBudgetData();
 
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
-if (!events.some((event) => event.id === state.activeCheckInEventId)) state.activeCheckInEventId = events[0].id;
 if (!/^(member|officer)$/.test(state.memberRole)) state.memberRole = "member";
 if (!/^(list|calendar|past)$/.test(state.eventMode)) state.eventMode = "list";
 if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].date.slice(0, 7);
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
 
 const titles = {
+  about: "About",
   hackathon: "Hackathon",
   home: "Events",
   checkin: "Check In",
@@ -933,7 +937,7 @@ function setView(view, { history = true } = {}) {
   state.view = allowedViews.has(view) ? view : "home";
   if (history) {
     const url = new URL(window.location.href);
-    url.hash = state.view;
+    url.hash = state.view === "home" ? "events" : state.view;
     if (url.href !== window.location.href) window.history.pushState(null, "", url);
   }
   saveState();
@@ -989,16 +993,16 @@ function render() {
   document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen || Boolean(state.memberProfileUid) || state.leaderboardExpanded);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
-  document.body.classList.toggle("hackathon-screen-active", state.view === "hackathon");
+  document.body.classList.toggle("hackathon-screen-active", state.view === "about" || state.view === "hackathon");
   title.textContent = titles[state.view] || "Events";
   settingsToggle.hidden = state.view === "settings";
   navItems.forEach((item) => {
-    const active = item.dataset.view === state.view;
+    const active = item.dataset.view === (state.view === "checkin" ? "home" : state.view);
     item.classList.toggle("active", active);
     item.setAttribute("aria-current", active ? "page" : "false");
   });
 
-  const navIndex = navItems.findIndex((item) => item.dataset.view === state.view);
+  const navIndex = navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view));
   bottomNav.dataset.settings = String(navIndex < 0);
   if (navIndex >= 0) {
     bottomNav.style.setProperty("--nav-index", navIndex);
@@ -1006,6 +1010,7 @@ function render() {
     navSlider.setAttribute("aria-valuetext", navItems[navIndex].textContent.trim());
   }
   const views = {
+    about: renderAbout,
     hackathon: renderHackathon,
     home: renderHome,
     checkin: renderCheckIn,
@@ -1060,9 +1065,9 @@ function hackathonPhoto(name, alt, eager = false, wide = false) {
   return `<img src="/assets/hackathon/${name}-800.webp" srcset="/assets/hackathon/${name}-800.webp 800w, /assets/hackathon/${name}-1600.webp 1600w${larger}" sizes="${wide ? '(max-width: 1440px) 96vw, 1380px' : '(max-width: 680px) 95vw, 48vw'}" width="1600" height="1200" alt="${alt}" loading="${eager ? "eager" : "lazy"}" ${eager ? 'fetchpriority="high"' : ''} decoding="async">`;
 }
 
-function renderHackathon() {
+function renderAbout() {
   return `
-    <section class="hackathon-landing" data-screen="hackathon">
+    <section class="hackathon-landing" data-screen="about">
       <header class="hack-hero">
         <div class="hack-eyebrow"><span class="hack-live-dot"></span> FLORIDA QUANTUM COMPUTING</div>
         <span class="hack-state-mark" aria-hidden="true">|0⟩</span>
@@ -1082,10 +1087,24 @@ function renderHackathon() {
     </section>`;
 }
 
+function renderHackathon() {
+  return `<section class="hackathon-landing hackathon-preview" data-screen="hackathon">
+    <header class="hack-hero">
+      <div class="hack-eyebrow"><span class="hack-live-dot"></span> FQC HACKATHON</div>
+      <span class="hack-state-mark" aria-hidden="true">|ψ⟩</span>
+      <h2>Your turn<br>to <em>build</em></h2>
+      <p class="hack-origin">More details coming soon</p>
+      ${hackathonCta()}
+      ${state.hackathonInterested ? '<p class="hack-small" role="status">Your interest is saved</p><button class="hack-cancel" type="button" id="cancel-hackathon-interest">Remove my interest</button>' : '<p class="hack-small">Save your interest with your FQC account</p>'}
+      ${state.hackathonError ? `<p class="hack-interest-status hack-interest-error" role="alert">${escapeHtml(state.hackathonError)}</p>` : ""}
+    </header>
+  </section>`;
+}
+
 async function registerHackathonInterest(interested = true) {
   if (state.hackathonBusy) return;
   if (!state.loggedIn) {
-    state.pendingIntent = { type: "hackathon" };
+    state.pendingIntent = { type: "hackathon", view: state.view };
     state.authPromptOpen = true;
     state.authPromptAction = "hackathon";
     state.authPromptEventId = "";
@@ -1109,7 +1128,7 @@ async function registerHackathonInterest(interested = true) {
   } finally {
     if (state.authUser?.uid === uid) {
       state.hackathonBusy = false;
-      if (state.view === "hackathon") render();
+      if (["about", "hackathon"].includes(state.view)) render();
     }
   }
 }
@@ -1226,10 +1245,33 @@ function renderEventList() {
     : '<p class="calendar-empty">No upcoming events are scheduled yet. Completed events are saved under Past.</p>';
 }
 
+function isEventCheckInOpen(eventId) {
+  return state.checkInOpen && state.activeCheckInEventId === eventId && events.some(event => event.id === eventId);
+}
+
+function renderEventAction(event, { compact = false, past = isPastEvent(event) } = {}) {
+  const buttonClass = compact ? "event-rsvp-mini" : "primary-button";
+  if (isEventCheckInOpen(event.id)) {
+    const checkedIn = state.checkedInEvents.includes(event.id);
+    return `<button class="${buttonClass}${checkedIn ? " going" : ""}" type="button" data-event-checkin="${event.id}" aria-label="${checkedIn ? "Checked in to" : "Check in to"} ${escapeHtml(event.title)}" ${checkedIn ? "disabled" : ""}>${checkedIn ? "Checked in" : "Check in"}</button>`;
+  }
+  if (past) return `<span class="${compact ? "event-past-label" : "event-detail-past-label"}">${compact ? "Past" : "Past event"}</span>`;
+  const going = state.rsvps.includes(event.id);
+  return `<button class="${buttonClass}${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${going ? "Going" : "RSVP"}</button>`;
+}
+
+function openEventCheckIn(eventId) {
+  if (!isEventCheckInOpen(eventId)) {
+    showActionFeedback("error", "Check-in is no longer open for this event.");
+    return;
+  }
+  state.checkInTargetEventId = eventId;
+  setView("checkin");
+}
+
 function renderEventCard(event, options = {}) {
   const location = getEventLocation(event);
   const selected = event.id === state.selectedEventId;
-  const going = state.rsvps.includes(event.id);
   return `
     <article class="event-card${selected ? " selected" : ""}${options.past ? " past-event-card" : ""}" data-event-card="${event.id}">
       <button class="event-card-select" type="button" data-select-event="${event.id}" aria-pressed="${selected}">
@@ -1243,9 +1285,7 @@ function renderEventCard(event, options = {}) {
         </span>
         <svg class="event-chevron"><use href="#icon-chevron-right"></use></svg>
       </button>
-      ${options.past
-        ? '<span class="event-past-label">Past</span>'
-        : `<button class="event-rsvp-mini${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${going ? "Going" : "RSVP"}</button>`}
+      ${renderEventAction(event, { compact: true, past: options.past })}
     </article>
   `;
 }
@@ -1334,7 +1374,6 @@ function renderSelectedEventDetails() {
   if (!state.selectedEventId) return "";
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
-  const going = state.rsvps.includes(event.id);
   const past = isPastEvent(event);
   const directionsDestination = encodeURIComponent(`${location.lat},${location.lng}`);
   return `
@@ -1354,9 +1393,7 @@ function renderSelectedEventDetails() {
       </div>
       <div class="event-detail-actions">
         <a class="secondary-button" href="https://www.google.com/maps/dir/?api=1&destination=${directionsDestination}" target="_blank" rel="noopener noreferrer">Directions</a>
-        ${past
-          ? '<span class="event-detail-past-label">Past event</span>'
-          : `<button class="primary-button${going ? " going" : ""}" type="button" data-rsvp="${event.id}">${going ? "Going" : "RSVP"}</button>`}
+        ${renderEventAction(event, { past })}
       </div>
     </article>
   `;
@@ -1778,6 +1815,9 @@ async function toggleRsvp(eventId) {
 }
 
 function bindRsvpEvents(root = document) {
+  root.querySelectorAll("[data-event-checkin]").forEach((button) => {
+    button.addEventListener("click", () => openEventCheckIn(button.dataset.eventCheckin));
+  });
   root.querySelectorAll("[data-rsvp]").forEach((button) => {
     button.addEventListener("click", () => toggleRsvp(button.dataset.rsvp));
   });
@@ -2267,6 +2307,11 @@ function renderAuthLoading(screen) {
 }
 
 function renderCheckIn() {
+  const targetEventId = state.checkInTargetEventId || state.activeCheckInEventId;
+  state.checkInTargetEventId = targetEventId;
+  const open = isEventCheckInOpen(targetEventId);
+  const back = '<button class="secondary-button" data-back-events type="button">Back to Events</button>';
+  if (!open) return `<section class="view" data-screen="checkin"><section class="section checkin-hero"><div class="checkin-status closed"><span></span>Check-in closed</div><h2>Check-in isn’t open for this event</h2><p>Return to Events for the latest schedule</p>${back}</section></section>`;
   if (!state.authReady) return renderAuthLoading("checkin");
   if (!state.loggedIn) {
     return `
@@ -2276,13 +2321,13 @@ function renderCheckIn() {
           <p class="section-kicker">Attendance</p>
           <h2>Sign in to check in</h2>
           <p>Use your FQC profile for tabling, GBMs, workshops, speaker sessions, and socials.</p>
-          <button class="primary-button" id="go-to-login" type="button">Open Profile Login</button>
+          <button class="primary-button" id="go-to-login" type="button">Sign in to check in</button>${back}
         </section>
       </section>
     `;
   }
 
-  const event = getEvent(state.activeCheckInEventId);
+  const event = getEvent(targetEventId);
   const location = getEventLocation(event);
   const checkedIn = state.checkedInEvents.includes(event.id);
   return `
@@ -2310,6 +2355,7 @@ function renderCheckIn() {
           <p>An officer will open this screen when tabling or an FQC event begins.</p>
         `}
       </section>
+      ${back}
       <section class="section identity-card">
         <span class="role-badge ${state.memberRole}">${roleLabel()}</span>
         <div><strong>${escapeHtml(state.memberName)}</strong><p>${escapeHtml(roleLabel())} · Signed in and ready for attendance.</p></div>
@@ -3144,13 +3190,14 @@ function bindViewEvents() {
   });
   document.querySelectorAll("[data-hackathon-rsvp]").forEach((button) => button.addEventListener("click", () => registerHackathonInterest()));
   document.querySelector("#cancel-hackathon-interest")?.addEventListener("click", () => registerHackathonInterest(false));
+  document.querySelectorAll("[data-back-events]").forEach(button => button.addEventListener("click", () => setView("home")));
   bindCalendarEvents();
   bindRsvpEvents();
   bindMobileEventSheet();
 
   document.querySelector("#go-to-login")?.addEventListener("click", () => {
     if (!state.loggedIn) {
-      state.pendingIntent = { type: "checkin" };
+      state.pendingIntent = { type: "checkin", eventId: state.checkInTargetEventId };
       state.authPromptOpen = true;
       state.authPromptAction = "checkin";
       state.authPromptEventId = "";
@@ -3335,7 +3382,8 @@ function bindViewEvents() {
   });
 
   document.querySelector("#check-in-now")?.addEventListener("click", async () => {
-    if (!state.loggedIn || !state.checkInOpen) return;
+    const targetEventId = state.checkInTargetEventId;
+    if (!state.loggedIn || !isEventCheckInOpen(targetEventId)) return;
     const button = document.querySelector("#check-in-now");
     const label = button?.querySelector("span");
     if (button) {
@@ -3351,7 +3399,8 @@ function bindViewEvents() {
         if (label) label.textContent = "Saving attendance…";
         showActionFeedback("working", "Location confirmed — saving attendance…");
       }
-      result = await recordCheckIn(location);
+      if (!isEventCheckInOpen(targetEventId)) throw new Error("Check-in is no longer open for this event.");
+      result = await recordCheckIn(location, targetEventId);
     } catch (error) {
       state.authError = readableAuthError(error);
       showActionFeedback("error", state.authError);
@@ -3363,7 +3412,7 @@ function bindViewEvents() {
       return;
     }
     if (result?.eventId && !state.checkedInEvents.includes(result.eventId)) {
-      state.checkedInEvents = [...state.checkedInEvents, state.activeCheckInEventId];
+      state.checkedInEvents = [...state.checkedInEvents, result.eventId];
     }
     if (result?.eventId) {
       state.memberPoints = Number(result.points) || state.checkedInEvents.length;
@@ -3630,7 +3679,7 @@ function finishNavDrag(event) {
   if (drag.moved) {
     suppressNavClickUntil = performance.now() + 350;
     if (event.type === "pointerup") setView(navItems[Math.round(drag.index)].dataset.view);
-    else bottomNav.style.setProperty("--nav-index", Math.max(0, navItems.findIndex((item) => item.dataset.view === state.view)));
+    else bottomNav.style.setProperty("--nav-index", Math.max(0, navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view))));
   }
 }
 window.addEventListener("pointerup", finishNavDrag);
@@ -3691,7 +3740,7 @@ async function resumePendingIntent() {
   if (intent.type === "hackathon") {
     state.authPromptOpen = false;
     state.signupOpen = false;
-    setView("hackathon");
+    setView(intent.view === "about" ? "about" : "hackathon");
     await registerHackathonInterest(true);
     return;
   }
@@ -3700,7 +3749,7 @@ async function resumePendingIntent() {
     await toggleRsvp(intent.eventId);
     return;
   }
-  if (intent.type === "checkin") setView("checkin");
+  if (intent.type === "checkin") openEventCheckIn(intent.eventId);
 }
 
 observeSession((session) => {
@@ -3720,12 +3769,12 @@ observeSession((session) => {
       if (interestUid !== nextInterestUid) return;
       state.hackathonInterested = interested;
       state.hackathonReady = true;
-      if (state.view === "hackathon" && !state.signupOpen && !state.authPromptOpen) render();
+      if (["about", "hackathon"].includes(state.view) && !state.signupOpen && !state.authPromptOpen) render();
     }, () => {
       if (interestUid !== nextInterestUid) return;
       state.hackathonReady = true;
       state.hackathonError = "We couldn’t check your RSVP. You can safely try saving it again.";
-      if (state.view === "hackathon") render();
+      if (["about", "hackathon"].includes(state.view)) render();
     });
   }
   if (session?.profile) {
@@ -3767,7 +3816,7 @@ observeSession((session) => {
 });
 
 observeCheckIn((checkIn) => {
-  state.activeCheckInEventId = events.some((event) => event.id === checkIn.eventId) ? checkIn.eventId : events[0].id;
+  state.activeCheckInEventId = checkIn.eventId || "";
   state.checkInOpen = checkIn.open === true;
   state.checkInRequireLocation = checkIn.requireLocation !== false;
   if (state.authReady) render();

@@ -21,13 +21,13 @@ test.beforeEach(async ({ page }) => {
     const body = sheet === 'UF Locations' ? '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive, Gainesville, FL 32611","29.64631","-82.34788"' : sheet === 'Events' ? '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"\n"Quantum Workshop","2027-03-24","6:00 PM","Reitz Student Union","2340","Build quantum circuits together.","Yes","phone-workshop"' : '"Budget Summary","Amount"\n"Total Approved","100"';
     return route.fulfill({ status: 200, contentType: 'text/csv', body });
   });
-  await page.goto('/hackathon');
+  await page.goto('/about');
   await expect(page.locator('.app-splash')).toBeHidden();
 });
 
 test('clear controls, round navigation, all screens and appearance choices fit', async ({ page }, info) => {
   await expect(page.locator('.topbar-actions button:visible')).toHaveCount(1);
-  await expect(page.locator('.bottom-nav .nav-item')).toHaveText(['Hackathon', 'Home', 'Check In', 'Profile']);
+  await expect(page.locator('.bottom-nav .nav-item')).toHaveText(['About', 'Events', 'Hackathon', 'Profile']);
   const geometry = await page.locator('.bottom-nav').evaluate(el => {
     const b = el.getBoundingClientRect(); return { width: b.width, height: b.height, radius: parseFloat(getComputedStyle(el).borderRadius), right: b.right };
   });
@@ -35,7 +35,7 @@ test('clear controls, round navigation, all screens and appearance choices fit',
   expect(geometry.right).toBeLessThanOrEqual(page.viewportSize().width);
   await expect(page.locator('.hack-hero h2')).toHaveCSS('color', 'rgb(245, 245, 247)');
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-landing.png` });
-  for (const name of ['Home', 'Check In', 'Profile', 'Hackathon']) {
+  for (const name of ['Events', 'Hackathon', 'Profile', 'About']) {
     await goTab(page, name);
     await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -44,7 +44,7 @@ test('clear controls, round navigation, all screens and appearance choices fit',
   for (const appearance of ['Dark', 'Light', 'System']) await page.getByRole('radio', { name: appearance, exact: true }).check();
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-settings.png` });
   await page.getByRole('button', { name: 'Done', exact: true }).click();
-  await expect(nav(page, 'Hackathon')).toHaveAttribute('aria-current', 'page');
+  await expect(nav(page, 'About')).toHaveAttribute('aria-current', 'page');
   await goTab(page, 'Profile');
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-profile.png` });
@@ -112,7 +112,7 @@ test('appearance follows the device and explicit preference survives reload', as
 });
 
 test('app gestures keep every screen at normal size and form focus does not zoom', async ({ page }) => {
-  for (const name of ['Hackathon', 'Home', 'Check In', 'Profile']) {
+  for (const name of ['About', 'Events', 'Hackathon', 'Profile']) {
     await goTab(page, name);
     const result = await page.evaluate(() => {
       const cancellations = ['gesturestart', 'gesturechange', 'gestureend'].map(name => {
@@ -156,7 +156,7 @@ test('page pinch and double tap leave app scale fixed while one-finger scrolling
 });
 
 test('double tap zooms once and zoom buttons work without losing pin details', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const center = await page.evaluate(() => { const c = window.__FQC_MAP__.getCenter(); return { lat: c.lat, lng: c.lng }; });
@@ -181,7 +181,7 @@ test('double tap zooms once and zoom buttons work without losing pin details', a
 });
 
 test('mouse double click zooms in and shift double click zooms out', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const p = await mapPoint(page);
@@ -195,7 +195,7 @@ test('mouse double click zooms in and shift double click zooms out', async ({ pa
 
 test('one-finger double-tap drag zooms both ways and cancellation restores panning', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Raw touch sequences use Chromium device input; native double taps are tested in WebKit above.');
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
   const p = await mapPoint(page);
@@ -217,7 +217,7 @@ test('one-finger double-tap drag zooms both ways and cancellation restores panni
 
 test('pinch zoom remains available', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Pinch injected through Chromium device input.');
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const p = await mapPoint(page);
@@ -234,7 +234,7 @@ test('rapid reversing pinches keep loaded map tiles visible through release and 
     await new Promise(resolve => setTimeout(resolve, 120));
     await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') });
   });
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
   await expect.poll(() => page.locator('.leaflet-tile-loaded').count()).toBeGreaterThan(0);
@@ -306,9 +306,9 @@ test('navigation keeps the same bottom inset after scrolling, tab changes, and v
   await page.evaluate(() => document.documentElement.style.setProperty('--safe-bottom', '34px'));
   for (const height of [size.height, Math.max(300, size.height - 100), size.height]) {
     await page.setViewportSize({ width: size.width, height });
-    await goTab(page, 'Hackathon');
+    await goTab(page, 'About');
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    for (const name of ['Profile', 'Home', 'Check In', 'Home', 'Hackathon']) {
+    for (const name of ['Profile', 'Events', 'Hackathon', 'Events', 'About']) {
       await goTab(page, name);
       await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
       const position = await page.locator('.bottom-nav').evaluate(element => {
@@ -333,7 +333,7 @@ test('original event popup covers the dock, resizes, and keeps the last event ta
     ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
     : route.fallback());
   await page.reload();
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   const planner = page.locator('.event-planner');
   await page.locator('#event-sheet-handle').tap();
   await page.getByRole('tab', { name: /^Past/ }).tap();
@@ -397,7 +397,7 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
   for (const safe of [0, 34]) {
     await goTab(page, 'Profile');
     await page.evaluate(value => document.documentElement.style.setProperty('--safe-bottom', `${value}px`), safe);
-    await goTab(page, 'Home');
+    await goTab(page, 'Events');
     await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
     for (const height of [original.height, Math.max(300, original.height - 90)]) {
       await page.setViewportSize({ width: original.width, height });
@@ -441,7 +441,7 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
 });
 
 test('List opens large and controls follow the finger before release', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   const planner = page.locator('.event-planner');
   const handle = page.locator('#event-sheet-handle');
   const tabs = page.locator('.event-tabs-sticky');
@@ -512,13 +512,13 @@ test.describe('pin navigation between event views', () => {
     await page.getByRole('tab', { name: /^Past/ }).tap();
     await expect(page.locator('.event-intro h2')).toHaveText('Old event');
     await goTab(page, 'Profile');
-    await goTab(page, 'Home');
+    await goTab(page, 'Events');
     await checkNext();
     await page.getByRole('tab', { name: 'List', exact: true }).tap();
     await page.locator('[data-event-panel="list"] [data-select-event="home-later"]').tap();
     await expect(page.locator('.event-intro h2')).toHaveText('Later at ten');
-    await goTab(page, 'Hackathon');
-    await goTab(page, 'Home');
+    await goTab(page, 'About');
+    await goTab(page, 'Events');
     await checkNext();
   });
 
@@ -535,7 +535,7 @@ test.describe('pin navigation between event views', () => {
         ? route.fulfill({ status: 200, contentType: 'text/csv', body: '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive","29.64631","-82.34788"\n"Larsen Hall","968 Center Drive","29.64311","-82.34738"' })
         : route.fallback());
     await page.reload();
-    await goTab(page, 'Home');
+    await goTab(page, 'Events');
     for (const [tab, location, title] of [['Past', 'reitz-student-union', 'Next Reitz workshop'], ['Calendar', 'reitz-student-union', 'Next Reitz workshop'], ['Past', 'larsen-hall', 'Larsen archive']]) {
       if (await page.locator('.event-planner').getAttribute('data-sheet-mode') === 'low') await page.locator('#event-sheet-handle').tap();
       await page.getByRole('tab', { name: new RegExp('^' + tab) }).tap();
@@ -567,7 +567,7 @@ test.describe('pin navigation between event views', () => {
 });
 
 test('mobile pin centering uses one movement without zooming or a second correction', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   const background = await mapPoint(page);
   await page.touchscreen.tap(background.x, background.y);
   await page.evaluate(() => {
@@ -606,7 +606,7 @@ test('mobile pin centering uses one movement without zooming or a second correct
 });
 
 test('pin highlight clears on tap-away and stays cleared through live refresh', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   // Close the event sheet to expose the center pin on shorter phones.
   const background = await mapPoint(page);
   await page.touchscreen.tap(background.x, background.y);
@@ -635,7 +635,7 @@ test('pin highlight clears on tap-away and stays cleared through live refresh', 
 
 test('quick zoom renders fractional frames and preserves the map center during a live update', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Raw continuous touch input uses Chromium device input.');
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.evaluate(() => {
     const map = window.__FQC_MAP__;
     map.setZoom(16, { animate: false });
@@ -690,8 +690,8 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
   }
   await expect.poll(() => page.evaluate(() => window.__photoEntrances.length)).toBe(4);
   await page.waitForTimeout(400);
-  await goTab(page, 'Home');
-  await goTab(page, 'Hackathon');
+  await goTab(page, 'Events');
+  await goTab(page, 'About');
   await page.locator('.workshop-outlook').scrollIntoViewIfNeeded();
   await page.waitForTimeout(400);
   expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(4);
@@ -711,7 +711,7 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
 });
 
 test('map touch defaults cannot start the iOS loupe and taps still reach pins and controls once', async ({ page }) => {
-  await goTab(page, 'Home');
+  await goTab(page, 'Events');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => {
     window.__touchDefaults = [];
@@ -739,8 +739,8 @@ test('map touch defaults cannot start the iOS loupe and taps still reach pins an
   await page.getByRole('button', { name: 'Zoom out', exact: true }).tap();
   await expect.poll(() => zoom(page)).toBeCloseTo(before, 5);
   // The guard must be removed with the old map and rebound to the next one.
-  await goTab(page, 'Hackathon');
-  await goTab(page, 'Home');
+  await goTab(page, 'About');
+  await goTab(page, 'Events');
   const again = await mapPoint(page);
   await page.touchscreen.tap(again.x, again.y);
   expect(await page.evaluate(() => window.__touchDefaults.every(Boolean))).toBe(true);
@@ -792,8 +792,8 @@ test('mobile scroll focus animates images while text and layout remain untransfo
   await expect(tile).toHaveCSS('translate', 'none');
   await expect(picture).toHaveCSS('scale', 'none');
   await expect(picture).toHaveCSS('translate', 'none');
-  await goTab(page, 'Home');
-  await goTab(page, 'Hackathon');
+  await goTab(page, 'Events');
+  await goTab(page, 'About');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await centerTile();
   await expect.poll(scale).toBeGreaterThan(1.0075);
@@ -834,4 +834,27 @@ test('photo bubbles compress, spring back, cancel for scrolling, and respect red
   expect(await figure.evaluate(el => el.getAnimations().length)).toBe(0);
   await page.mouse.up();
   await expect(figure).not.toHaveClass(/photo-is-pressed/);
+});
+
+test('event check-in and the new Hackathon destination fit every phone', async ({ page }, info) => {
+  await goTab(page, 'Hackathon');
+  await expect(page.getByText('More details coming soon', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `test-results/${info.project.name}-new-hackathon.png` });
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: 'phone-member', displayName: 'Phone Member', email: 'phone@ufl.edu', role: 'member' });
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId: 'phone-workshop', open: true, requireLocation: false });
+  });
+  await goTab(page, 'Events');
+  await page.locator('#event-sheet-handle').tap();
+  const action = page.locator('.event-list [data-event-checkin]').first();
+  await action.tap();
+  await expect(page.locator('.checkin-hero h2')).toHaveText('Quantum Workshop');
+  await page.getByRole('button', { name: 'I’m Here', exact: true }).tap();
+  await expect(page.getByRole('button', { name: 'Checked In', exact: true })).toBeDisabled();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
+  await expect(page.getByRole('heading', { name: 'Check-in isn’t open for this event' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to Events', exact: true }).tap();
+  await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
+  await expect(page.locator('.event-list [data-rsvp]').first()).toHaveText('RSVP');
 });

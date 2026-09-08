@@ -445,9 +445,10 @@ export async function updateUsername(username) {
   return normalizedProfile(refreshed.data);
 }
 
-export async function recordCheckIn(location = null) {
+export async function recordCheckIn(location = null, eventId = null) {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
+    if (eventId && eventId !== mockCheckIn.eventId) throw new Error("Check-in is no longer open for this event.");
     if (mockCheckIn.requireLocation && !location) throw new Error("Location is required for this check-in.");
     const checkedInEvents = [...new Set([...(mockProfile?.checkedInEvents || []), mockCheckIn.eventId])];
     const awarded = checkedInEvents.length > (mockProfile?.checkedInEvents || []).length;
@@ -461,7 +462,7 @@ export async function recordCheckIn(location = null) {
     emitMockSession();
     return { eventId: mockCheckIn.eventId, awarded, points: mockProfile.points, leaderboard: mockLeaderboard };
   }
-  const result = await callable("recordEventCheckIn")({ location });
+  const result = await callable("recordEventCheckIn")({ location, eventId });
   return result.data;
 }
 

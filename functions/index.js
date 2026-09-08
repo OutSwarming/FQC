@@ -1640,6 +1640,10 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
     if (checkIn.open !== true || !checkIn.eventId) {
       throw new HttpsError("failed-precondition", "Event check-in is not open.");
     }
+    // Older clients omit eventId; new clients pin attendance to the event opened.
+    if (request.data?.eventId && request.data.eventId !== checkIn.eventId) {
+      throw new HttpsError("failed-precondition", "Check-in is no longer open for this event.");
+    }
     const locationVerified = requireNearbyLocation(checkIn, request.data?.location);
 
     const eventId = cleanText(checkIn.eventId, 100);
