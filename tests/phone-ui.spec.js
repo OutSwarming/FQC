@@ -1180,3 +1180,31 @@ test('selected pin stays highlighted while the event sheet is dragged', async ({
   await page.touchscreen.tap(point.x,point.y);
   await expect(page.locator('.event-map-pin.active')).toHaveCount(0);
 });
+
+
+test('drug discovery landing stays compact, readable, and usable in both themes', async ({ page }, info) => {
+  await goTab(page, 'Hackathon');
+  const landing = page.locator('.discovery-landing');
+  await expect(landing).toContainText('February 1–13, 2027');
+  await expect(landing).toContainText('TENTATIVE');
+  const detail = landing.locator('details');
+  await expect(detail).not.toHaveAttribute('open');
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme);
+    await expect.poll(() => landing.locator('img').evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // No text spills out of its own column at narrow or landscape sizes.
+    expect(await landing.locator('h2, h3, p, dd, summary').evaluateAll(nodes => nodes.every(el => el.scrollWidth <= el.clientWidth + 1))).toBe(true);
+    await page.evaluate(() => scrollTo(0, 0));
+    await page.screenshot({ path: `test-results/discovery-${info.project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
+  }
+  await detail.locator('summary').click();
+  await expect(detail).toHaveAttribute('open', '');
+  await expect(detail).toContainText('variational quantum eigensolver');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await detail.locator('summary').click();
+  await landing.getByRole('button', { name: 'Join the interest list' }).click();
+  await expect(page.getByRole('button', { name: 'Create Account', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Log In', exact: true })).toBeVisible();
+});
