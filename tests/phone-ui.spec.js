@@ -1004,3 +1004,33 @@ test('Samsung Light guidance follows selection and browser color follows the sav
   await expect(page.locator('#browser-appearance-help')).toBeHidden();
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#000000');
 });
+
+test('fast sheet reversals follow the release direction and a new touch catches the moving sheet', async ({ page }) => {
+  await goTab(page, 'Events');
+  const planner = page.locator('.event-planner');
+  const handle = page.locator('#event-sheet-handle');
+  await page.waitForTimeout(450);
+  const start = { button: 0, pointerId: 97, pointerType: 'touch', clientY: 600 };
+  await handle.dispatchEvent('pointerdown', start);
+  await handle.dispatchEvent('pointermove', { ...start, clientY: 420 });
+  await page.waitForTimeout(32);
+  await handle.dispatchEvent('pointermove', { ...start, clientY: 550 });
+  await handle.dispatchEvent('pointerup', { ...start, clientY: 550 });
+  // Net travel is still upward, but the user's final flick is downward.
+  await expect(planner).not.toHaveAttribute('data-sheet-mode', 'high');
+  await page.waitForTimeout(450);
+  if (await planner.getAttribute('data-sheet-mode') === 'low') {
+    await handle.press('ArrowUp');
+    await page.waitForTimeout(450);
+  }
+  await handle.press('ArrowUp');
+  await page.waitForTimeout(50);
+  await handle.dispatchEvent('pointerdown', start);
+  const caughtHeight = (await planner.boundingBox()).height;
+  await page.waitForTimeout(90);
+  expect(Math.abs((await planner.boundingBox()).height - caughtHeight)).toBeLessThan(2);
+  await handle.dispatchEvent('pointermove', { ...start, clientY: 630 });
+  await page.waitForTimeout(32);
+  expect(Math.abs((await planner.boundingBox()).height - (caughtHeight - 30))).toBeLessThan(2);
+  await handle.dispatchEvent('pointerup', { ...start, clientY: 630 });
+});

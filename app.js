@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.8";
+const APP_VERSION = "2.26.9";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.9", "Smoothed rapid event-sheet swipes, direction changes, and interrupted snap animations"],
   ["2.26.8", "Added subtle blue shading to calendar days with events in Light mode"],
   ["2.26.7", "Made the selected navigation bubble clearer in both themes and faded the event swipe hint during expansion"],
   ["2.26.6", "Disabled long-press selection on app surfaces and clarified Samsung browser appearance controls"],
@@ -1518,13 +1519,14 @@ function setMobileEventSheetMode(mode, options = {}) {
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
   explorer.dataset.dockHidden = String(nextMode === "high");
+  planner.style.setProperty("--event-snap-duration", `${options.immediate ? 0 : options.duration ?? 320}ms`);
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
   planner.classList.toggle("event-sheet-dragging", options.dragging === true);
   document.querySelector("#event-sheet-handle")?.setAttribute("aria-expanded", String(nextMode === "high"));
   planner.setAttribute("aria-hidden", String(nextMode === "closed"));
   planner.inert = nextMode === "closed";
   if (nextMode !== "high" || options.preserveScroll !== true) planner.scrollTop = 0;
-  window.setTimeout(() => eventMap?.invalidateSize(), options.immediate ? 0 : 260);
+  // Sheet detents do not resize the map; avoid queued map work during rapid swipes.
 }
 
 function bindMobileEventSheet() {
@@ -1587,10 +1589,13 @@ function bindMobileEventSheet() {
   };
 
   const startDrag = (event) => {
-    if (event.button !== undefined && event.button !== 0) return;
+    if (drag || (event.button !== undefined && event.button !== 0)) return;
     stopScrollMomentum();
     const metrics = getMobileEventSheetMetrics();
     const startHeight = planner.getBoundingClientRect().height;
+    // Catch an in-flight snap at its rendered position as soon as the finger lands.
+    planner.classList.add("event-sheet-held");
+    planner.style.height = `${startHeight}px`;
     drag = {
       pointerId: event.pointerId,
       startY: event.clientY,
@@ -1609,12 +1614,27 @@ function bindMobileEventSheet() {
     };
   };
 
+  const paintDrag = (height, metrics) => {
+    const expansion = Math.max(0, Math.min(1, (height - metrics.medium) / (metrics.high - metrics.medium)));
+    explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
+    planner.style.setProperty("--event-hint-opacity", String(Math.max(0, 1 - expansion / .6)));
+    // Release the dock during expansion, before pointerup. Separate thresholds
+    // prevent flicker when the finger pauses or reverses near the boundary.
+    const hideThreshold = explorer.dataset.dockHidden === "true" ? .12 : .28;
+    explorer.dataset.dockHidden = String(expansion >= hideThreshold);
+    const tabsProgress = Math.max(0, Math.min(1, (height - metrics.low) / (metrics.medium - metrics.low)));
+    planner.style.setProperty("--event-tabs-progress", String(tabsProgress));
+    planner.style.height = `${Math.round(height)}px`;
+  };
+
   const moveDrag = (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
     const now = performance.now();
     const elapsed = Math.max(1, now - drag.lastTime);
-    const instantVelocity = (drag.lastY - event.clientY) / elapsed;
-    drag.velocity = drag.velocity * 0.35 + instantVelocity * 0.65;
+    const instantVelocity = Math.max(-3, Math.min(3, (drag.lastY - event.clientY) / elapsed));
+    drag.velocity = Math.sign(instantVelocity) !== Math.sign(drag.velocity)
+      ? instantVelocity
+      : drag.velocity * 0.35 + instantVelocity * 0.65;
     drag.lastY = event.clientY;
     drag.lastTime = now;
     const delta = drag.startY - event.clientY;
@@ -1651,16 +1671,7 @@ function bindMobileEventSheet() {
     pendingDragHeight = nextHeight;
     if (!dragFrame) {
       dragFrame = requestAnimationFrame(() => {
-        const expansion = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.medium) / (drag.metrics.high - drag.metrics.medium)));
-        explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
-        planner.style.setProperty("--event-hint-opacity", String(Math.max(0, 1 - expansion / .6)));
-        // Release the dock during expansion, before pointerup. Separate thresholds
-        // prevent flicker when the finger pauses or reverses near the boundary.
-        const hideThreshold = explorer.dataset.dockHidden === "true" ? .12 : .28;
-        explorer.dataset.dockHidden = String(expansion >= hideThreshold);
-        const tabsProgress = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.low) / (drag.metrics.medium - drag.metrics.low)));
-        planner.style.setProperty("--event-tabs-progress", String(tabsProgress));
-        planner.style.height = `${Math.round(pendingDragHeight)}px`;
+        paintDrag(pendingDragHeight, drag.metrics);
         dragFrame = null;
       });
     }
@@ -1673,10 +1684,19 @@ function bindMobileEventSheet() {
     drag = null;
     if (dragFrame) cancelAnimationFrame(dragFrame);
     dragFrame = null;
+    if (pendingDragHeight !== null) paintDrag(pendingDragHeight, finished.metrics);
     pendingDragHeight = null;
-    planner.classList.remove("event-sheet-dragging");
+    // Commit the last finger position before enabling the snap transition.
+    planner.getBoundingClientRect();
+    planner.classList.remove("event-sheet-dragging", "event-sheet-held");
     const distance = finished.startY - finished.lastY;
     const meaningfulSwipe = Math.abs(distance) > 22;
+    const releaseVelocity = event.type === "pointercancel" || performance.now() - finished.lastTime > 100 ? 0 : finished.velocity;
+    if (!finished.moved) {
+      // Resume the caught snap without resetting scroll or moving a tapped button.
+      planner.style.height = `${Math.round(finished.metrics[finished.modeAtStart])}px`;
+      return;
+    }
 
     if (Math.abs(distance) > 7) {
       suppressHandleClick = true;
@@ -1700,18 +1720,20 @@ function bindMobileEventSheet() {
     ), "medium");
     let nextMode = nearestMode;
 
-    if (meaningfulSwipe && Math.abs(finished.velocity) > 0.12) {
+    if (meaningfulSwipe && Math.abs(releaseVelocity) > 0.12) {
       const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(finished.modeAtStart);
       const nearestModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(nearestMode);
-      const directionalModeIndex = Math.max(1, Math.min(3, startModeIndex + (distance > 0 ? 1 : -1)));
-      const nextModeIndex = distance > 0
+      const directionalModeIndex = Math.max(1, Math.min(3, startModeIndex + (releaseVelocity > 0 ? 1 : -1)));
+      const nextModeIndex = releaseVelocity > 0
         ? Math.max(nearestModeIndex, directionalModeIndex)
         : Math.min(nearestModeIndex, directionalModeIndex);
       nextMode = MOBILE_EVENT_SHEET_MODES[nextModeIndex];
     }
 
     const preserveScroll = nextMode === "high" && finished.scrollHandoff;
-    setMobileEventSheetMode(nextMode, { preserveScroll });
+    const remainingDistance = Math.abs(finished.metrics[nextMode] - finished.currentHeight);
+    const duration = Math.max(160, Math.min(320, remainingDistance / Math.max(.8, Math.abs(releaseVelocity)) * 1.5));
+    setMobileEventSheetMode(nextMode, { preserveScroll, duration });
     if (preserveScroll) startScrollMomentum(finished.velocity);
   };
 
@@ -1760,9 +1782,11 @@ function bindMobileEventSheet() {
     resizeFrame = requestAnimationFrame(() => {
       resizeFrame = 0;
       if (!planner.isConnected || !isMobileEventSheetViewport()) return;
+      if (drag) return;
       stopScrollMomentum();
       syncDockClearance();
       setMobileEventSheetMode(mobileEventSheetMode, { immediate: true, preserveScroll: true });
+      eventMap?.invalidateSize({ pan: false });
     });
   };
   const layoutObserver = new ResizeObserver(resizeSheet);
