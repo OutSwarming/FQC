@@ -3,7 +3,8 @@ const nav = (page, name) => page.locator('.bottom-nav').getByRole('button', { na
 const zoom = page => page.evaluate(() => window.__FQC_MAP__.getZoom());
 const mapPoint = async page => {
   const box = await page.locator('#event-map').boundingBox();
-  return { x: box.x + box.width * .3, y: box.y + 85 };
+  const sheet = await page.locator('.event-planner').boundingBox();
+  return { x: box.x + box.width * .3, y: box.y + Math.min(85, Math.max(12, (sheet.y - box.y) / 2)) };
 };
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__FQC_AUTH_TEST__ = true; });
@@ -156,7 +157,12 @@ test('double tap zooms once and zoom buttons work without losing pin details', a
   await page.touchscreen.tap(p.x, p.y);
   await page.touchscreen.tap(p.x, p.y);
   await expect.poll(() => zoom(page)).toBe(16);
-  expect(await page.evaluate(center => window.__FQC_MAP__.getCenter().distanceTo(center), center)).toBeLessThan(1);
+  // Leaflet rounds projected centers to pixels; odd map heights can differ
+  // by half a pixel. Measure visible drift rather than a fixed meter cutoff.
+  expect(await page.evaluate(center => {
+    const map = window.__FQC_MAP__;
+    return map.latLngToContainerPoint(center).distanceTo(map.getSize().divideBy(2));
+  }, center)).toBeLessThanOrEqual(1);
   await page.waitForTimeout(550);
   await expect.poll(() => zoom(page)).toBe(16);
   await page.getByRole('button', { name: 'Zoom out' }).click();
@@ -310,6 +316,40 @@ test('navigation keeps the same bottom inset after scrolling, tab changes, and v
   }
 });
 
+
+test('Home map fills below the dock while event sheets and navigation keep their clearance', async ({ page }) => {
+  const original = page.viewportSize();
+  for (const safe of [0, 34]) {
+    await page.evaluate(value => document.documentElement.style.setProperty('--safe-bottom', `${value}px`), safe);
+    await nav(page, 'Home').click();
+    for (const height of [original.height, Math.max(300, original.height - 90)]) {
+      await page.setViewportSize({ width: original.width, height });
+      await expect.poll(() => page.locator('#event-map').evaluate(el => Math.abs(el.getBoundingClientRect().bottom - innerHeight))).toBeLessThan(1);
+      const geometry = await page.evaluate(() => {
+        const nav = document.querySelector('.bottom-nav').getBoundingClientRect();
+        const map = document.querySelector('#event-map').getBoundingClientRect();
+        const sheet = document.querySelector('.event-planner').getBoundingClientRect();
+        return { gap: innerHeight-nav.bottom, clearance:nav.top-sheet.bottom, left:nav.left-map.left, right:map.right-nav.right, overflow:document.documentElement.scrollHeight>innerHeight+1 };
+      });
+      expect(geometry.gap).toBeCloseTo(12 + safe, 0);
+      expect(geometry.clearance).toBeGreaterThanOrEqual(1);
+      expect(geometry.left).toBeGreaterThan(0);
+      expect(geometry.right).toBeGreaterThan(0);
+      expect(geometry.overflow).toBe(false);
+    }
+    await page.setViewportSize(original);
+    const point = await mapPoint(page);
+    await page.touchscreen.tap(point.x, point.y);
+    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'closed');
+    await page.locator('.event-map-pin').first().tap();
+    await expect(page.locator('.event-intro h2')).toContainText('Quantum Workshop');
+    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
+    await page.locator('#event-sheet-handle').tap();
+    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'high');
+    await nav(page, 'Profile').click();
+    await expect(nav(page, 'Profile')).toHaveAttribute('aria-current', 'page');
+  }
+});
 
 test('pin highlight clears on tap-away and stays cleared through live refresh', async ({ page }) => {
   await nav(page, 'Home').click();

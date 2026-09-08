@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.4";
+const APP_VERSION = "2.25.5";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.5", "Extended the mobile Home map beneath the floating navigation while keeping event details clear of it"],
   ["2.25.4", "Kept mobile lettering steady while photos and graphics respond to scroll focus"],
   ["2.25.3", "Added subtle desktop hover lift and gentle scroll-centered emphasis to mobile story tiles"],
   ["2.25.2", "Made club photos respond to touch with a soft press and spring release"],
@@ -1385,7 +1386,9 @@ function isMobileEventSheetViewport() {
 
 function getMobileEventSheetMetrics() {
   const explorer = document.querySelector(".event-explorer");
-  const availableHeight = explorer?.getBoundingClientRect().height || Math.max(520, window.innerHeight - 160);
+  const planner = document.querySelector(".event-planner");
+  const dockClearance = planner ? parseFloat(getComputedStyle(planner).bottom) || 0 : 0;
+  const availableHeight = explorer ? explorer.getBoundingClientRect().height - dockClearance : Math.max(520, window.innerHeight - 160);
   if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: availableHeight * .84 };
   const low = Math.min(190, Math.max(154, availableHeight * 0.24));
   const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
@@ -1839,7 +1842,15 @@ function focusSelectedEvent() {
   eventMap.stop();
   pendingMapPan = () => {
     if (!eventMap) return;
-    eventMap.panBy([0, window.innerWidth < 680 ? 90 : 105], { animate: true, duration: 0.25 });
+    const planner = document.querySelector(".event-planner");
+    const dockClearance = isMobileEventSheetViewport() && planner ? parseFloat(getComputedStyle(planner).bottom) || 0 : 0;
+    const mapHeight = eventMap.getSize().y;
+    const sheetHeight = parseFloat(planner?.style.height) || 0;
+    // Place the selected pin in the exposed map, even on short landscape phones.
+    const pan = isMobileEventSheetViewport()
+      ? mapHeight / 2 - Math.max(56, (mapHeight - dockClearance - sheetHeight) / 2)
+      : 105;
+    eventMap.panBy([0, pan], { animate: true, duration: 0.25 });
     pendingMapPan = null;
   };
   eventMap.once("moveend", pendingMapPan);

@@ -2163,10 +2163,16 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   }
 
   .app-shell:has(.events-home) {
+    display: flex;
+    flex-direction: column;
     height: 100dvh;
     min-height: 0;
+    padding-bottom: 0;
     overflow: hidden;
   }
+  .app-shell:has(.events-home) > .topbar { flex-shrink: 0; }
+  .app-shell:has(.events-home) > #app { display: flex; flex: 1; min-height: 0; }
+  .events-home { display: flex; flex: 1; min-width: 0; min-height: 0; }
   .topbar { min-height: 62px; padding-inline: 2px; }
   .brand-mark,
   .brand-mark img { width: 39px; height: 39px; }
@@ -2227,27 +2233,30 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   .officer-resource-browser > summary small { display: none; }
   .budget-event-breakdown { grid-template-columns: 1fr; }
 
-  .event-explorer {
+  .events-home > .event-explorer {
     position: relative;
     display: block;
-    height: calc(100dvh - 160px - var(--safe-bottom));
+    flex: 1;
+    height: 100%;
     min-height: 0;
     overflow: hidden;
-    border-radius: 16px;
+    border-radius: 16px 16px 0 0;
+    border-bottom: 0;
   }
 
   .event-map-shell {
     position: absolute;
     inset: 0;
     min-height: 0;
-    border-radius: 16px;
+    border-radius: 16px 16px 0 0;
   }
+  .event-map-shell .leaflet-bottom { bottom: calc(90px + var(--safe-bottom)); }
 
   .event-planner {
     position: absolute;
     z-index: 600;
     right: 0;
-    bottom: 0;
+    bottom: calc(90px + var(--safe-bottom));
     left: 0;
     height: 53%;
     overflow: hidden;
@@ -2672,11 +2681,6 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .settings-contact span:last-child { color: var(--accent-strong); font-size: .8rem; }
 .settings-group-content .install-card { border: 0; padding: 18px 0 0; margin: 0; box-shadow: none; background: transparent; }
 .settings-view .section-kicker { color: var(--muted); font-weight: 600; letter-spacing: .06em; }
-
-@media (max-height: 500px) and (pointer: coarse) {
-  .app-shell:has(.events-home) { padding-bottom: calc(88px + var(--safe-bottom)); }
-  .event-explorer { height: calc(100dvh - 158px - var(--safe-bottom)); }
-}
 
 /* Shared glass treatment for login, signup, and the sign-in prompt. */
 .auth-screen {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v316-crisp-mobile-story";
+const CACHE_NAME = "fqc-app-v317-map-under-floating-nav";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
