@@ -2896,7 +2896,8 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .hack-faq { padding-bottom: 45px; }
 .hack-faq h2 { font-size: clamp(2rem,3.7vw,3.2rem); }
 .hack-story-footer { border-top: 1px solid var(--line-strong); margin-inline: 6%; padding: 30px 0; display: flex; align-items: center; gap: 22px; }
-.hack-story-footer > span { color: var(--accent-strong); font: 400 2.8rem Georgia,serif; }
+.hack-footer-logo { flex: 0 0 104px; overflow: hidden; border-radius: 10px; background: #000; }
+.hack-footer-logo img { display: block; width: 100%; height: auto; }
 .hack-story-footer > p { font: 400 1.8rem/1.1 Georgia,serif; letter-spacing: -.04em; }
 .hack-story-footer small { margin-left: auto; color: var(--muted); font-size: .56rem; line-height: 1.8; letter-spacing: .07em; }
 @media (max-width: 680px) {
@@ -3187,3 +3188,5 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .hackathon-preview .hack-state-mark { pointer-events: none; }
 
 .hackathon-preview .hack-small { color: #c4cad2; }
+
+.hackathon-preview .hack-hero .hack-coming-soon { margin: 0; max-width: 760px; font-size: clamp(2.8rem, 6vw, 5.5rem); line-height: 1.08; }

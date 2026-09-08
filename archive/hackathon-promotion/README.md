@@ -1,0 +1,1 @@
+The About promotion, FAQ, and previous Hackathon interest page are preserved here for future use. These files are not imported or deployed. Restore the renderers into app.js and the UI tests into tests/app.spec.js when ready. The interest storage, account flow, and styles remain in the application; existing interest records are untouched.

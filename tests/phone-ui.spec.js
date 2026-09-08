@@ -54,7 +54,7 @@ test('workshop story stays readable and interactive with expanded layers on phon
   const stats = await page.locator('.hackathon-landing').evaluate(el => ({
     viewport: { width: innerWidth, height: innerHeight },
     pageScreens: +(el.scrollHeight / innerHeight).toFixed(1),
-    interestScreensDown: +(document.querySelector('#hackathon-interest').getBoundingClientRect().top / innerHeight).toFixed(1),
+    footerScreensDown: +(document.querySelector('.hack-story-footer').getBoundingClientRect().top / innerHeight).toFixed(1),
     captionPx: getComputedStyle(document.querySelector('.phase-experiment > small')).fontSize,
     mainCopyPx: getComputedStyle(document.querySelector('.workshop-copy > p:not(.hack-kicker)')).fontSize,
   }));
@@ -672,7 +672,7 @@ test('quick zoom renders fractional frames and preserves the map center during a
   expect(Math.abs(result.y - (mapBox.y + mapBox.height / 2))).toBeLessThan(3);
 });
 
-test('photo entrances happen once, respect reduced motion, and leave the invitation usable', async ({ page }) => {
+test('photo entrances happen once, respect reduced motion, and retain the FQC footer', async ({ page }) => {
   await page.addInitScript(() => {
     window.__photoEntrances = [];
     const animate = Element.prototype.animate;
@@ -695,9 +695,11 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
   await page.locator('.workshop-outlook').scrollIntoViewIfNeeded();
   await page.waitForTimeout(400);
   expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(4);
-  await expect(page.locator('#hackathon-title')).toHaveText('Your turn to build');
-  await page.locator('[data-hackathon-rsvp]').click();
-  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
+  await expect(page.locator('.hack-footer-logo img')).toBeVisible();
+  await expect.poll(() => page.locator('.hack-story-footer').evaluate(el => el.getBoundingClientRect().bottom <= document.querySelector('.bottom-nav').getBoundingClientRect().top)).toBe(true);
+  await expect(page.locator('[data-screen=about]')).not.toContainText(/hackathon/i);
+  await page.screenshot({ path: `test-results/footer-${test.info().project.name}.png` });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.reload();
   await expect(page.locator('.app-splash')).toBeHidden();
