@@ -478,6 +478,50 @@ test('List opens large and controls follow the finger before release', async ({ 
 
 test.describe('pin navigation between event views', () => {
   test.use({ serviceWorkers: 'block' });
+  test('Home resets stale selections to the chronologically next event and centers its pin', async ({ page }) => {
+    const rows = [
+      '"Old event","2020-03-01","6:00 PM","Reitz Student Union","2315","Past workshop","Yes","home-old"',
+      '"Later at ten","2027-03-24","10:00 AM","Reitz Student Union","2315","Later workshop","Yes","home-later"',
+      '"Next at nine","2027-03-24","9:00 AM","Larsen Hall","234","Next workshop","Yes","home-next"'
+    ];
+    await page.route('https://docs.google.com/spreadsheets/**', route => {
+      const sheet = new URL(route.request().url()).searchParams.get('sheet');
+      if (sheet === 'Events') return route.fulfill({ status: 200, contentType: 'text/csv', body: ['"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"', ...rows].join('\n') });
+      if (sheet === 'UF Locations') return route.fulfill({ status: 200, contentType: 'text/csv', body: '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive","29.64631","-82.34788"\n"Larsen Hall","968 Center Drive","29.64311","-82.34738"' });
+      return route.fallback();
+    });
+    await page.evaluate(() => {
+      localStorage.setItem('fqc:selected-event', 'home-old');
+      localStorage.setItem('fqc:event-mode', 'past');
+    });
+    await page.goto('/#home');
+    const checkNext = async () => {
+      await expect(page.locator('.event-intro h2')).toHaveText('Next at nine');
+      await expect(page.locator('[data-event-tab="list"]')).toHaveAttribute('aria-selected', 'true');
+      await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
+      await expect(page.locator('[data-event-panel="list"] .event-card').first()).toHaveAttribute('data-event-card', 'home-next');
+      await expect.poll(() => page.evaluate(() => {
+        const map = window.__FQC_MAP__;
+        if (!map) return 999;
+        const point = map.latLngToContainerPoint([29.64311, -82.34738]);
+        const sheet = parseFloat(document.querySelector('.event-planner').style.height);
+        return Math.hypot(point.x - map.getSize().x / 2, point.y - Math.max(56, (map.getSize().y - sheet) / 2));
+      })).toBeLessThan(2);
+    };
+    await checkNext();
+    await page.getByRole('tab', { name: /^Past/ }).tap();
+    await expect(page.locator('.event-intro h2')).toHaveText('Old event');
+    await goTab(page, 'Profile');
+    await goTab(page, 'Home');
+    await checkNext();
+    await page.getByRole('tab', { name: 'List', exact: true }).tap();
+    await page.locator('[data-event-panel="list"] [data-select-event="home-later"]').tap();
+    await expect(page.locator('.event-intro h2')).toHaveText('Later at ten');
+    await goTab(page, 'Hackathon');
+    await goTab(page, 'Home');
+    await checkNext();
+  });
+
   test('pins reset Past and Calendar to List and keep historical-only selections labelled', async ({ page }) => {
     const header = '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"';
     const rows = [

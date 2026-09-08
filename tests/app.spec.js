@@ -430,7 +430,7 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await expect(intro.getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
 });
 
-test("calendar tab selects an event and preserves it across reloads", async ({ page }, testInfo) => {
+test("calendar selects an event and Home reload returns to the next upcoming event", async ({ page }, testInfo) => {
   await page.getByRole("tab", { name: "Calendar" }).click();
   await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");
 
@@ -456,12 +456,12 @@ test("calendar tab selects an event and preserves it across reloads", async ({ p
   await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Calendar" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("April 2026")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "List", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#event-intro").getByRole("heading", { name: "IonQ Quantum Networking Speaker Session" })).toBeVisible();
   if (testInfo.project.name === "mobile") {
-    await expect(page.locator("#event-intro").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+    await expect(page.locator("#event-planner")).toHaveAttribute("data-sheet-mode", "medium");
   } else {
-    await expect(page.locator("#event-details").getByRole("heading", { name: "End of Year Social" })).toBeVisible();
+    await expect(page.locator("#event-details").getByRole("heading", { name: "IonQ Quantum Networking Speaker Session" })).toBeVisible();
   }
 });
 

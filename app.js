@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.13";
+const APP_VERSION = "2.25.14";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.14", "Opened Home on the next upcoming event with its pin centered and List selected"],
   ["2.25.13", "Kept map attribution below the event popup while retaining its bottom-right position"],
   ["2.25.12", "Expanded List on tap and made event controls reveal continuously with the swipe"],
   ["2.25.11", "Placed map attribution below the mobile navigation in the bottom-right corner"],
@@ -727,6 +728,9 @@ let renderedView = "";
 let installPrompt = null;
 let savedMapView = null;
 let mapPinSignature = "";
+let homeDefaultActive = true;
+let homeDefaultEventId = null;
+let pendingHomeEventCenter = false;
 let cachedCheckInLocation = null;
 let checkInLocationPromise = null;
 
@@ -802,7 +806,7 @@ function isPastEvent(event, now = new Date()) {
 }
 
 function upcomingEvents(now = new Date()) {
-  return events.filter((event) => !isPastEvent(event, now));
+  return events.filter((event) => !isPastEvent(event, now)).sort((a, b) => eventStartDate(a) - eventStartDate(b));
 }
 
 function pastEvents(now = new Date()) {
@@ -920,7 +924,11 @@ async function checkForUpdates() {
 function setView(view, { history = true } = {}) {
   if (view === "settings" && state.view !== "settings") state.settingsReturnView = state.view;
   if (state.view !== view) viewScroll.set(state.view, window.scrollY);
-  if (view === "home") mobileEventSheetMode = "medium";
+  if (view === "home") {
+    mobileEventSheetMode = "medium";
+    homeDefaultActive = true;
+    homeDefaultEventId = null;
+  }
   state.view = allowedViews.has(view) ? view : "home";
   if (history) {
     const url = new URL(window.location.href);
@@ -970,7 +978,7 @@ function render() {
     if (retainedMap) retainedMap.remove();
     else {
       if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
-      eventMap.remove(); eventMap = null; eventMarkers = new Map(); pendingMapPan = null; mapInteractionActive = false;
+      eventMap.remove(); eventMap = null; eventMarkers = new Map(); renderedMarkerSignature = ""; pendingMapPan = null; mapInteractionActive = false;
     }
   }
 
@@ -1105,8 +1113,33 @@ async function registerHackathonInterest(interested = true) {
   }
 }
 
+function releaseHomeDefault() {
+  homeDefaultActive = false;
+  pendingHomeEventCenter = false;
+}
+
+function prepareHomeDefault() {
+  const now = Date.now();
+  const next = events.filter(event => eventStartDate(event).getTime() >= now)
+    .sort((a, b) => eventStartDate(a) - eventStartDate(b))[0];
+  state.eventMode = "list";
+  state.selectedEventId = next?.id || "";
+  if (next) state.calendarMonth = next.date.slice(0, 7);
+  highlightedMapLocationId = next ? getEventLocation(next).id : null;
+  if (next?.id !== homeDefaultEventId) pendingHomeEventCenter = Boolean(next);
+  homeDefaultEventId = next?.id;
+  saveState();
+}
+
+function centerHomeDefault() {
+  if (!pendingHomeEventCenter || !eventMap) return;
+  pendingHomeEventCenter = false;
+  focusSelectedEvent({ animate: false });
+}
+
 function renderHome() {
-  ensureSelectedEventForMode();
+  if (homeDefaultActive) prepareHomeDefault();
+  else ensureSelectedEventForMode();
   const currentEvents = upcomingEvents();
   const archivedEvents = pastEvents();
   return `
@@ -1167,6 +1200,7 @@ function renderHome() {
 }
 
 function renderSelectedEventIntro() {
+  if (!state.selectedEventId) return '<h2>No upcoming events</h2><p class="event-intro-summary">New events will appear here when scheduled</p>';
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
   return `
@@ -1296,6 +1330,7 @@ function renderCalendarMonth() {
 }
 
 function renderSelectedEventDetails() {
+  if (!state.selectedEventId) return "";
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
   const going = state.rsvps.includes(event.id);
@@ -1327,6 +1362,7 @@ function renderSelectedEventDetails() {
 }
 
 function setEventMode(mode, options = {}) {
+  releaseHomeDefault();
   state.eventMode = ["calendar", "past"].includes(mode) ? mode : "list";
   if (options.selectedEventId) state.selectedEventId = options.selectedEventId;
   else ensureSelectedEventForMode();
@@ -1357,6 +1393,7 @@ function shiftCalendarMonth(offset) {
 }
 
 function selectEvent(eventId, options = {}) {
+  releaseHomeDefault();
   const selectedEvent = events.find((event) => event.id === eventId);
   if (!selectedEvent) return;
   const nextMode = options.fromMap ? "list" : options.preserveMode ? state.eventMode : isPastEvent(selectedEvent) ? "past" : state.eventMode === "past" ? "list" : state.eventMode;
@@ -1805,6 +1842,7 @@ function initEventMap() {
   // map is live, so reveal and bail instead of throwing "already initialized".
   if (mapElement._leaflet_id) {
     positionMapAttribution();
+    centerHomeDefault();
     revealApp();
     return;
   }
@@ -1834,7 +1872,9 @@ function initEventMap() {
     mapInteractionActive = false;
     if (deferredMapRender) requestAnimationFrame(() => { if (deferredMapRender) render(); });
   });
+  eventMap.on("dragstart", releaseHomeDefault);
   eventMap.on("userzoomstart", () => {
+    releaseHomeDefault();
     clearMapPinHighlight();
     if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
     pendingMapPan = null;
@@ -1851,12 +1891,14 @@ function initEventMap() {
   }).addTo(eventMap);
 
   eventMap.on("click", () => {
+    releaseHomeDefault();
     clearMapPinHighlight();
     if (isMobileEventSheetViewport()) setMobileEventSheetMode("closed");
   });
 
   positionMapAttribution();
-  drawMapMarkers();
+  drawMapMarkers({ preserveView: pendingHomeEventCenter });
+  centerHomeDefault();
   window.__FQC_MAP__ = eventMap;
   window.setTimeout(() => eventMap?.invalidateSize(), 120);
   window.setTimeout(revealApp, 180);
@@ -1918,7 +1960,7 @@ function drawMapMarkers({ preserveView = false } = {}) {
   mapPinSignature = signature;
 }
 
-function focusSelectedEvent() {
+function focusSelectedEvent({ animate = true } = {}) {
   if (!eventMap) return;
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
@@ -1937,10 +1979,15 @@ function focusSelectedEvent() {
       zoom
     );
     // One pan to the final position: no zoom flight or moveend correction.
-    eventMap.panTo(center, { animate: !window.matchMedia("(prefers-reduced-motion: reduce)").matches, duration: 0.35 });
+    eventMap.panTo(center, { animate: animate && !window.matchMedia("(prefers-reduced-motion: reduce)").matches, duration: 0.35 });
     return;
   }
   const zoom = Math.max(eventMap.getZoom(), 16);
+  if (!animate) {
+    const center = eventMap.unproject(eventMap.project([location.lat, location.lng], zoom).add([0, 105]), zoom);
+    eventMap.setView(center, zoom, { animate: false });
+    return;
+  }
   pendingMapPan = () => {
     if (!eventMap) return;
     eventMap.panBy([0, 105], { animate: true, duration: 0.25 });

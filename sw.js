@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v325-credit-below-popup";
+const CACHE_NAME = "fqc-app-v326-home-next-event";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
