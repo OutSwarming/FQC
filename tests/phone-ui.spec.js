@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 const nav = (page, name) => page.locator('.bottom-nav').getByRole('button', { name, exact: true, includeHidden: true });
 const goTab = async (page, name) => {
-  if (!await nav(page, name).isVisible() && await page.locator('.event-planner').count()) {
+  if (await page.locator('.event-planner').count() && (await page.locator('.event-planner').getAttribute('data-sheet-mode') === 'high' || !await nav(page, name).isVisible())) {
     const point = await mapPoint(page);
     await page.touchscreen.tap(point.x, point.y);
   }

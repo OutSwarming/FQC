@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.14";
-const APP_RELEASE_DATE = "September 7, 2026";
+const APP_VERSION = "2.25.15";
+const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.15", "Slid the navigation down for expanded events and back up for previews"],
   ["2.25.14", "Opened Home on the next upcoming event with its pin centered and List selected"],
   ["2.25.13", "Kept map attribution below the event popup while retaining its bottom-right position"],
   ["2.25.12", "Expanded List on tap and made event controls reveal continuously with the swipe"],

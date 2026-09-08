@@ -2306,7 +2306,19 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   .event-explorer:has(.event-sheet-dragging)::after { transition: none; }
 
   .event-planner.event-sheet-dragging { transition: none; }
-  body:has(.events-home .event-explorer[data-sheet-mode="high"]) .bottom-nav { visibility: hidden; pointer-events: none; }
+  body:has(.events-home) .bottom-nav {
+    transform: translate(-50%, 0);
+    opacity: 1;
+    visibility: visible;
+    transition: transform 380ms cubic-bezier(.22, .8, .25, 1), opacity 260ms ease, visibility 0s;
+  }
+  body:has(.events-home .event-explorer[data-sheet-mode="high"]) .bottom-nav {
+    transform: translate(-50%, calc(100% + var(--nav-bottom-gap) + 18px));
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 380ms cubic-bezier(.4, 0, .65, 1), opacity 260ms ease, visibility 0s 380ms;
+  }
 
   .event-planner[data-sheet-mode="low"],
   .event-planner[data-sheet-mode="medium"] {
@@ -3163,4 +3175,8 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 
 @media (prefers-reduced-motion: reduce) {
   .event-tabs-sticky { transition: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:has(.events-home) .bottom-nav { transition: none !important; }
 }
