@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.11";
+const APP_VERSION = "2.25.12";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.12", "Expanded List on tap and made event controls reveal continuously with the swipe"],
   ["2.25.11", "Placed map attribution below the mobile navigation in the bottom-right corner"],
   ["2.25.10", "Reset pin selections to List and softened the event controls as the sheet expands"],
   ["2.25.9", "Centered mobile map pins in one smooth movement while preserving the current zoom"],
@@ -1338,10 +1339,7 @@ function setEventMode(mode, options = {}) {
   selectEvent(state.selectedEventId, { focusMap: false, highlightMap: false, preserveMode: true });
   drawMapMarkers({ preserveView: options.fromMap === true });
   if (isMobileEventSheetViewport() && !options.fromMap) {
-    const nextSheetMode = state.eventMode === "calendar" || state.eventMode === "past" || mobileEventSheetMode === "high"
-      ? "high"
-      : "medium";
-    setMobileEventSheetMode(nextSheetMode);
+    setMobileEventSheetMode("high");
   }
 }
 
@@ -1438,6 +1436,7 @@ function setMobileEventSheetMode(mode, options = {}) {
   const metrics = getMobileEventSheetMetrics();
   mobileEventSheetMode = nextMode;
   explorer.style.removeProperty("--event-preview-fade");
+  planner.style.removeProperty("--event-tabs-progress");
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
@@ -1575,6 +1574,8 @@ function bindMobileEventSheet() {
       dragFrame = requestAnimationFrame(() => {
         const expansion = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.medium) / (drag.metrics.high - drag.metrics.medium)));
         explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
+        const tabsProgress = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.low) / (drag.metrics.medium - drag.metrics.low)));
+        planner.style.setProperty("--event-tabs-progress", String(tabsProgress));
         planner.style.height = `${Math.round(pendingDragHeight)}px`;
         dragFrame = null;
       });

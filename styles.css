@@ -2403,10 +2403,8 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     display: none;
   }
 
+  .event-planner[data-sheet-mode="low"] { --event-tabs-progress: 0; }
   .event-planner[data-sheet-mode="low"] .event-tabs-sticky {
-    max-height: 0;
-    padding-block: 0;
-    opacity: 0;
     visibility: hidden;
     pointer-events: none;
   }
@@ -2415,12 +2413,18 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   .event-tabs-sticky {
     top: 34px;
     margin: 0 -14px;
-    padding: 6px 14px;
-    max-height: 84px;
+    padding: calc(6px * var(--event-tabs-progress, 1)) 14px;
+    max-height: calc(84px * var(--event-tabs-progress, 1));
     overflow: hidden;
-    opacity: 1;
+    opacity: var(--event-tabs-progress, 1);
     visibility: visible;
     transition: max-height 300ms ease, padding 300ms ease, opacity 240ms ease, visibility 240ms;
+  }
+
+  .event-planner.event-sheet-dragging .event-tabs-sticky {
+    visibility: visible;
+    pointer-events: none;
+    transition: none;
   }
 
   .event-planner[data-sheet-mode="low"] .event-intro h2 {

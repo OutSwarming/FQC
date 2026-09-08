@@ -440,6 +440,42 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
   }
 });
 
+test('List opens large and controls follow the finger before release', async ({ page }) => {
+  await goTab(page, 'Home');
+  const planner = page.locator('.event-planner');
+  const handle = page.locator('#event-sheet-handle');
+  const tabs = page.locator('.event-tabs-sticky');
+  await page.getByRole('tab', { name: 'List', exact: true }).tap();
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'high');
+  await expect(page.locator('.bottom-nav')).toBeHidden();
+  await page.waitForTimeout(450);
+  await handle.tap();
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
+  await page.waitForTimeout(450);
+  const mediumHeight = (await planner.boundingBox()).height;
+  await planner.dispatchEvent('wheel', { deltaY: -160 });
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
+  await expect(tabs).toHaveCSS('opacity', '0');
+  await page.waitForTimeout(450);
+  const lowHeight = (await planner.boundingBox()).height;
+  const delta = (mediumHeight - lowHeight) / 2;
+  const input = { button: 0, pointerId: 89, pointerType: 'touch', clientY: 500 };
+  await handle.dispatchEvent('pointerdown', input);
+  await handle.dispatchEvent('pointermove', { ...input, clientY: 500 - delta });
+  await expect.poll(() => tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(.1);
+  expect(await tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeLessThan(.9);
+  await expect(tabs).toHaveCSS('visibility', 'visible');
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'low'); // Finger still held down.
+  await handle.dispatchEvent('pointermove', input);
+  // Fractional device pixels can leave a sub-percent opacity at the rounded start height.
+  await expect.poll(() => tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeLessThan(.01);
+  await handle.dispatchEvent('pointermove', { ...input, clientY: 500 - delta * 2 });
+  await expect.poll(() => tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(.95);
+  await handle.dispatchEvent('pointerup', { ...input, clientY: 500 - delta * 2 });
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
+  await expect(tabs).toHaveCSS('opacity', '1');
+});
+
 test.describe('pin navigation between event views', () => {
   test.use({ serviceWorkers: 'block' });
   test('pins reset Past and Calendar to List and keep historical-only selections labelled', async ({ page }) => {
