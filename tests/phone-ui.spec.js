@@ -458,3 +458,40 @@ test('map touch defaults cannot start the iOS loupe and taps still reach pins an
   await expect(email).toHaveValue('member@ufl.edu');
   await expect(email).toBeFocused();
 });
+
+test('photo bubbles compress, spring back, cancel for scrolling, and respect reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const figure = page.locator('.hack-hero-shot');
+  await figure.scrollIntoViewIfNeeded();
+  await expect.poll(() => figure.locator('img').evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
+  await page.waitForTimeout(400);
+  const box = await figure.boundingBox();
+  const center = {x: box.x + box.width / 2, y: box.y + box.height / 2};
+  const scale = () => figure.evaluate(el => { const m = new DOMMatrixReadOnly(getComputedStyle(el).transform); return Math.hypot(m.a, m.b); });
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await expect.poll(scale).toBeLessThan(.985);
+  await page.mouse.up();
+  await expect.poll(scale, {intervals:[20]}).toBeGreaterThan(1.005);
+  await expect.poll(scale).toBeCloseTo(1, 4);
+  await expect(figure).not.toHaveClass(/photo-is-pressed/);
+  // Real touch taps must trigger the same response, not just mouse input.
+  await figure.tap();
+  await expect.poll(scale, {intervals:[20]}).toBeGreaterThan(1.005);
+  await expect.poll(scale).toBeCloseTo(1, 4);
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x, center.y + 30);
+  await expect(figure).not.toHaveClass(/photo-is-pressed/);
+  await page.mouse.up();
+  await expect.poll(scale).toBeCloseTo(1, 4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await expect(figure).toHaveClass(/photo-is-pressed/);
+  expect(await scale()).toBe(1);
+  expect(await figure.evaluate(el => el.getAnimations().length)).toBe(0);
+  await page.mouse.up();
+  await expect(figure).not.toHaveClass(/photo-is-pressed/);
+});

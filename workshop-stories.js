@@ -48,6 +48,75 @@ let removeStoryLayoutListener;
 let removeStoryMotion;
 const enteredPhotos = new Set();
 
+function bindPhotoPress(figures, reduced) {
+  let pressed = null;
+  const animations = new Set();
+  const play = (figure, frames, options) => {
+    figure.getAnimations().forEach(animation => animation.cancel());
+    if (reduced.matches) return;
+    const animation = figure.animate(frames, options);
+    animations.add(animation);
+    animation.finished.catch(() => {}).finally(() => animations.delete(animation));
+  };
+  const release = bounce => {
+    if (!pressed) return;
+    const { figure } = pressed;
+    pressed = null;
+    const current = getComputedStyle(figure).transform;
+    figure.classList.remove('photo-is-pressed');
+    play(figure, bounce ? [
+      { transform: current, offset: 0 },
+      { transform: 'scale(1.018)', offset: .45 },
+      { transform: 'scale(.997)', offset: .76 },
+      { transform: 'none', offset: 1 }
+    ] : [{ transform: current }, { transform: 'none' }], {
+      duration: bounce ? 420 : 140, easing: 'ease-out'
+    });
+  };
+  const down = event => {
+    if (event.button !== 0 || event.target.closest('a, button, input')) return;
+    if (!event.isPrimary) { release(false); return; }
+    release(false);
+    const figure = event.currentTarget;
+    const box = figure.getBoundingClientRect();
+    const tilt = Math.max(-.6, Math.min(.6, ((event.clientX - box.left) / box.width - .5) * 1.2));
+    pressed = { figure, id: event.pointerId, x: event.clientX, y: event.clientY };
+    figure.classList.add('photo-is-pressed');
+    play(figure, [{ transform: getComputedStyle(figure).transform }, { transform: `scale(.972) rotate(${tilt}deg)` }], {
+      duration: 110, easing: 'ease-out', fill: 'forwards'
+    });
+  };
+  const move = event => {
+    if (pressed?.id === event.pointerId && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 10) release(false);
+  };
+  const up = event => { if (pressed?.id === event.pointerId) release(event.type === 'pointerup'); };
+  const reset = () => {
+    pressed?.figure.classList.remove('photo-is-pressed');
+    pressed = null;
+    figures.forEach(figure => figure.getAnimations().forEach(animation => animation.cancel()));
+    animations.clear();
+  };
+  figures.forEach(figure => {
+    figure.classList.add('story-photo-bubble');
+    figure.addEventListener('pointerdown', down, { passive: true });
+  });
+  // No capture or preventDefault: a swipe starting on a photo still scrolls.
+  window.addEventListener('pointermove', move, { passive: true });
+  window.addEventListener('pointerup', up, { passive: true });
+  window.addEventListener('pointercancel', up, { passive: true });
+  window.addEventListener('blur', reset);
+  reduced.addEventListener('change', reset);
+  return () => {
+    reset();
+    figures.forEach(figure => figure.removeEventListener('pointerdown', down));
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    window.removeEventListener('blur', reset);
+    reduced.removeEventListener('change', reset);
+  };
+}
+
 // Photo and caption move as one unit. Content is visible even before this
 // enhancement runs, and entrances never replay during tab or account updates.
 function bindStoryMotion(root) {
@@ -56,6 +125,7 @@ function bindStoryMotion(root) {
   if (!figures.length || !globalThis.IntersectionObserver) return;
   const compact = matchMedia('(max-width: 680px), (max-width: 900px) and (max-height: 500px) and (pointer: coarse)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const removePhotoPress = bindPhotoPress(figures, reduced);
   const animations = new Set();
   let observer;
   let generation = 0;
@@ -76,7 +146,7 @@ function bindStoryMotion(root) {
         enteredPhotos.add(key);
         const enter = () => {
           const box = figure.getBoundingClientRect();
-          if (current !== generation || !figure.isConnected || box.bottom <= 0 || box.top >= innerHeight) return;
+          if (current !== generation || !figure.isConnected || box.bottom <= 0 || box.top >= innerHeight || figure.getAnimations().length) return;
           const animation = figure.animate(
             [{ transform: 'translateY(16px)' }, { transform: 'translateY(0)' }],
             { duration: 360, easing: 'cubic-bezier(.22,1,.36,1)' }
@@ -94,6 +164,7 @@ function bindStoryMotion(root) {
   compact.addEventListener('change', update);
   reduced.addEventListener('change', update);
   removeStoryMotion = () => {
+    removePhotoPress();
     generation++;
     observer?.disconnect();
     animations.forEach(animation => animation.cancel());

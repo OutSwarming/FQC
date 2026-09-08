@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v313-map-touch-selection-guard";
+const CACHE_NAME = "fqc-app-v314-photo-touch-bubbles";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
