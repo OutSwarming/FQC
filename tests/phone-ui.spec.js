@@ -459,6 +459,37 @@ test('map touch defaults cannot start the iOS loupe and taps still reach pins an
   await expect(email).toBeFocused();
 });
 
+test('story tiles gently grow at the scroll center and settle away without moving the layout', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const tile = page.locator('.workshop-phase');
+  const scale = () => tile.evaluate(el => parseFloat(getComputedStyle(el).scale));
+  const centerTile = () => tile.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  await centerTile();
+  await expect.poll(scale).toBeGreaterThan(1.0075);
+  const layout = await tile.evaluate(el => ({ height: el.offsetHeight, top: el.offsetTop }));
+  await page.evaluate(() => scrollBy({ top: innerHeight * .45, behavior: 'instant' }));
+  await expect.poll(scale).toBeLessThan(1.006);
+  await expect.poll(scale).toBeGreaterThanOrEqual(1);
+  expect(await tile.evaluate(el => ({ height: el.offsetHeight, top: el.offsetTop }))).toEqual(layout);
+  await centerTile();
+  await expect.poll(scale).toBeGreaterThan(1.0075);
+  await page.locator('[data-apply-h]').tap();
+  await expect(page.locator('[data-phase-state="minus"]')).toHaveText('|1⟩');
+  for (const card of await page.locator('.story-focus-tile').all()) {
+    await card.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await centerTile();
+  await expect(tile).toHaveCSS('scale', 'none');
+  await expect(tile).toHaveCSS('translate', 'none');
+  await nav(page, 'Home').click();
+  await nav(page, 'Hackathon').click();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await centerTile();
+  await expect.poll(scale).toBeGreaterThan(1.0075);
+});
+
 test('photo bubbles compress, spring back, cancel for scrolling, and respect reduced motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const figure = page.locator('.hack-hero-shot');

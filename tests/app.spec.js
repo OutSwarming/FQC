@@ -1554,3 +1554,23 @@ test("browser tabs retain independent screens after focus, refresh, and reload",
 });
 
 test('trackpad reversals preserve visible tiles and continuous zoom through live updates', async ({ page }) => { await checkContinuousWheel(page); });
+
+test('desktop story hover lifts the whole tile without shifting layout or overriding reduced motion', async ({ page }) => {
+  test.skip(!await page.evaluate(() => matchMedia('(hover: hover) and (pointer: fine)').matches), 'Desktop hover only');
+  await navButton(page, 'Hackathon').click();
+  const tile = page.locator('.workshop-phase');
+  await tile.scrollIntoViewIfNeeded();
+  await page.mouse.move(0, 0);
+  const layout = await tile.evaluate(el => ({ height: el.offsetHeight, top: el.offsetTop }));
+  await expect(tile).toHaveCSS('scale', '1');
+  await page.locator('#phase-title').hover();
+  await expect(tile).toHaveCSS('scale', '1.008');
+  await expect(tile).toHaveCSS('translate', '0px -2px');
+  expect(await tile.evaluate(el => ({ height: el.offsetHeight, top: el.offsetTop }))).toEqual(layout);
+  await page.mouse.move(0, 0);
+  await expect(tile).toHaveCSS('scale', '1');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.locator('#phase-title').hover();
+  await expect(tile).toHaveCSS('scale', 'none');
+  await expect(tile).toHaveCSS('translate', 'none');
+});

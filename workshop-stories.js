@@ -48,6 +48,50 @@ let removeStoryLayoutListener;
 let removeStoryMotion;
 const enteredPhotos = new Set();
 
+function bindTileFocus(root, reduced) {
+  const tiles = [...root.querySelectorAll('.hack-hero-grid, .workshop-chapter, .workshop-search, .workshop-outlook, .hack-build-card')];
+  const touch = matchMedia('(pointer: coarse) and (max-width: 900px)');
+  let frame = 0;
+  tiles.forEach(tile => tile.classList.add('story-focus-tile'));
+  const paint = () => {
+    frame = 0;
+    const enabled = touch.matches && !reduced.matches;
+    const height = window.visualViewport?.height || innerHeight;
+    const center = (window.visualViewport?.offsetTop || 0) + height / 2;
+    // Read every box before writing styles; scale around the center does not
+    // change this anchor. Undo our two-pixel lift to avoid scroll feedback.
+    const strengths = tiles.map(tile => {
+      if (!enabled) return 0;
+      const box = tile.getBoundingClientRect();
+      const previous = Number(tile.style.getPropertyValue('--tile-focus')) || 0;
+      const distance = Math.abs((box.top + box.bottom) / 2 + previous * 2 - center);
+      const proximity = Math.max(0, 1 - distance / Math.max(height * .65, tile.offsetHeight * .6));
+      return proximity * proximity * (3 - 2 * proximity);
+    });
+    tiles.forEach((tile, index) => tile.style.setProperty('--tile-focus', strengths[index].toFixed(4)));
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(paint); };
+  const resize = new ResizeObserver(schedule);
+  tiles.forEach(tile => resize.observe(tile));
+  // Passive and event-driven: native momentum scrolling, with no idle loop.
+  window.addEventListener('scroll', schedule, { passive: true, capture: true });
+  window.addEventListener('resize', schedule, { passive: true });
+  window.visualViewport?.addEventListener('resize', schedule);
+  touch.addEventListener('change', schedule);
+  reduced.addEventListener('change', schedule);
+  schedule();
+  return () => {
+    cancelAnimationFrame(frame);
+    resize.disconnect();
+    window.removeEventListener('scroll', schedule, true);
+    window.removeEventListener('resize', schedule);
+    window.visualViewport?.removeEventListener('resize', schedule);
+    touch.removeEventListener('change', schedule);
+    reduced.removeEventListener('change', schedule);
+    tiles.forEach(tile => { tile.classList.remove('story-focus-tile'); tile.style.removeProperty('--tile-focus'); });
+  };
+}
+
 function bindPhotoPress(figures, reduced) {
   let pressed = null;
   const animations = new Set();
@@ -126,6 +170,7 @@ function bindStoryMotion(root) {
   const compact = matchMedia('(max-width: 680px), (max-width: 900px) and (max-height: 500px) and (pointer: coarse)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const removePhotoPress = bindPhotoPress(figures, reduced);
+  const removeTileFocus = bindTileFocus(root, reduced);
   const animations = new Set();
   let observer;
   let generation = 0;
@@ -164,6 +209,7 @@ function bindStoryMotion(root) {
   compact.addEventListener('change', update);
   reduced.addEventListener('change', update);
   removeStoryMotion = () => {
+    removeTileFocus();
     removePhotoPress();
     generation++;
     observer?.disconnect();

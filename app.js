@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.2";
+const APP_VERSION = "2.25.3";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.3", "Added subtle desktop hover lift and gentle scroll-centered emphasis to mobile story tiles"],
   ["2.25.2", "Made club photos respond to touch with a soft press and spring release"],
   ["2.25.1", "Blocked iPhone map text selection and magnifier gestures while preserving map taps and zoom"],
   ["2.25.0", "Added subtle mobile photo entrances and a clearer invitation to build at the hackathon"],
