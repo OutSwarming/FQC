@@ -81,7 +81,8 @@ export const officerResourceCatalog = Object.freeze([
   { id: "bylaws", title: "Bylaws", kind: "Google Doc", category: "Governance & Continuity", roles: ["all"], featured: ["president", "vice-president"], summary: "Current officer and organization operating rules.", url: driveResourceUrl("1rWf08RjafNYlwX1jWU1hTe1nRcMcygWF8nSwawmc8rA") },
   { id: "handover", title: "Handover Guide", kind: "Google Doc", category: "Governance & Continuity", roles: ["all"], featured: ["president", "vice-president"], summary: "Continuity checklist and transfer guidance for future officer teams.", url: driveResourceUrl("1CQ7QGbDqAKEucQP7Ei-g6cL2f3rot65NLtUBsa6GRhM") }
 ]);
-const allowedOrigins = new Map([
+export const allowedOrigins = new Map([
+  ["https://flqcs.com", "flqcs.com"],
   ["https://florida-quantum-computing.web.app", "florida-quantum-computing.web.app"],
   ["https://florida-quantum-computing.firebaseapp.com", "florida-quantum-computing.firebaseapp.com"],
   ["http://127.0.0.1:4175", "127.0.0.1"],
@@ -830,12 +831,26 @@ function publicProfile(uid, data = {}) {
   };
 }
 
+async function activeAuthUser(uid) {
+  try {
+    const user = await auth.getUser(uid);
+    if (user.disabled) throw new HttpsError("unauthenticated", "This account is no longer active. Sign in again or create an account.");
+    return user;
+  } catch (error) {
+    if (isMissingAuthUser(error)) throw new HttpsError("unauthenticated", "This account was deleted. Sign in again or create an account.");
+    throw error;
+  }
+}
+
 async function ensureProfileForUser(userRecord) {
   const userRef = db.collection("users").doc(userRecord.uid);
   // Only initialize a missing profile. A retry cannot overwrite attendance or
   // officer edits that happen concurrently with sign-in.
   const existing = await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(userRef);
+    const [snapshot, deletion] = await Promise.all([
+      transaction.get(userRef), transaction.get(db.collection("accountDeletions").doc(userRecord.uid))
+    ]);
+    if (deletion.exists) throw new HttpsError("unauthenticated", "This account was deleted. Sign in again or create an account.");
     if (snapshot.exists && snapshot.data().createdAt) return snapshot.data();
     assertEligibleSignupEmail(userRecord.email);
     const prior = snapshot.data() || {};
@@ -867,13 +882,13 @@ async function ensureProfileForUser(userRecord) {
 
 export const ensureUserProfile = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
-  const userRecord = await auth.getUser(caller.uid);
+  const userRecord = await activeAuthUser(caller.uid);
   return ensureProfileForUser(userRecord);
 });
 
 export const finalizeAccount = onCall(callableOptions, async (request) => {
   const caller = requireAuth(request);
-  const userRecord = await auth.getUser(caller.uid);
+  const userRecord = await activeAuthUser(caller.uid);
   assertEligibleSignupEmail(userRecord.email);
   return ensureProfileForUser(userRecord);
 });
@@ -1278,13 +1293,13 @@ export const removeMember = onCall(callableOptions, async (request) => {
 
   const userRef = db.collection("users").doc(uid);
   const guardSnapshot = await userRef.get();
-  const guardUser = await auth.getUser(uid).catch(() => null);
+  const guardUser = await auth.getUser(uid).catch(error => { if (isMissingAuthUser(error)) return null; throw error; });
   if (guardSnapshot.data()?.leadership || guardUser?.customClaims?.leadership) {
     throw new HttpsError("failed-precondition", "Open that leadership seat before removing the account.");
   }
   const [targetSnapshot, targetUser] = await Promise.all([
     userRef.get(),
-    auth.getUser(uid).catch(() => null)
+    auth.getUser(uid).catch(error => { if (isMissingAuthUser(error)) return null; throw error; })
   ]);
   const targetData = targetSnapshot.data() || {};
   if (targetData.leadership || targetUser?.customClaims?.leadership) {
@@ -1292,22 +1307,28 @@ export const removeMember = onCall(callableOptions, async (request) => {
   }
 
   const displayName = cleanText(targetData.displayName || targetUser?.displayName || "FQC Member", 80);
-  const batch = db.batch();
-  const [passkeys, credentials] = await Promise.all([
-    userRef.collection("passkeys").get(),
-    db.collection("passkeyCredentials").where("uid", "==", uid).get()
+  await db.collection("accountDeletions").doc(uid).set({ startedAt: FieldValue.serverTimestamp() }, { merge: true });
+  if (targetUser) await auth.updateUser(uid, { disabled: true });
+  const ownedRecords = await Promise.all([
+    db.collection("passkeyCredentials").where("uid", "==", uid).get(),
+    db.collection("passkeyChallenges").where("uid", "==", uid).get(),
+    db.collection("usernameDirectory").where("uid", "==", uid).get(),
+    db.collection("displayNameDirectory").where("uid", "==", uid).get()
   ]);
-  passkeys.docs.forEach((doc) => batch.delete(doc.ref));
-  credentials.docs.forEach((doc) => batch.delete(doc.ref));
-  uniqueEventIds(targetData.checkedInEvents)
-    .forEach((eventId) => batch.delete(db.collection("events").doc(eventId).collection("checkins").doc(uid)));
-  const username = usernameForInput(targetData.username);
-  if (username) batch.delete(db.collection("usernameDirectory").doc(username));
-  const nameKey = displayNameKey(targetData.displayName);
-  if (nameKey) batch.delete(db.collection("displayNameDirectory").doc(nameKey));
+  // Query ownership rather than trusting a stale profile's name. A re-created
+  // account must never lose a directory entry now owned by its new uid.
+  const writer = db.bulkWriter();
+  const removals = ownedRecords.flatMap(snapshot => snapshot.docs.map(doc => writer.delete(doc.ref, { lastUpdateTime: doc.updateTime }).catch(error => { if (error.code !== 9 && error.code !== 5) throw error; })));
+  removals.push(writer.delete(db.collection("hackathonInterest").doc(uid)));
+  uniqueEventIds(targetData.checkedInEvents).forEach(eventId => {
+    removals.push(writer.delete(db.collection("events").doc(eventId).collection("checkins").doc(uid)));
+  });
+  await writer.close();
+  await Promise.all(removals);
+  const batch = db.batch();
   queueLeaderboardUpdate(batch, db, uid, targetData, true);
-  batch.delete(userRef);
   await batch.commit();
+  await db.recursiveDelete(userRef);
 
   await db.runTransaction(async (transaction) => {
     const rsvpRef = db.collection("system").doc("eventRsvps");
@@ -1319,7 +1340,8 @@ export const removeMember = onCall(callableOptions, async (request) => {
     transaction.set(rsvpRef, { byEvent, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
   });
 
-  if (targetUser) await auth.deleteUser(uid);
+  if (targetUser) await auth.deleteUser(uid).catch(error => { if (!isMissingAuthUser(error)) throw error; });
+  await db.collection("accountDeletions").doc(uid).set({ completedAt: FieldValue.serverTimestamp() }, { merge: true });
 
   await db.collection("officerRosterAudit").add({
     action: "member-removed",
@@ -1537,13 +1559,13 @@ export const unassignMemberLeadership = onCall(callableOptions, async (request) 
   // Only step an actual officer down. Naming an account that is already a member
   // must never quietly promote them.
   if (uid && holderSnapshot?.data()?.role === "officer") {
-    const targetUser = await auth.getUser(uid);
+    const targetUser = await auth.getUser(uid).catch(error => { if (isMissingAuthUser(error)) return null; throw error; });
     const targetData = holderSnapshot.data() || {};
     const access = resolvedAccess({ roleOverride: "officer", officerTitle: "Officer" });
     const updatedProfile = { ...targetData, ...access, roleOverride: "officer", roleUpdatedBy: caller.uid, updatedAt: FieldValue.serverTimestamp() };
     await Promise.all([
       db.collection("users").doc(uid).set(updatedProfile, { merge: true }),
-      setAccessClaims(targetUser, access)
+      targetUser ? setAccessClaims(targetUser, access) : Promise.resolve()
     ]);
     await syncLeaderboardProfile(uid, { ...targetData, ...access });
   }
@@ -1872,8 +1894,14 @@ export const finishPasskeySignIn = onCall(callableOptions, async (request) => {
   const [challengeSnapshot, credentialSnapshot] = await Promise.all([challengeRef.get(), credentialRef.get()]);
   const challenge = challengeSnapshot.data();
   const stored = credentialSnapshot.data();
-  if (!challenge || challenge.type !== "authentication" || challenge.expiresAt.toMillis() < Date.now() || !stored?.uid) {
+  if (!challenge || challenge.type !== "authentication" || challenge.expiresAt.toMillis() < Date.now()) {
     throw new HttpsError("failed-precondition", "This passkey request expired. Try again.");
+  }
+
+  if (!stored?.uid) throw new HttpsError("failed-precondition", "This saved passkey no longer belongs to an active account. Use email and password, or create an account.");
+  await activeAuthUser(stored.uid);
+  if ((await db.collection("accountDeletions").doc(stored.uid).get()).exists) {
+    throw new HttpsError("unauthenticated", "This account was deleted. Sign in with your new account.");
   }
 
   const verification = await verifyAuthenticationResponse({

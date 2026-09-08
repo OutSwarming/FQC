@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.0";
+const APP_VERSION = "2.26.1";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.1", "Fixed flqcs.com sign-in and recovery after an account is deleted and re-created"],
   ["2.26.0", "Added event-specific check-in and About, Events, Hackathon, and Profile navigation"],
   ["2.25.15", "Slid the navigation down for expanded events and back up for previews"],
   ["2.25.14", "Opened Home on the next upcoming event with its pin centered and List selected"],

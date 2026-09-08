@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "playwright test",
+    "test:auth": "node --test tests/auth-session.test.mjs",
     "test:phones": "playwright test --config playwright.phones.config.js",
     "test:headed": "playwright test --headed",
     "test:rules": "firebase emulators:exec --only firestore \"node --test tests/firestore.rules.test.js\"",

@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v328-event-checkin-tabs";
+const CACHE_NAME = "fqc-app-v329-account-recovery";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

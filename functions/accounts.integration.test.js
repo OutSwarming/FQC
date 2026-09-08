@@ -1,7 +1,8 @@
+import { getAuth } from "firebase-admin/auth";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { finalizeAccount, ensureUserProfile, recordEventCheckIn, queueMemberSheetExport } from "./index.js";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+import { finalizeAccount, ensureUserProfile, recordEventCheckIn, queueMemberSheetExport, removeMember, finishPasskeySignIn, updateUserProfile, allowedOrigins } from "./index.js";
 import { enqueueMemberExport, drainMemberExports, memberExportChanged, seedMemberExport } from "./lib/member-sync.js";
 
 const enabled = process.env.GCLOUD_PROJECT === "demo-fqc" && Boolean(process.env.FIRESTORE_EMULATOR_HOST) && Boolean(process.env.FIREBASE_AUTH_EMULATOR_HOST);
@@ -96,4 +97,69 @@ test("Firebase onboarding, attendance, and resilient 10K export", { skip: !enabl
   assert.equal(batches, 40);
   assert.equal(result.remaining, false);
   console.log(JSON.stringify({ scaleMembers: exported, exportBatches: batches, seedAndExportMs: Math.round(performance.now() - largeStarted) }));
+});
+
+
+test("custom domain supports every callable and its own passkeys", () => {
+  assert.equal(allowedOrigins.get("https://flqcs.com"), "flqcs.com");
+  assert.equal(allowedOrigins.has("https://untrusted.example"), false);
+});
+
+test("deleted members and former presidents can recreate an account safely", { skip: !enabled, timeout: 30000 }, async () => {
+  const db = getFirestore();
+  const auth = getAuth();
+  const manager = { uid: "deletion-manager", token: { leadership: "treasurer" } };
+  for (const role of ["member", "president"]) {
+    const email = `recreated-${role}@ufl.edu`;
+    const user = await auth.createUser({ email, password: "recreate-test-password" });
+    const request = { auth: { uid: user.uid, token: { email } }, data: {} };
+    await finalizeAccount.run(request);
+    const userRef = db.collection("users").doc(user.uid);
+    await userRef.set({ displayName: "Already Reclaimed", username: `old-${role}`, checkedInEvents: ["old-event"] }, { merge: true });
+    await Promise.all([
+      db.collection("usernameDirectory").doc(`old-${role}`).set({ uid: user.uid }),
+      db.collection("usernameDirectory").doc(`alias-${role}`).set({ uid: user.uid }),
+      db.collection("displayNameDirectory").doc(`original ${role}`).set({ uid: user.uid }),
+      db.collection("displayNameDirectory").doc("already reclaimed").set({ uid: "another-member" }),
+      userRef.collection("passkeys").doc("old-key").set({ credentialId: `key-${role}` }),
+      db.collection("passkeyCredentials").doc(`key-${role}`).set({ uid: user.uid }),
+      db.collection("hackathonInterest").doc(user.uid).set({ interested: true }),
+      db.collection("events").doc("old-event").collection("checkins").doc(user.uid).set({ uid: user.uid })
+    ]);
+    if (role === "president") {
+      await userRef.set({ leadership: "president", role: "officer" }, { merge: true });
+      await auth.setCustomUserClaims(user.uid, { leadership: "president" });
+      await assert.rejects(removeMember.run({ auth: manager, data: { uid: user.uid } }), /Open that leadership seat/);
+      // Existing officer-management flow opens the seat before deleting its holder.
+      await userRef.set({ leadership: "", roleOverride: "officer" }, { merge: true });
+      await auth.setCustomUserClaims(user.uid, { leadership: "" });
+    }
+    await removeMember.run({ auth: manager, data: { uid: user.uid } });
+    await assert.rejects(auth.getUser(user.uid), { code: "auth/user-not-found" });
+    await assert.rejects(ensureUserProfile.run(request), { code: "unauthenticated" });
+    assert.equal((await userRef.get()).exists, false);
+    assert.equal((await userRef.collection("passkeys").get()).size, 0);
+    assert.equal((await db.collection("usernameDirectory").where("uid", "==", user.uid).get()).size, 0);
+    assert.equal((await db.collection("displayNameDirectory").doc("already reclaimed").get()).data().uid, "another-member");
+    assert.equal((await db.collection("hackathonInterest").doc(user.uid).get()).exists, false);
+    // Even an orphaned key cannot mint a token that resurrects the deleted uid.
+    await db.collection("passkeyCredentials").doc(`orphan-${role}`).set({ uid: user.uid });
+    await db.collection("passkeyChallenges").doc(`challenge-${role}`).set({ type: "authentication", expiresAt: Timestamp.fromMillis(Date.now() + 60000) });
+    await assert.rejects(finishPasskeySignIn.run({ data: { challengeId: `challenge-${role}`, response: { id: `orphan-${role}` } } }), { code: "unauthenticated" });
+    const recreated = await auth.createUser({ email, password: "new-test-password" });
+    const newRequest = { auth: { uid: recreated.uid, token: { email } }, data: {} };
+    const profile = await finalizeAccount.run(newRequest);
+    assert.notEqual(recreated.uid, user.uid);
+    assert.equal(profile.role, "member");
+    assert.equal(profile.points, 0);
+    const renamed = await updateUserProfile.run({ ...newRequest, data: { displayName: `Original ${role}` } });
+    assert.equal(renamed.displayName, `Original ${role}`);
+    const response = await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-key`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "new-test-password", returnSecureToken: true })
+    });
+    assert.equal((await response.json()).localId, recreated.uid);
+    // A late old session cannot recreate the profile while deletion is in progress.
+    await db.collection("accountDeletions").doc(recreated.uid).set({ startedAt: FieldValue.serverTimestamp() });
+    await assert.rejects(ensureUserProfile.run(newRequest), { code: "unauthenticated" });
+  }
 });

@@ -1,3 +1,4 @@
+import { createSessionRestorer, isInvalidSessionError, withAuthTimeout } from "./auth-session.js";
 import { initializeApp } from "firebase/app";
 import {
   browserLocalPersistence,
@@ -28,6 +29,7 @@ const testMode = globalThis.__FQC_AUTH_TEST__ === true;
 let auth;
 let db;
 let functions;
+let restoreSession = null;
 let mockSessionObserver = null;
 let mockInterestObserver = null;
 const mockInterests = new Map();
@@ -73,7 +75,6 @@ let mockOfficerEventOperations = {
 let mockUsernameDirectory = new Map();
 let mockUsernameReservations = new Map();
 let pendingAccountCreation = null;
-let sessionCallback = null;
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
@@ -224,23 +225,17 @@ export function observeSession(callback, onError = () => {}) {
     return () => { mockSessionObserver = null; };
   }
 
-  sessionCallback = callback;
-  return onAuthStateChanged(auth, async (user) => {
-    if (!user) {
-      callback(null);
-      return;
-    }
-    try {
-      const profile = pendingAccountCreation
-        ? await pendingAccountCreation.promise
-        : normalizedProfile((await retryOnceWhenTransient(() => callable("ensureUserProfile")())).data);
-      if (auth.currentUser?.uid !== user.uid) return;
-      await user.getIdToken(true);
-      callback({ user, profile });
-    } catch (error) {
-      onError(error);
-    }
-  }, onError);
+  restoreSession = createSessionRestorer({
+    getCurrentUser: () => auth.currentUser,
+    loadProfile: () => pendingAccountCreation
+      ? pendingAccountCreation.promise
+      : retryOnceWhenTransient(async () => normalizedProfile((await callable("ensureUserProfile")()).data)),
+    refreshToken: user => user.getIdToken(true),
+    signOut: () => signOut(auth),
+    onSession: callback,
+    onError
+  });
+  return onAuthStateChanged(auth, user => { restoreSession(user).catch(() => {}); }, onError);
 }
 
 export function observeCheckIn(callback, onError = () => {}) {
@@ -289,15 +284,9 @@ export async function signInWithEmail(identifier, password) {
     mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email });
     return;
   }
-  const wasSameUser = auth.currentUser?.email?.toLowerCase() === email.toLowerCase();
-  const credential = await signInWithEmailAndPassword(auth, email, password);
-  // A failed initial profile setup can leave Firebase signed in. Logging in
-  // again must repair that profile even when the Auth uid has not changed.
-  if (wasSameUser) {
-    const profile = normalizedProfile((await retryAccountFinalization(() => callable("ensureUserProfile")())).data);
-    await credential.user.getIdToken(true);
-    if (auth.currentUser?.uid === credential.user.uid) sessionCallback?.({ user: credential.user, profile });
-  }
+  const credential = await withAuthTimeout(() => signInWithEmailAndPassword(auth, email, password));
+  // Do not report successful login before the member profile is ready.
+  await restoreSession(credential.user);
 }
 
 export async function createEmailAccount({ email, password }) {
@@ -326,6 +315,7 @@ export async function createEmailAccount({ email, password }) {
     const result = await retryAccountFinalization(() => callable("finalizeAccount")({}));
     const profile = normalizedProfile(result.data);
     settleAccountCreation(profile);
+    await restoreSession(credential.user);
     return profile;
   } catch (error) {
     rejectAccountCreation(error);
@@ -381,7 +371,8 @@ export async function signInWithPasskey() {
   const begin = await callable("beginPasskeySignIn")();
   const response = await startAuthentication({ optionsJSON: begin.data.options });
   const finish = await callable("finishPasskeySignIn")({ challengeId: begin.data.challengeId, response });
-  await signInWithCustomToken(auth, finish.data.customToken);
+  const credential = await withAuthTimeout(() => signInWithCustomToken(auth, finish.data.customToken));
+  await restoreSession(credential.user);
 }
 
 export async function registerPasskey() {
@@ -694,11 +685,14 @@ export function readableAuthError(error) {
   if (code.includes("operation-not-allowed")) return "This sign-in method is still being configured.";
   if (code.includes("account-exists-with-different-credential")) return "That email already uses another sign-in method. Sign in with the original method first.";
   if (code.includes("email-already-in-use")) return "An account already exists for that email. Use Log In or Forgot Password.";
+  if (isInvalidSessionError(error)) return "This saved session is no longer valid. Log in with your current account, or create an account if it was deleted.";
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found") || code.includes("not-found")) return "The username, UF email, or password is incorrect.";
   if (code.includes("weak-password")) return "Use a password with at least eight characters.";
   if (code.includes("invalid-email")) return "Enter a valid email address.";
   if (code.includes("too-many-requests")) return "Firebase is temporarily limiting signups or sign-ins on this network. Wait a moment, or switch between UF Wi-Fi and cellular data, then try again.";
-  if (isTransientFirebaseError(error)) return "FQC could not reach sign-in. Check your connection and try once more.";
+  if (code === "auth/setup-timeout") return "Sign-in took too long. Try again. If you just created an account, use Log in with the same email and password.";
+  if (code.includes("internal")) return "FQC couldn’t complete that request. Please try again.";
+  if (isTransientFirebaseError(error)) return "FQC could not reach sign-in. Try again, or open https://flqcs.com in your browser.";
   if (code.includes("unauthenticated")) return "Your session expired. Sign in again.";
   if (code.includes("permission-denied")) return "Your account does not have permission for that action.";
   if (error?.name === "NotAllowedError") return "Face ID, Touch ID, or the passkey prompt was cancelled.";
