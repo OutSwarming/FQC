@@ -37,9 +37,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.28.0";
+const APP_VERSION = "2.28.1";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.28.1", "Kept the selected map pin highlighted while resizing the event popup"],
   ["2.28.0", "Private RSVPs, immediate officer access changes, and durable attendance through connection drops"],
   ["2.27.0", "Protected private club records, checked current officer access, and strengthened sign-in abuse protection"],
   ["2.26.14", "Streamlined officer events and Settings with focused sections and preserved drafts"],
@@ -1939,10 +1940,7 @@ function initEventMap() {
     if (deferredMapRender) requestAnimationFrame(() => { if (deferredMapRender) render(); });
   });
   eventMap.on("dragstart", releaseHomeDefault);
-  eventMap.on("userzoomstart", () => {
-    releaseHomeDefault();
-    clearMapPinHighlight();
-  });
+  eventMap.on("userzoomstart", releaseHomeDefault);
   bindMapQuickZoom(eventMap);
   window.L.control.zoom({ position: "topright" }).addTo(eventMap);
   window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -1954,6 +1952,7 @@ function initEventMap() {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(eventMap);
 
+  // Only a map-background tap clears the selection; sheet and zoom gestures keep it.
   eventMap.on("click", () => {
     releaseHomeDefault();
     clearMapPinHighlight();
@@ -1972,9 +1971,6 @@ function clearMapPinHighlight() {
   highlightedMapLocationId = null;
   document.querySelectorAll(".event-map-pin.active").forEach(pin => pin.classList.remove("active"));
 }
-document.addEventListener("pointerdown", event => {
-  if (!event.target.closest?.(".leaflet-marker-icon")) clearMapPinHighlight();
-}, true);
 
 // Pins follow the visible tab, so Past events only appear while Past is open.
 function drawMapMarkers({ preserveView = false } = {}) {

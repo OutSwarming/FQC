@@ -1152,3 +1152,31 @@ test('officer accordion preserves nested work and drafts while keeping one event
   await expect(page.getByLabel('Display name', { exact: true })).toHaveValue('Unsubmitted name');
   await page.screenshot({ path: `test-results/${info.project.name}-compact-settings.png` });
 });
+
+test('selected pin stays highlighted while the event sheet is dragged', async ({page,browserName}) => {
+  await goTab(page,'Events');
+  const pin=page.locator('.event-map-pin').first();
+  await pin.click();
+  await expect(pin).toHaveClass(/active/);
+  const handle=page.locator('#event-sheet-handle');
+  const cdp=browserName==='chromium' ? await page.context().newCDPSession(page) : null;
+  for(const direction of [-1,1]) {
+    await page.waitForTimeout(350);
+    const box=await handle.boundingBox();
+    const x=box.x+box.width/2, y=box.y+10;
+    const end=Math.max(12,Math.min(page.viewportSize().height-24,y+direction*120));
+    const send=(type,at)=>cdp
+      ? cdp.send('Input.dispatchTouchEvent',{type:{pointerdown:'touchStart',pointermove:'touchMove',pointerup:'touchEnd'}[type],touchPoints:type==='pointerup'?[]:[{x,y:at,id:1}]})
+      : handle.dispatchEvent(type,{button:0,pointerId:123,pointerType:'touch',clientX:x,clientY:at});
+    await send('pointerdown',y);
+    await expect(pin).toHaveClass(/active/);
+    await send('pointermove',end);
+    await expect(pin).toHaveClass(/active/);
+    await send('pointerup',end);
+    await expect(pin).toHaveClass(/active/);
+  }
+  await page.waitForTimeout(350);
+  const point=await mapPoint(page);
+  await page.touchscreen.tap(point.x,point.y);
+  await expect(page.locator('.event-map-pin.active')).toHaveCount(0);
+});
