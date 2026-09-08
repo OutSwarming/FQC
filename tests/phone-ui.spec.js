@@ -474,6 +474,8 @@ test('List opens large and controls follow the finger before release', async ({ 
   await expect.poll(() => tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeLessThan(.01);
   await handle.dispatchEvent('pointermove', { ...input, clientY: 500 - delta * 2 });
   await expect.poll(() => tabs.evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(.95);
+  // A deliberate drag pauses at medium; a fast release is tested as a fling.
+  await page.waitForTimeout(120);
   await handle.dispatchEvent('pointerup', { ...input, clientY: 500 - delta * 2 });
   await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
   await expect(tabs).toHaveCSS('opacity', '1');
@@ -1045,4 +1047,48 @@ test('fast sheet reversals follow the release direction and a new touch catches 
   await page.waitForTimeout(32);
   expect(Math.abs((await planner.boundingBox()).height - (caughtHeight - 30))).toBeLessThan(2);
   await handle.dispatchEvent('pointerup', { ...start, clientY: 630 });
+});
+
+test('fast scrubber movement renders only the final destination', async ({ page, browserName }) => {
+  const slider = page.locator('#nav-slider'), box = await slider.boundingBox();
+  const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
+  const y = box.y + box.height / 2;
+  const send = async (type, x) => cdp
+    ? cdp.send('Input.dispatchTouchEvent', { type: { pointerdown: 'touchStart', pointermove: 'touchMove', pointerup: 'touchEnd' }[type], touchPoints: type === 'pointerup' ? [] : [{ x, y, id: 1 }] })
+    : slider.dispatchEvent(type, { button: 0, pointerId: 98, pointerType: 'touch', clientX: x, clientY: y });
+  await page.evaluate(() => {
+    window.__navDestinations = [];
+    const original = history.pushState.bind(history);
+    history.pushState = (...args) => { window.__navDestinations.push(new URL(args[2], location.href).hash); return original(...args); };
+    window.__screenRenders = 0;
+    new MutationObserver(records => { window.__screenRenders += records.filter(r => r.addedNodes.length > 0).length; }).observe(document.querySelector('#app'), { childList: true });
+  });
+  await send('pointerdown', box.x + 14);
+  for (const fraction of [.3, .7, 1, .4, 0, .6, 1]) await send('pointermove', box.x + 14 + (box.width - 28) * fraction);
+  await expect(nav(page, 'About')).toHaveAttribute('aria-current', 'page');
+  expect(await page.evaluate(() => window.__navDestinations)).toEqual([]);
+  expect(await page.evaluate(() => window.__screenRenders)).toBe(0);
+  await send('pointerup', box.x + box.width - 14);
+  await expect(nav(page, 'Profile')).toHaveAttribute('aria-current', 'page');
+  expect(await page.evaluate(() => window.__navDestinations)).toEqual(['#profile']);
+  expect(await page.evaluate(() => window.__screenRenders)).toBe(1);
+});
+
+test('short fast flicks skip the middle sheet position in both directions', async ({ page, browserName }) => {
+  await goTab(page, 'Events');
+  const handle = page.locator('#event-sheet-handle'), planner = page.locator('.event-planner');
+  await handle.press('ArrowDown');
+  await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
+  const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
+  for (const direction of [-1, 1]) {
+    await page.waitForTimeout(350);
+    const box = await handle.boundingBox(), x = box.x + box.width / 2, y = box.y + 10;
+    const send = async (type, at) => cdp
+      ? cdp.send('Input.dispatchTouchEvent', { type: { pointerdown: 'touchStart', pointermove: 'touchMove', pointerup: 'touchEnd' }[type], touchPoints: type === 'pointerup' ? [] : [{ x, y: at, id: 1 }] })
+      : handle.dispatchEvent(type, { button: 0, pointerId: 99, pointerType: 'touch', clientX: x, clientY: at });
+    await send('pointerdown', y);
+    await send('pointermove', y + direction * 48);
+    await send('pointerup', y + direction * 48);
+    await expect(planner).toHaveAttribute('data-sheet-mode', direction < 0 ? 'high' : 'low');
+  }
 });

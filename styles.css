@@ -2573,7 +2573,7 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
 .nav-item.active { color: var(--accent-strong); background: transparent; }
 .nav-item svg { width: 23px; height: 23px; stroke-width: 2; }
 .nav-item:active { transform: scale(.94); }
-.nav-glass-lens { position: absolute; pointer-events: none; z-index: 0; left: 6px; top: 6px; width: calc((100% - 12px) / 4); height: 52px; border-radius: 999px; transform: translateX(calc(var(--nav-index) * 100%)); background: linear-gradient(160deg, #e9e9ed, #dcdce2); border: 1px solid #c8c8d0; box-shadow: inset 0 1px 2px #ffffffb3, 0 1px 4px #0000000a; transition: transform 420ms cubic-bezier(.22,.8,.2,1), opacity 180ms; }
+.nav-glass-lens { position: absolute; pointer-events: none; z-index: 0; left: 6px; top: 6px; width: calc((100% - 12px) / 4); height: 52px; border-radius: 999px; transform: translateX(calc(var(--nav-index) * 100%)); background: linear-gradient(160deg, #e9e9ed, #dcdce2); border: 1px solid #c8c8d0; box-shadow: inset 0 1px 2px #ffffffb3, 0 1px 4px #0000000a; transition: transform 280ms cubic-bezier(.2,.8,.2,1), opacity 180ms; }
 .bottom-nav.is-dragging .nav-glass-lens { transition: none; }
 .bottom-nav[data-settings="true"] .nav-glass-lens { opacity: 0; }
 .nav-slider { position: absolute; left: 32%; bottom: 2px; width: 36%; height: 14px; min-height: 0; border: 0; box-shadow: none; margin: 0; padding: 0; cursor: ew-resize; appearance: none; -webkit-appearance: none; background: transparent; touch-action: none; }

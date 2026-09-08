@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.10";
+const APP_VERSION = "2.26.11";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.11", "Committed navigation drags only on release and let fast sheet flicks skip the middle position"],
   ["2.26.10", "Raised the expanded event sheet and faded map controls during expansion"],
   ["2.26.9", "Smoothed rapid event-sheet swipes, direction changes, and interrupted snap animations"],
   ["2.26.8", "Added subtle blue shading to calendar days with events in Light mode"],
@@ -1726,7 +1727,10 @@ function bindMobileEventSheet() {
     ), "medium");
     let nextMode = nearestMode;
 
-    if (meaningfulSwipe && Math.abs(releaseVelocity) > 0.12) {
+    if (meaningfulSwipe && Math.abs(releaseVelocity) >= .9) {
+      // A deliberate flick travels directly to the end stop, including from low.
+      nextMode = releaseVelocity > 0 ? "high" : "low";
+    } else if (meaningfulSwipe && Math.abs(releaseVelocity) > 0.12) {
       const startModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(finished.modeAtStart);
       const nearestModeIndex = MOBILE_EVENT_SHEET_MODES.indexOf(nearestMode);
       const directionalModeIndex = Math.max(1, Math.min(3, startModeIndex + (releaseVelocity > 0 ? 1 : -1)));
@@ -3685,14 +3689,38 @@ navItems.forEach((item, index) => {
   });
 });
 navSlider.addEventListener("input", () => {
+  if (navDrag) return;
   const index = Number(navSlider.value);
   bottomNav.style.setProperty("--nav-index", index);
   navSlider.setAttribute("aria-valuetext", navItems[index].textContent.trim());
 });
-navSlider.addEventListener("change", () => setView(navItems[Number(navSlider.value)].dataset.view));
+navSlider.addEventListener("change", () => {
+  if (!navDrag && performance.now() >= suppressNavClickUntil) setView(navItems[Number(navSlider.value)].dataset.view);
+});
+function navIndexAt(clientX, drag) {
+  const { rect, slider } = drag;
+  return Math.max(0, Math.min(3, slider
+    ? (clientX - rect.left - 14) / Math.max(1, rect.width - 28) * 3
+    : (clientX - rect.left - 7) / ((rect.width - 14) / 4) - .5));
+}
+function previewNavDrag(clientX) {
+  navDrag.index = navIndexAt(clientX, navDrag);
+  bottomNav.style.setProperty("--nav-index", navDrag.index);
+  navSlider.value = String(Math.round(navDrag.index));
+  navSlider.setAttribute("aria-valuetext", navItems[Math.round(navDrag.index)].textContent.trim());
+}
 bottomNav.addEventListener("pointerdown", (event) => {
-  if (navDrag || event.target === navSlider || event.button !== 0) return;
-  navDrag = { startX: event.clientX, pointerId: event.pointerId, moved: false };
+  if (navDrag || event.button !== 0) return;
+  const slider = event.target === navSlider;
+  navDrag = { startX: event.clientX, pointerId: event.pointerId, moved: slider, slider, rect: (slider ? navSlider : bottomNav).getBoundingClientRect() };
+  if (slider) {
+    // Use the same release-only gesture on the scrubber as on the capsule.
+    event.preventDefault();
+    navSlider.focus({ preventScroll: true });
+    bottomNav.classList.add("is-dragging");
+    try { bottomNav.setPointerCapture(event.pointerId); } catch {}
+    previewNavDrag(event.clientX);
+  }
 });
 bottomNav.addEventListener("pointermove", (event) => {
   if (!navDrag || event.pointerId !== navDrag.pointerId) return;
@@ -3702,14 +3730,12 @@ bottomNav.addEventListener("pointermove", (event) => {
   }
   navDrag.moved = true;
   bottomNav.classList.add("is-dragging");
-  const rect = bottomNav.getBoundingClientRect();
-  const index = Math.max(0, Math.min(3, (event.clientX - rect.left - 7) / ((rect.width - 14) / 4) - .5));
-  navDrag.index = index;
-  bottomNav.style.setProperty("--nav-index", index);
+  previewNavDrag(event.clientX);
   if (event.cancelable) event.preventDefault();
 }, { passive: false });
 function finishNavDrag(event) {
   if (!navDrag || event.pointerId !== navDrag.pointerId) return;
+  if (navDrag.moved && event.type === "pointerup") previewNavDrag(event.clientX);
   const drag = navDrag;
   navDrag = null;
   bottomNav.classList.remove("is-dragging");
@@ -3717,7 +3743,12 @@ function finishNavDrag(event) {
   if (drag.moved) {
     suppressNavClickUntil = performance.now() + 350;
     if (event.type === "pointerup") setView(navItems[Math.round(drag.index)].dataset.view);
-    else bottomNav.style.setProperty("--nav-index", Math.max(0, navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view))));
+    else {
+      const index = Math.max(0, navItems.findIndex((item) => item.dataset.view === (state.view === "checkin" ? "home" : state.view)));
+      bottomNav.style.setProperty("--nav-index", index);
+      navSlider.value = String(index);
+      navSlider.setAttribute("aria-valuetext", navItems[index].textContent.trim());
+    }
   }
 }
 window.addEventListener("pointerup", finishNavDrag);
