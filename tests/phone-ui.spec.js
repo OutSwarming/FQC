@@ -4,7 +4,7 @@ const zoom = page => page.evaluate(() => window.__FQC_MAP__.getZoom());
 const mapPoint = async page => {
   const box = await page.locator('#event-map').boundingBox();
   const sheet = await page.locator('.event-planner').boundingBox();
-  return { x: box.x + box.width * .3, y: box.y + Math.min(85, Math.max(12, (sheet.y - box.y) / 2)) };
+  return { x: box.x + box.width * .3, y: box.y + Math.min(85, Math.max(2, (sheet.y - box.y) / 2)) };
 };
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__FQC_AUTH_TEST__ = true; });
@@ -316,6 +316,64 @@ test('navigation keeps the same bottom inset after scrolling, tab changes, and v
   }
 });
 
+
+test.describe('event popup with a deterministic long list', () => {
+test.use({ serviceWorkers: 'block' });
+test('rounded event popup resizes repeatedly and the last item in a long list remains tappable', async ({ page }, info) => {
+  const header = '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"';
+  const rows = Array.from({ length: 16 }, (_, i) => `"Archived quantum workshop ${i + 1}","2020-03-${String(i + 1).padStart(2, '0')}","6:00 PM","Reitz Student Union","2315","A hands-on quantum computing workshop with circuits, discussion and exercises for members working together.","Yes","archive-${i + 1}"`);
+  await page.route('https://docs.google.com/spreadsheets/**', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
+    ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
+    : route.fallback());
+  await page.reload();
+  await nav(page, 'Home').click();
+  const planner = page.locator('.event-planner');
+  await page.locator('#event-sheet-handle').tap();
+  await page.getByRole('tab', { name: /^Past/ }).tap();
+  await expect(page.locator('.past-event-list .event-card-select')).toHaveCount(16);
+  const original = page.viewportSize();
+  // Simulate the home-indicator inset and the larger status area in an installed iPhone app.
+  await page.evaluate(() => document.documentElement.style.setProperty('--safe-bottom', '34px'));
+  if (original.width < original.height) await page.addStyleTag({ content: '.topbar { padding-top: 55px; }' });
+  for (const height of [original.height, Math.max(300, original.height - 100), original.height, Math.max(300, original.height - 60)]) {
+    await page.setViewportSize({ width: original.width, height });
+    await expect.poll(() => planner.evaluate(el => {
+      const dock = document.querySelector('.bottom-nav').getBoundingClientRect();
+      return Math.round(dock.top - el.getBoundingClientRect().bottom);
+    })).toBe(8);
+    await expect.poll(() => planner.evaluate(el => {
+      const map = document.querySelector('#event-map').getBoundingClientRect();
+      return el.getBoundingClientRect().top >= map.top;
+    })).toBe(true);
+    await expect(planner).toHaveCSS('border-bottom-left-radius', '22px');
+    await expect(planner).toHaveCSS('border-bottom-right-radius', '22px');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
+  }
+  await page.setViewportSize(original);
+  await page.waitForTimeout(450);
+  await planner.evaluate(el => { el.scrollTop = 0; });
+  // Drive the same touch-pointer path as swiping the expanded sheet.
+  for (let swipe = 0; swipe < 24; swipe++) {
+    const done = await planner.evaluate(el => el.scrollTop + el.clientHeight >= el.scrollHeight - 1);
+    if (done) break;
+    const box = await planner.boundingBox();
+    const input = { button: 0, pointerId: 61, pointerType: 'touch', clientX: box.x + 20, clientY: box.y + box.height - 12 };
+    await planner.dispatchEvent('pointerdown', input);
+    await planner.dispatchEvent('pointermove', { ...input, clientY: box.y + 30 });
+    await planner.dispatchEvent('pointerup', { ...input, clientY: box.y + 30 });
+  }
+  await expect.poll(() => planner.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
+  const last = page.locator('.past-event-list .event-card-select').last();
+  expect(await last.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  })).toBe(true);
+  await page.waitForTimeout(300); // Let the swipe's accidental-click guard expire.
+  await last.tap();
+  await expect(page.locator('.event-intro h2')).toHaveText('Archived quantum workshop 1');
+  await page.screenshot({ path: `test-results/${info.project.name}-rounded-popup.png` });
+});
+});
 
 test('Home map fills below the dock while event sheets and navigation keep their clearance', async ({ page }) => {
   const original = page.viewportSize();

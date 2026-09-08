@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v317-map-under-floating-nav";
+const CACHE_NAME = "fqc-app-v318-responsive-event-popup";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

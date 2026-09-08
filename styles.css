@@ -8,6 +8,7 @@
   --danger: #c9342b; --danger-soft: #fff0ee;
   --shadow: 0 12px 36px #0000000d; --shadow-soft: 0 2px 12px #00000006;
   --radius: 20px; --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-bottom-gap: calc(12px + var(--safe-bottom));
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 }
 :root[data-theme="dark"] {
@@ -2250,20 +2251,21 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     min-height: 0;
     border-radius: 16px 16px 0 0;
   }
-  .event-map-shell .leaflet-bottom { bottom: calc(90px + var(--safe-bottom)); }
+  .event-map-shell .leaflet-bottom { bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom))); }
 
   .event-planner {
     position: absolute;
     z-index: 600;
     right: 0;
-    bottom: calc(90px + var(--safe-bottom));
+    bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom)));
     left: 0;
     height: 53%;
     overflow: hidden;
-    padding: 0 14px 26px;
-    border-top: 1px solid var(--line);
-    border-right: 0;
-    border-radius: 18px 18px 0 0;
+    max-height: calc(100% - var(--event-dock-clearance, calc(96px + var(--safe-bottom))) - 8px);
+    padding: 0 14px 24px;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    scroll-padding-block: 104px 24px;
     box-shadow: 0 -14px 36px rgba(7, 16, 36, 0.22);
     overscroll-behavior: contain;
     will-change: height;
@@ -2289,7 +2291,7 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   .event-planner[data-sheet-mode="closed"] {
     overflow: hidden;
     padding-bottom: 0;
-    border-top-width: 0;
+    border-width: 0;
     border-color: transparent;
     box-shadow: none;
     pointer-events: none;
@@ -2482,7 +2484,7 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
 /* One continuous capsule, with a rounded moving selection and a quiet scrubber. */
 .bottom-nav {
   --nav-index: 1;
-  left: 50%; bottom: calc(12px + var(--safe-bottom)); width: min(calc(100% - 32px), 400px);
+  left: 50%; bottom: var(--nav-bottom-gap); width: min(calc(100% - 32px), 400px);
   padding: 6px 6px 16px; gap: 0; grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid #ffffffa3; border-radius: 999px; transform: translateX(-50%); isolation: isolate;
   background: #f9f9f9b8; box-shadow: 0 8px 28px #0002, inset 0 1px 1px #ffffffe6, inset 0 -1px 1px #ffffff70;
@@ -2681,6 +2683,13 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .settings-contact span:last-child { color: var(--accent-strong); font-size: .8rem; }
 .settings-group-content .install-card { border: 0; padding: 18px 0 0; margin: 0; box-shadow: none; background: transparent; }
 .settings-view .section-kicker { color: var(--muted); font-weight: 600; letter-spacing: .06em; }
+
+@media (max-height: 500px) and (pointer: coarse) {
+  .event-sheet-handle { height: 24px; }
+  .event-sheet-handle small { display: none; }
+  .event-tabs-sticky { position: static; }
+  .event-planner { scroll-padding-top: 32px; }
+}
 
 /* Shared glass treatment for login, signup, and the sign-in prompt. */
 .auth-screen {

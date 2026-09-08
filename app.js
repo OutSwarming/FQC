@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.5";
+const APP_VERSION = "2.25.6";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.6", "Rounded the mobile event popup and made its size follow the actual screen and navigation, with reachable long lists"],
   ["2.25.5", "Extended the mobile Home map beneath the floating navigation while keeping event details clear of it"],
   ["2.25.4", "Kept mobile lettering steady while photos and graphics respond to scroll focus"],
   ["2.25.3", "Added subtle desktop hover lift and gentle scroll-centered emphasis to mobile story tiles"],
@@ -735,6 +736,7 @@ function isIosDevice() {
 }
 const MOBILE_EVENT_SHEET_MODES = ["closed", "low", "medium", "high"];
 let mobileEventSheetMode = "medium";
+let removeMobileEventSheetLayout;
 
 function saveState() {
   sessionStorage.setItem("fqc:view", state.view);
@@ -943,6 +945,8 @@ function render() {
     return;
   }
   deferredMapRender = false;
+  removeMobileEventSheetLayout?.();
+  removeMobileEventSheetLayout = null;
   // Keep in-progress credentials in the DOM across live event/settings updates.
   // This snapshot lasts only for this render; passwords never enter storage.
   const authDraft = [...app.querySelectorAll("#email-auth-form input, #signup-security-form input")]
@@ -1388,8 +1392,8 @@ function getMobileEventSheetMetrics() {
   const explorer = document.querySelector(".event-explorer");
   const planner = document.querySelector(".event-planner");
   const dockClearance = planner ? parseFloat(getComputedStyle(planner).bottom) || 0 : 0;
-  const availableHeight = explorer ? explorer.getBoundingClientRect().height - dockClearance : Math.max(520, window.innerHeight - 160);
-  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: availableHeight * .84 };
+  const availableHeight = Math.max(0, explorer ? explorer.getBoundingClientRect().height - dockClearance : window.innerHeight - 160);
+  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: Math.max(0, availableHeight - 8) };
   const low = Math.min(190, Math.max(154, availableHeight * 0.24));
   const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
   const high = Math.max(medium + 112, availableHeight * 0.78);
@@ -1423,6 +1427,14 @@ function bindMobileEventSheet() {
   const intro = document.querySelector("#event-intro");
   if (!planner || !explorer || !handle || !intro || !isMobileEventSheetViewport()) return;
 
+  const syncDockClearance = () => {
+    const dock = document.querySelector('.bottom-nav');
+    if (!dock) return;
+    // Keep the safe-area part live in CSS even when only the dock's position
+    // changes (that does not trigger ResizeObserver).
+    explorer.style.setProperty('--event-dock-clearance', `calc(${dock.getBoundingClientRect().height + 8}px + var(--nav-bottom-gap))`);
+  };
+  syncDockClearance();
   setMobileEventSheetMode(mobileEventSheetMode, { immediate: true });
   let drag = null;
   let suppressHandleClick = false;
@@ -1626,8 +1638,31 @@ function bindMobileEventSheet() {
     }
   }, { passive: false });
 
-  const resizeSheet = () => setMobileEventSheetMode(mobileEventSheetMode, { immediate: true, preserveScroll: true });
-  window.addEventListener("resize", resizeSheet, { once: true });
+  let resizeFrame = 0;
+  const resizeSheet = () => {
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (!planner.isConnected || !isMobileEventSheetViewport()) return;
+      stopScrollMomentum();
+      syncDockClearance();
+      setMobileEventSheetMode(mobileEventSheetMode, { immediate: true, preserveScroll: true });
+    });
+  };
+  const layoutObserver = new ResizeObserver(resizeSheet);
+  layoutObserver.observe(explorer);
+  const dock = document.querySelector('.bottom-nav');
+  if (dock) layoutObserver.observe(dock);
+  window.addEventListener('resize', resizeSheet);
+  window.visualViewport?.addEventListener('resize', resizeSheet);
+  removeMobileEventSheetLayout = () => {
+    layoutObserver.disconnect();
+    window.removeEventListener('resize', resizeSheet);
+    window.visualViewport?.removeEventListener('resize', resizeSheet);
+    cancelAnimationFrame(resizeFrame);
+    cancelAnimationFrame(dragFrame);
+    stopScrollMomentum();
+  };
 }
 
 async function toggleRsvp(eventId) {
