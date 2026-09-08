@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.6";
+const APP_VERSION = "2.26.7";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.7", "Made the selected navigation bubble clearer in both themes and faded the event swipe hint during expansion"],
   ["2.26.6", "Disabled long-press selection on app surfaces and clarified Samsung browser appearance controls"],
   ["2.26.5", "Moved navigation out of the way during sheet drags and restored Android capsule dragging"],
   ["2.26.4", "Added a Chrome install option for Samsung Internet and tightened browser permissions and offline caching"],
@@ -1512,6 +1513,7 @@ function setMobileEventSheetMode(mode, options = {}) {
   mobileEventSheetMode = nextMode;
   explorer.style.removeProperty("--event-preview-fade");
   planner.style.removeProperty("--event-tabs-progress");
+  planner.style.setProperty("--event-hint-opacity", nextMode === "high" ? "0" : "1");
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
   explorer.dataset.dockHidden = String(nextMode === "high");
@@ -1650,6 +1652,7 @@ function bindMobileEventSheet() {
       dragFrame = requestAnimationFrame(() => {
         const expansion = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.medium) / (drag.metrics.high - drag.metrics.medium)));
         explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
+        planner.style.setProperty("--event-hint-opacity", String(Math.max(0, 1 - expansion / .6)));
         // Release the dock during expansion, before pointerup. Separate thresholds
         // prevent flicker when the finger pauses or reverses near the boundary.
         const hideThreshold = explorer.dataset.dockHidden === "true" ? .12 : .28;

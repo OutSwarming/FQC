@@ -918,9 +918,11 @@ test('event dock leaves and returns while the finger is still holding the sheet'
   await send('pointermove', Math.max(8, start.y - 220));
   await expect(page.locator('.event-planner')).toHaveClass(/event-sheet-dragging/);
   await expect(page.locator('.bottom-nav')).toBeHidden();
-  // Reverse without lifting: the navigation must return before release too.
+  await expect(handle.locator('small')).toHaveCSS('opacity', '0');
+  // Reverse without lifting: the navigation and hint must return before release too.
   await send('pointermove', start.y);
   await expect(page.locator('.bottom-nav')).toBeVisible();
+  await expect.poll(() => handle.locator('small').evaluate(el => Number(getComputedStyle(el).opacity))).toBeGreaterThan(.99);
   await send('pointerup', start.y);
   await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
 });
