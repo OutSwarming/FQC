@@ -459,13 +459,16 @@ test('map touch defaults cannot start the iOS loupe and taps still reach pins an
   await expect(email).toBeFocused();
 });
 
-test('story tiles gently grow at the scroll center and settle away without moving the layout', async ({ page }) => {
+test('mobile scroll focus animates images while text and layout remain untransformed', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  const tile = page.locator('.workshop-phase');
-  const scale = () => tile.evaluate(el => parseFloat(getComputedStyle(el).scale));
+  const tile = page.locator('.workshop-hardware');
+  const picture = tile.locator('figure img');
+  const scale = () => picture.evaluate(el => parseFloat(getComputedStyle(el).scale));
   const centerTile = () => tile.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
   await centerTile();
   await expect.poll(scale).toBeGreaterThan(1.0075);
+  await expect(tile).toHaveCSS('scale', 'none');
+  await expect(tile).toHaveCSS('translate', 'none');
   const layout = await tile.evaluate(el => ({ height: el.offsetHeight, top: el.offsetTop }));
   await page.evaluate(() => scrollBy({ top: innerHeight * .45, behavior: 'instant' }));
   await expect.poll(scale).toBeLessThan(1.006);
@@ -477,12 +480,24 @@ test('story tiles gently grow at the scroll center and settle away without movin
   await expect(page.locator('[data-phase-state="minus"]')).toHaveText('|1⟩');
   for (const card of await page.locator('.story-focus-tile').all()) {
     await card.evaluate(el => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+    await expect(card).toHaveCSS('scale', 'none');
+    await expect(card).toHaveCSS('translate', 'none');
+    // No scroll transform on text, or any ancestor containing that text.
+    expect(await card.evaluate(el => [...el.querySelectorAll('h2, p, summary, figcaption')].every(text => {
+      for (let ancestor = text; ancestor && el.contains(ancestor); ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (style.scale !== 'none' || style.translate !== 'none') return false;
+      }
+      return true;
+    }))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await centerTile();
   await expect(tile).toHaveCSS('scale', 'none');
   await expect(tile).toHaveCSS('translate', 'none');
+  await expect(picture).toHaveCSS('scale', 'none');
+  await expect(picture).toHaveCSS('translate', 'none');
   await nav(page, 'Home').click();
   await nav(page, 'Hackathon').click();
   await page.emulateMedia({ reducedMotion: 'no-preference' });

@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v315-story-tile-focus";
+const CACHE_NAME = "fqc-app-v316-crisp-mobile-story";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

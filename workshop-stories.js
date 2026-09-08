@@ -58,13 +58,12 @@ function bindTileFocus(root, reduced) {
     const enabled = touch.matches && !reduced.matches;
     const height = window.visualViewport?.height || innerHeight;
     const center = (window.visualViewport?.offsetTop || 0) + height / 2;
-    // Read every box before writing styles; scale around the center does not
-    // change this anchor. Undo our two-pixel lift to avoid scroll feedback.
+    // Read every box before writing styles. Mobile section bounds stay fixed;
+    // only images and graphics inside them receive the scroll transform.
     const strengths = tiles.map(tile => {
       if (!enabled) return 0;
       const box = tile.getBoundingClientRect();
-      const previous = Number(tile.style.getPropertyValue('--tile-focus')) || 0;
-      const distance = Math.abs((box.top + box.bottom) / 2 + previous * 2 - center);
+      const distance = Math.abs((box.top + box.bottom) / 2 - center);
       const proximity = Math.max(0, 1 - distance / Math.max(height * .65, tile.offsetHeight * .6));
       return proximity * proximity * (3 - 2 * proximity);
     });

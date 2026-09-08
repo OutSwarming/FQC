@@ -2960,14 +2960,17 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .resonance-note .resonance-scale { font-size: .57rem; color: var(--muted); margin: 0 0 9px; }
 
 .hack-reader { color: #f5f5f7; font-weight: 550; }
-/* Independent scale/translate keep the photo's press and entrance intact. */
-.story-focus-tile { scale: calc(1 + var(--tile-focus, 0) * .008); translate: 0 calc(var(--tile-focus, 0) * -2px); transform-origin: center; }
+/* Mobile text and its ancestors stay untransformed for stable rasterization. */
+.story-focus-tile { transform-origin: center; }
 .story-focus-tile.workshop-search { box-shadow: 0 calc(var(--tile-focus, 0) * 8px) calc(var(--tile-focus, 0) * 22px) rgb(0 0 0 / calc(var(--tile-focus, 0) * .1)); }
+@media (pointer: coarse) and (max-width: 900px) and (prefers-reduced-motion: no-preference) {
+ .story-focus-tile :is(figure img, .resonance-note svg, .hack-molecule, .grover-field canvas) { scale: calc(1 + var(--tile-focus, 0) * .008); translate: 0 calc(var(--tile-focus, 0) * -2px); transform-origin: center; }
+}
 @media (pointer: coarse) and (max-width: 680px) {
  .story-focus-tile:is(.workshop-phase, .hack-build-card) { box-shadow: 0 calc(var(--tile-focus, 0) * 8px) calc(var(--tile-focus, 0) * 22px) rgb(0 0 0 / calc(var(--tile-focus, 0) * .1)); }
 }
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
- .story-focus-tile { transition: scale 220ms ease-out, translate 220ms ease-out, box-shadow 220ms ease-out; }
+ .story-focus-tile { scale: 1; translate: 0 0; transition: scale 220ms ease-out, translate 220ms ease-out, box-shadow 220ms ease-out; }
  .story-focus-tile:hover { scale: 1.008; translate: 0 -2px; }
  .story-focus-tile.workshop-search:hover { box-shadow: 0 8px 22px rgb(0 0 0 / .1); }
  .story-focus-tile:hover .phase-experiment { box-shadow: 0 8px 22px rgb(0 0 0 / .1); }
