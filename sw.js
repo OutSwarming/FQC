@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v318-responsive-event-popup";
+const CACHE_NAME = "fqc-app-v319-event-sheet-over-dock";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

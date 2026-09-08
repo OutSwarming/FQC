@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.6";
+const APP_VERSION = "2.25.7";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.7", "Restored medium-height Home previews and kept navigation visible until the event list expands for reading"],
   ["2.25.6", "Rounded the mobile event popup and made its size follow the actual screen and navigation, with reachable long lists"],
   ["2.25.5", "Extended the mobile Home map beneath the floating navigation while keeping event details clear of it"],
   ["2.25.4", "Kept mobile lettering steady while photos and graphics respond to scroll focus"],
@@ -909,6 +910,7 @@ async function checkForUpdates() {
 function setView(view, { history = true } = {}) {
   if (view === "settings" && state.view !== "settings") state.settingsReturnView = state.view;
   if (state.view !== view) viewScroll.set(state.view, window.scrollY);
+  if (view === "home") mobileEventSheetMode = "medium";
   state.view = allowedViews.has(view) ? view : "home";
   if (history) {
     const url = new URL(window.location.href);
@@ -1378,7 +1380,7 @@ function selectEvent(eventId, options = {}) {
   }
 
   if (options.revealSheet === true && isMobileEventSheetViewport()) {
-    setMobileEventSheetMode("medium");
+    setMobileEventSheetMode("low");
   }
 
   if (options.focusMap !== false) focusSelectedEvent();
@@ -1390,14 +1392,15 @@ function isMobileEventSheetViewport() {
 
 function getMobileEventSheetMetrics() {
   const explorer = document.querySelector(".event-explorer");
-  const planner = document.querySelector(".event-planner");
-  const dockClearance = planner ? parseFloat(getComputedStyle(planner).bottom) || 0 : 0;
+  const dock = document.querySelector('.bottom-nav');
+  const dockClearance = dock ? dock.getBoundingClientRect().height + (parseFloat(getComputedStyle(dock).bottom) || 0) + 8 : 96;
   const availableHeight = Math.max(0, explorer ? explorer.getBoundingClientRect().height - dockClearance : window.innerHeight - 160);
-  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: Math.max(0, availableHeight - 8) };
+  // Small and medium float above the dock; only the reading state fills it.
+  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: Math.max(0, availableHeight - 8) + dockClearance };
   const low = Math.min(190, Math.max(154, availableHeight * 0.24));
   const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
   const high = Math.max(medium + 112, availableHeight * 0.78);
-  return { closed: 0, low, medium, high: Math.min(high, availableHeight - 92) };
+  return { closed: 0, low, medium, high: Math.min(high, availableHeight - 92) + dockClearance };
 }
 
 function setMobileEventSheetMode(mode, options = {}) {
@@ -1409,6 +1412,7 @@ function setMobileEventSheetMode(mode, options = {}) {
   const nextMode = MOBILE_EVENT_SHEET_MODES.includes(mode) ? mode : "medium";
   const metrics = getMobileEventSheetMetrics();
   mobileEventSheetMode = nextMode;
+  planner.style.removeProperty("--event-sheet-bottom");
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
@@ -1493,6 +1497,7 @@ function bindMobileEventSheet() {
       lastTime: performance.now(),
       velocity: 0,
       metrics,
+      dockClearance: parseFloat(getComputedStyle(document.querySelector(".bottom-nav")).bottom) + document.querySelector(".bottom-nav").getBoundingClientRect().height + 8,
       moved: false,
       resizing: false,
       modeAtStart: mobileEventSheetMode,
@@ -1544,6 +1549,8 @@ function bindMobileEventSheet() {
     pendingDragHeight = nextHeight;
     if (!dragFrame) {
       dragFrame = requestAnimationFrame(() => {
+        const expansion = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.medium) / (drag.metrics.high - drag.metrics.medium)));
+        planner.style.setProperty("--event-sheet-bottom", `${drag.dockClearance * (1 - expansion)}px`);
         planner.style.height = `${Math.round(pendingDragHeight)}px`;
         dragFrame = null;
       });

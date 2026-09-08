@@ -419,14 +419,14 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   await visibleEvent.dispatchEvent("pointerup", { button: 0, pointerId: 11, pointerType: "touch", clientY: 760 });
   await expect(planner).toHaveAttribute("data-sheet-mode", "low");
   await page.locator('.event-map-pin[data-location-id="malachowsky-hall"]').click();
-  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect(planner).toHaveAttribute("data-sheet-mode", "low");
   await expect(intro.getByRole("heading", { name: "GBM 2" })).toBeVisible();
 
   await page.locator("#event-map").click({ position: { x: 190, y: 180 } });
   await expect(planner).toHaveAttribute("data-sheet-mode", "closed");
   await expect(planner).toHaveCSS("height", "0px");
   await page.locator('.event-map-pin[data-location-id="larsen-hall"]').click();
-  await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
+  await expect(planner).toHaveAttribute("data-sheet-mode", "low");
   await expect(intro.getByRole("heading", { name: "Workshop 3: Quirk Circuit Simulator" })).toBeVisible();
 });
 

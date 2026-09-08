@@ -2257,11 +2257,12 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     position: absolute;
     z-index: 600;
     right: 0;
-    bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom)));
+    --event-sheet-bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom)));
+    bottom: var(--event-sheet-bottom);
     left: 0;
     height: 53%;
     overflow: hidden;
-    max-height: calc(100% - var(--event-dock-clearance, calc(96px + var(--safe-bottom))) - 8px);
+    max-height: calc(100% - var(--event-sheet-bottom) - 8px);
     padding: 0 14px 24px;
     border: 1px solid var(--line);
     border-radius: 22px;
@@ -2270,12 +2271,14 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     overscroll-behavior: contain;
     will-change: height;
     transition:
+      bottom 380ms cubic-bezier(0.2, 0.9, 0.25, 1),
       height 380ms cubic-bezier(0.2, 0.9, 0.25, 1),
       border-color 180ms ease,
       box-shadow 240ms ease;
   }
 
   .event-planner.event-sheet-dragging { transition: none; }
+  body:has(.events-home .event-explorer[data-sheet-mode="high"]) .bottom-nav { visibility: hidden; pointer-events: none; }
 
   .event-planner[data-sheet-mode="low"],
   .event-planner[data-sheet-mode="medium"] {
@@ -2283,6 +2286,10 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   }
 
   .event-planner[data-sheet-mode="high"] {
+    --event-sheet-bottom: 0px;
+    padding-bottom: calc(24px + var(--safe-bottom));
+    border-radius: 22px 22px 0 0;
+    border-bottom: 0;
     overflow-y: auto;
     overscroll-behavior-y: contain;
     touch-action: none;
@@ -2319,7 +2326,7 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     gap: 2px;
     border: 0;
     color: var(--muted);
-    background: color-mix(in srgb, var(--surface) 96%, transparent);
+    background: var(--surface);
     cursor: grab;
     touch-action: none;
   }

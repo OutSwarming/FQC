@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
-const nav = (page, name) => page.locator('.bottom-nav').getByRole('button', { name, exact: true });
+const nav = (page, name) => page.locator('.bottom-nav').getByRole('button', { name, exact: true, includeHidden: true });
+const goTab = async (page, name) => {
+  if (!await nav(page, name).isVisible() && await page.locator('.event-planner').count()) {
+    const point = await mapPoint(page);
+    await page.touchscreen.tap(point.x, point.y);
+  }
+  await nav(page, name).click();
+};
 const zoom = page => page.evaluate(() => window.__FQC_MAP__.getZoom());
 const mapPoint = async page => {
   const box = await page.locator('#event-map').boundingBox();
@@ -29,7 +36,7 @@ test('clear controls, round navigation, all screens and appearance choices fit',
   await expect(page.locator('.hack-hero h2')).toHaveCSS('color', 'rgb(245, 245, 247)');
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-landing.png` });
   for (const name of ['Home', 'Check In', 'Profile', 'Hackathon']) {
-    await nav(page, name).click();
+    await goTab(page, name);
     await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
@@ -38,7 +45,7 @@ test('clear controls, round navigation, all screens and appearance choices fit',
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-settings.png` });
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(nav(page, 'Hackathon')).toHaveAttribute('aria-current', 'page');
-  await nav(page, 'Profile').click();
+  await goTab(page, 'Profile');
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-profile.png` });
 });
@@ -106,7 +113,7 @@ test('appearance follows the device and explicit preference survives reload', as
 
 test('app gestures keep every screen at normal size and form focus does not zoom', async ({ page }) => {
   for (const name of ['Hackathon', 'Home', 'Check In', 'Profile']) {
-    await nav(page, name).click();
+    await goTab(page, name);
     const result = await page.evaluate(() => {
       const cancellations = ['gesturestart', 'gesturechange', 'gestureend'].map(name => {
         const event = new Event(name, { bubbles: true, cancelable: true });
@@ -149,7 +156,7 @@ test('page pinch and double tap leave app scale fixed while one-finger scrolling
 });
 
 test('double tap zooms once and zoom buttons work without losing pin details', async ({ page }) => {
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const center = await page.evaluate(() => { const c = window.__FQC_MAP__.getCenter(); return { lat: c.lat, lng: c.lng }; });
@@ -174,7 +181,7 @@ test('double tap zooms once and zoom buttons work without losing pin details', a
 });
 
 test('mouse double click zooms in and shift double click zooms out', async ({ page }) => {
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const p = await mapPoint(page);
@@ -188,7 +195,7 @@ test('mouse double click zooms in and shift double click zooms out', async ({ pa
 
 test('one-finger double-tap drag zooms both ways and cancellation restores panning', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Raw touch sequences use Chromium device input; native double taps are tested in WebKit above.');
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
   const p = await mapPoint(page);
@@ -210,7 +217,7 @@ test('one-finger double-tap drag zooms both ways and cancellation restores panni
 
 test('pinch zoom remains available', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Pinch injected through Chromium device input.');
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
   const p = await mapPoint(page);
@@ -227,7 +234,7 @@ test('rapid reversing pinches keep loaded map tiles visible through release and 
     await new Promise(resolve => setTimeout(resolve, 120));
     await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') });
   });
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
   await expect.poll(() => page.locator('.leaflet-tile-loaded').count()).toBeGreaterThan(0);
@@ -276,7 +283,7 @@ test('rapid reversing pinches keep loaded map tiles visible through release and 
 
 
 test('single-form signup survives live updates and fits the phone', async ({ page }, info) => {
-  await nav(page, 'Profile').click();
+  await goTab(page, 'Profile');
   await page.locator('#auth-mode-create').click();
   const dialog = page.getByRole('dialog', { name: 'Create your FQC account' });
   await dialog.getByLabel('UF email', { exact: true }).fill('q@ufl.edu');
@@ -299,10 +306,10 @@ test('navigation keeps the same bottom inset after scrolling, tab changes, and v
   await page.evaluate(() => document.documentElement.style.setProperty('--safe-bottom', '34px'));
   for (const height of [size.height, Math.max(300, size.height - 100), size.height]) {
     await page.setViewportSize({ width: size.width, height });
-    await nav(page, 'Hackathon').click();
+    await goTab(page, 'Hackathon');
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     for (const name of ['Profile', 'Home', 'Check In', 'Home', 'Hackathon']) {
-      await nav(page, name).click();
+      await goTab(page, name);
       await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
       const position = await page.locator('.bottom-nav').evaluate(element => {
         const box = element.getBoundingClientRect();
@@ -319,14 +326,14 @@ test('navigation keeps the same bottom inset after scrolling, tab changes, and v
 
 test.describe('event popup with a deterministic long list', () => {
 test.use({ serviceWorkers: 'block' });
-test('rounded event popup resizes repeatedly and the last item in a long list remains tappable', async ({ page }, info) => {
+test('original event popup covers the dock, resizes, and keeps the last event tappable', async ({ page }, info) => {
   const header = '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"';
   const rows = Array.from({ length: 16 }, (_, i) => `"Archived quantum workshop ${i + 1}","2020-03-${String(i + 1).padStart(2, '0')}","6:00 PM","Reitz Student Union","2315","A hands-on quantum computing workshop with circuits, discussion and exercises for members working together.","Yes","archive-${i + 1}"`);
   await page.route('https://docs.google.com/spreadsheets/**', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
     ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
     : route.fallback());
   await page.reload();
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   const planner = page.locator('.event-planner');
   await page.locator('#event-sheet-handle').tap();
   await page.getByRole('tab', { name: /^Past/ }).tap();
@@ -338,15 +345,15 @@ test('rounded event popup resizes repeatedly and the last item in a long list re
   for (const height of [original.height, Math.max(300, original.height - 100), original.height, Math.max(300, original.height - 60)]) {
     await page.setViewportSize({ width: original.width, height });
     await expect.poll(() => planner.evaluate(el => {
-      const dock = document.querySelector('.bottom-nav').getBoundingClientRect();
-      return Math.round(dock.top - el.getBoundingClientRect().bottom);
-    })).toBe(8);
+      return Math.round(innerHeight - el.getBoundingClientRect().bottom);
+    })).toBe(0);
+    await expect(page.locator('.bottom-nav')).toBeHidden();
     await expect.poll(() => planner.evaluate(el => {
       const map = document.querySelector('#event-map').getBoundingClientRect();
       return el.getBoundingClientRect().top >= map.top;
     })).toBe(true);
-    await expect(planner).toHaveCSS('border-bottom-left-radius', '22px');
-    await expect(planner).toHaveCSS('border-bottom-right-radius', '22px');
+    await expect(planner).toHaveCSS('border-bottom-left-radius', '0px');
+    await expect(planner).toHaveCSS('border-bottom-right-radius', '0px');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
   }
   await page.setViewportSize(original);
@@ -371,46 +378,59 @@ test('rounded event popup resizes repeatedly and the last item in a long list re
   await page.waitForTimeout(300); // Let the swipe's accidental-click guard expire.
   await last.tap();
   await expect(page.locator('.event-intro h2')).toHaveText('Archived quantum workshop 1');
-  await page.screenshot({ path: `test-results/${info.project.name}-rounded-popup.png` });
+  await page.screenshot({ path: `test-results/${info.project.name}-original-popup.png` });
 });
 });
 
-test('Home map fills below the dock while event sheets and navigation keep their clearance', async ({ page }) => {
+test('Home opens medium with navigation, swipes smaller and larger, and hides the dock only when large', async ({ page }) => {
   const original = page.viewportSize();
+  const planner = page.locator('.event-planner');
+  const handle = page.locator('#event-sheet-handle');
+  const swipe = async direction => {
+    await page.waitForTimeout(450);
+    const box = await handle.boundingBox();
+    const input = { button: 0, pointerId: 77, pointerType: 'touch', clientY: box.y + 12 };
+    await handle.dispatchEvent('pointerdown', input);
+    await handle.dispatchEvent('pointermove', { ...input, clientY: input.clientY + direction * 300 });
+    await handle.dispatchEvent('pointerup', { ...input, clientY: input.clientY + direction * 300 });
+  };
   for (const safe of [0, 34]) {
+    await goTab(page, 'Profile');
     await page.evaluate(value => document.documentElement.style.setProperty('--safe-bottom', `${value}px`), safe);
-    await nav(page, 'Home').click();
+    await goTab(page, 'Home');
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
     for (const height of [original.height, Math.max(300, original.height - 90)]) {
       await page.setViewportSize({ width: original.width, height });
       await expect.poll(() => page.locator('#event-map').evaluate(el => Math.abs(el.getBoundingClientRect().bottom - innerHeight))).toBeLessThan(1);
-      const geometry = await page.evaluate(() => {
-        const nav = document.querySelector('.bottom-nav').getBoundingClientRect();
-        const map = document.querySelector('#event-map').getBoundingClientRect();
-        const sheet = document.querySelector('.event-planner').getBoundingClientRect();
-        return { gap: innerHeight-nav.bottom, clearance:nav.top-sheet.bottom, left:nav.left-map.left, right:map.right-nav.right, overflow:document.documentElement.scrollHeight>innerHeight+1 };
-      });
-      expect(geometry.gap).toBeCloseTo(12 + safe, 0);
-      expect(geometry.clearance).toBeGreaterThanOrEqual(1);
-      expect(geometry.left).toBeGreaterThan(0);
-      expect(geometry.right).toBeGreaterThan(0);
-      expect(geometry.overflow).toBe(false);
+      await expect(page.locator('.bottom-nav')).toBeVisible();
+      await expect.poll(() => planner.evaluate(el => Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().top - el.getBoundingClientRect().bottom))).toBe(8);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
     }
     await page.setViewportSize(original);
+    await swipe(1);
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
+    await expect(page.locator('.bottom-nav')).toBeVisible();
+    await swipe(-1);
+    if (await planner.getAttribute('data-sheet-mode') === 'medium') await swipe(-1);
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'high');
+    await expect(page.locator('.bottom-nav')).toBeHidden();
+    await expect.poll(() => planner.evaluate(el => Math.round(innerHeight - el.getBoundingClientRect().bottom))).toBe(0);
+    await page.waitForTimeout(300);
+    await handle.tap();
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
+    await expect(page.locator('.bottom-nav')).toBeVisible();
+    await expect.poll(() => planner.evaluate(el => Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().top - el.getBoundingClientRect().bottom))).toBe(8);
     const point = await mapPoint(page);
     await page.touchscreen.tap(point.x, point.y);
-    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'closed');
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'closed');
     await page.locator('.event-map-pin').first().tap();
-    await expect(page.locator('.event-intro h2')).toContainText('Quantum Workshop');
-    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
-    await page.locator('#event-sheet-handle').tap();
-    await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'high');
-    await nav(page, 'Profile').click();
-    await expect(nav(page, 'Profile')).toHaveAttribute('aria-current', 'page');
+    await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
+    await expect(page.locator('.bottom-nav')).toBeVisible();
   }
 });
 
 test('pin highlight clears on tap-away and stays cleared through live refresh', async ({ page }) => {
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   // Close the event sheet to expose the center pin on shorter phones.
   const background = await mapPoint(page);
   await page.touchscreen.tap(background.x, background.y);
@@ -439,7 +459,7 @@ test('pin highlight clears on tap-away and stays cleared through live refresh', 
 
 test('quick zoom renders fractional frames and preserves the map center during a live update', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', 'Raw continuous touch input uses Chromium device input.');
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.evaluate(() => {
     const map = window.__FQC_MAP__;
     map.setZoom(16, { animate: false });
@@ -494,8 +514,8 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
   }
   await expect.poll(() => page.evaluate(() => window.__photoEntrances.length)).toBe(4);
   await page.waitForTimeout(400);
-  await nav(page, 'Home').click();
-  await nav(page, 'Hackathon').click();
+  await goTab(page, 'Home');
+  await goTab(page, 'Hackathon');
   await page.locator('.workshop-outlook').scrollIntoViewIfNeeded();
   await page.waitForTimeout(400);
   expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(4);
@@ -515,7 +535,7 @@ test('photo entrances happen once, respect reduced motion, and leave the invitat
 });
 
 test('map touch defaults cannot start the iOS loupe and taps still reach pins and controls once', async ({ page }) => {
-  await nav(page, 'Home').click();
+  await goTab(page, 'Home');
   await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
   await page.evaluate(() => {
     window.__touchDefaults = [];
@@ -543,13 +563,13 @@ test('map touch defaults cannot start the iOS loupe and taps still reach pins an
   await page.getByRole('button', { name: 'Zoom out', exact: true }).tap();
   await expect.poll(() => zoom(page)).toBeCloseTo(before, 5);
   // The guard must be removed with the old map and rebound to the next one.
-  await nav(page, 'Hackathon').click();
-  await nav(page, 'Home').click();
+  await goTab(page, 'Hackathon');
+  await goTab(page, 'Home');
   const again = await mapPoint(page);
   await page.touchscreen.tap(again.x, again.y);
   expect(await page.evaluate(() => window.__touchDefaults.every(Boolean))).toBe(true);
   // Editable controls elsewhere keep their native selection and focus behavior.
-  await nav(page, 'Profile').click();
+  await goTab(page, 'Profile');
   const email = page.locator('#auth-identifier');
   await email.tap();
   await email.fill('member@ufl.edu');
@@ -596,8 +616,8 @@ test('mobile scroll focus animates images while text and layout remain untransfo
   await expect(tile).toHaveCSS('translate', 'none');
   await expect(picture).toHaveCSS('scale', 'none');
   await expect(picture).toHaveCSS('translate', 'none');
-  await nav(page, 'Home').click();
-  await nav(page, 'Hackathon').click();
+  await goTab(page, 'Home');
+  await goTab(page, 'Hackathon');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await centerTile();
   await expect.poll(scale).toBeGreaterThan(1.0075);
