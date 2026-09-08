@@ -22,9 +22,9 @@ export function rateLimitRules(name, request) {
   const ip = requestNetwork(request);
   const uid = request.auth?.uid;
   const login = ['signInWithUsername', 'requestAccountPasswordReset', 'beginPasskeySignIn', 'finishPasskeySignIn'].includes(name);
-  const rules = [{ subject: `ip:${ip}`, limit: login ? 240 : 1800, windowMs: 600000 }];
-  if (uid) rules.push({ subject: `uid:${uid}`, limit: 240, windowMs: 600000 });
-  if (login && request.data?.identifier) rules.push({ subject: `login:${ip}:${String(request.data.identifier).trim().toLowerCase().slice(0,180)}`, limit: 12, windowMs: 600000 });
+  const rules = [{ subject: `ip:${ip}`, limit: login ? 2400 : 24000, windowMs: 600000 }];
+  if (uid) rules.push({ subject: `uid:${uid}`, limit: 1200, windowMs: 600000 });
+  if (login && request.data?.identifier) rules.push({ subject: `login:${ip}:${String(request.data.identifier).trim().toLowerCase().slice(0,180)}`, limit: 30, windowMs: 600000 });
   return rules;
 }
 

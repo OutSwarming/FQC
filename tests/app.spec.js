@@ -477,6 +477,7 @@ test("calendar selects an event and Home reload returns to the next upcoming eve
 });
 
 test("asks signed-out visitors to log in or create an account before RSVP", async ({ page }) => {
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
   const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
   await speakerCard.locator("[data-rsvp]").click();
   await expect(page.getByRole("heading", { name: /RSVP to IonQ Quantum Networking/i })).toBeVisible();
@@ -489,6 +490,7 @@ test("asks signed-out visitors to log in or create an account before RSVP", asyn
 });
 
 test("returns from login and automatically finishes the pending RSVP", async ({ page }) => {
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
   const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
   await speakerCard.locator("[data-rsvp]").click();
   await page.getByRole("button", { name: "Log In", exact: true }).click();
@@ -499,6 +501,7 @@ test("returns from login and automatically finishes the pending RSVP", async ({ 
 });
 
 test("saves a signed-in RSVP from the unified home", async ({ page }) => {
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({ uid: "rsvp-member", displayName: "Riley", username: "riley", email: "riley@ufl.edu", role: "member" }));
   const speakerCard = page.locator('[data-event-card="fqc-2026-03-03-ionq"]');
   await speakerCard.locator("[data-rsvp]").click();
@@ -506,6 +509,10 @@ test("saves a signed-in RSVP from the unified home", async ({ page }) => {
   await expect(page.locator("#action-feedback")).toContainText("RSVP confirmed");
 
   await page.reload();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false });
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "rsvp-member", displayName: "Riley", username: "riley", email: "riley@ufl.edu", role: "member" });
+  });
   await expect(page.locator('[data-event-card="fqc-2026-03-03-ionq"] [data-rsvp]')).toHaveText("Going");
 });
 
@@ -1029,7 +1036,7 @@ test("forgot password accepts a username or UF email", async ({ page }) => {
   await expect(page.getByText("If an FQC account matches that, a link to set a password is on its way to the UF inbox.")).toBeVisible();
 });
 
-test("any officer can make a member an officer but cannot demote or remove one", async ({ page }) => {
+test("ordinary officers can view members but cannot grant or remove officer access", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.setMembers([
@@ -1054,19 +1061,11 @@ test("any officer can make a member an officer but cannot demote or remove one",
   await page.getByRole("button", { name: /Open Jordan/ }).click();
   const profile = page.locator(".member-profile-modal");
   await expect(profile.getByRole("heading", { name: "Jordan" })).toBeVisible();
-  // A plain officer promotes, but cannot demote or remove.
   await expect(profile.getByRole("button", { name: "Remove Member" })).toHaveCount(0);
-  await expect(profile.locator('option[value="member"]')).toHaveAttribute("disabled", "");
-  await profile.locator("select").selectOption("officer");
-  await profile.getByRole("button", { name: "Save role" }).click();
-  await expect(page.locator("#action-feedback")).toContainText("Member role updated.");
-  await profile.getByRole("button", { name: "Close member profile" }).click();
+  await expect(profile.getByRole("button", { name: "Save role" })).toHaveCount(0);
+  await expect(profile.locator("select")).toHaveCount(0);
+  await expect(profile).toContainText("Only the President or Treasurer can grant or remove officer access.");
 
-  // Their own row offers nothing to change.
-  await page.getByRole("button", { name: /Open Morgan/ }).click();
-  await expect(profile.locator("select")).toBeDisabled();
-  await expect(profile.getByRole("button", { name: "Save role" })).toBeDisabled();
-  await expect(profile).toContainText("You cannot change your own role.");
 });
 
 test("the Treasurer can add and remove ordinary officers while leadership stays protected", async ({ page }) => {
@@ -1681,4 +1680,46 @@ test('creating an account finishes the pending event check-in without a second a
   await expect(page.locator('[data-event-checkin]').first()).toBeDisabled();
   await expect(page.locator('[data-screen="home"]')).toBeVisible();
   await expect(page.locator('[data-screen="checkin"]')).toHaveCount(0);
+});
+
+
+test("offline check-in persists the tap and confirms once reconnected", async ({page,context}) => {
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({uid:"offline-ui",displayName:"Offline Member",role:"member"}));
+  await page.getByRole("tab",{name:"List",exact:true}).click();
+  await context.setOffline(true);
+  await page.locator('[data-event-card="fqc-2026-03-03-ionq"] [data-event-checkin]').click();
+  await expect(page.locator('#action-feedback')).toContainText('Saved on this device');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fqc:outbox:offline-ui')||'[]').length)).toBe(1);
+  await context.setOffline(false);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fqc:outbox:offline-ui')||'[]').length)).toBe(0);
+  await expect(page.locator('[data-event-checkin="fqc-2026-03-03-ionq"]').first()).toHaveText('Checked in');
+});
+
+test("offline RSVP stays with its account and retries after reconnection", async ({page,context}) => {
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.setCheckIn({open:false});
+    window.__FQC_AUTH_TEST_API__.signInAs({uid:"offline-rsvp",displayName:"Riley",role:"member"});
+  });
+  await context.setOffline(true);
+  const action=page.locator('[data-event-card="fqc-2026-03-03-ionq"] [data-rsvp]');
+  await action.click();
+  await expect(action).toContainText('Saved');
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({uid:"different-member",displayName:"Other",role:"member"}));
+  await expect(action).toHaveText('RSVP');
+  await context.setOffline(false);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fqc:outbox:offline-rsvp')||'[]').length)).toBe(1);
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({uid:"offline-rsvp",displayName:"Riley",role:"member"}));
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(action).toHaveText('Going');
+});
+
+test("officer demotion immediately removes private screens in the open app", async ({page}) => {
+  await navButton(page,"Profile").click();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({uid:"demoted-ui",displayName:"Morgan",role:"officer"}));
+  await expect(page.getByRole('heading',{name:'Your Officer Toolkit'})).toBeVisible();
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.signInAs({uid:"demoted-ui",displayName:"Morgan",role:"member"}));
+  await expect(page.getByRole('heading',{name:'Your Officer Toolkit'})).toHaveCount(0);
+  await expect(page.locator('[data-officer-event]')).toHaveCount(0);
+  await page.getByRole('button',{name:'Open settings'}).click();
+  await expect(page.locator('.officer-settings-group')).toHaveCount(0);
 });

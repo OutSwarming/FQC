@@ -142,3 +142,14 @@ test("hackathon interest rejects incomplete accounts and forged records", async 
   });
   await assertFails(getDoc(doc(officer, "users", "officer-1")));
 });
+
+
+test("RSVP records, offline permissions, and nonpublic settings cannot be read or forged directly", async () => {
+  for (const context of [testEnvironment.unauthenticatedContext(),testEnvironment.authenticatedContext('member-1'),testEnvironment.authenticatedContext('officer-1')]) {
+    for (const path of ['events/gbm-1/rsvps/member-2','users/member-1/eventRsvps/gbm-1','offlineCheckInPermits/member-1_gbm-1','rsvpSheetQueue/member-1_gbm-1','settings/private-future-setting']) {
+      const ref=doc(context.firestore(),path);
+      await assertFails(getDoc(ref));
+      await assertFails(setDoc(ref,{uid:'member-1',going:true}));
+    }
+  }
+});

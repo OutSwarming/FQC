@@ -24,7 +24,7 @@ test("Firebase onboarding, attendance, and resilient 10K export", { skip: !enabl
     });
     const credential = await response.json();
     assert.ok(credential.localId, JSON.stringify(credential));
-    const request = { auth: { uid: credential.localId, token: { email, auth_time: Math.floor(Date.now() / 1000) } }, data: {} };
+    const request = { auth: { uid: credential.localId, token: { email, auth_time: Math.floor(Date.now() / 1000) } }, data: {eventId:"burst-event"} };
     const profile = await finalizeAccount.run(request);
     assert.equal(profile.role, "member");
     assert.equal(profile.username, "");

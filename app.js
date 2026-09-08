@@ -1,3 +1,4 @@
+import { pendingMemberActions, observeMemberActions, prepareOfflineAttendance, loadMyRsvps } from "./firebase-client.js";
 import { chooseSheetDestination } from "./sheet-gesture.js";
 import { renderWorkshopStories, bindWorkshopStories } from "./workshop-stories.js";
 import { bindMapQuickZoom } from "./map-gestures.js";
@@ -36,9 +37,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.27.0";
+const APP_VERSION = "2.28.0";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.28.0", "Private RSVPs, immediate officer access changes, and durable attendance through connection drops"],
   ["2.27.0", "Protected private club records, checked current officer access, and strengthened sign-in abuse protection"],
   ["2.26.14", "Streamlined officer events and Settings with focused sections and preserved drafts"],
   ["2.26.13", "Recorded attendance directly from the event Check In button"],
@@ -243,7 +245,7 @@ const state = {
   leaderboardLoaded: false,
   leaderboardLoading: false,
   leaderboardError: "",
-  rsvps: readJson("fqc:rsvps", [])
+  rsvps: []
 };
 
 const fallbackLocations = {
@@ -683,7 +685,8 @@ function saveState() {
   localStorage.setItem("fqc:calendar-month", state.calendarMonth);
   localStorage.setItem("fqc:selected-event", state.selectedEventId);
   localStorage.setItem("fqc:name", state.memberName);
-  localStorage.setItem("fqc:rsvps", JSON.stringify(state.rsvps));
+  localStorage.removeItem("fqc:rsvps");
+  if(state.authUser?.uid)localStorage.setItem(`fqc:rsvps:${state.authUser.uid}`, JSON.stringify(state.rsvps));
 }
 
 function getEvent(eventId) {
@@ -1187,6 +1190,8 @@ function isEventCheckInOpen(eventId) {
 
 function renderEventAction(event, { compact = false, past = isPastEvent(event) } = {}) {
   const buttonClass = compact ? "event-rsvp-mini" : "primary-button";
+  const queued=pendingMemberActions().find(entry=>entry.eventId===event.id && entry.type==='checkin');
+  if(queued)return `<span class="${buttonClass} pending-member-action" role="status">${queued.status==='attention'?'Check with an officer':'Saved · waiting to sync'}</span>`;
   if (isEventCheckInOpen(event.id)) {
     const checkedIn = state.checkedInEvents.includes(event.id);
     const pending = pendingCheckIns.has(`${state.authUser?.uid}:${event.id}`);
@@ -1194,7 +1199,10 @@ function renderEventAction(event, { compact = false, past = isPastEvent(event) }
   }
   if (past) return `<span class="${compact ? "event-past-label" : "event-detail-past-label"}">${compact ? "Past" : "Past event"}</span>`;
   const going = state.rsvps.includes(event.id);
-  return `<button class="${buttonClass}${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${going ? "Going" : "RSVP"}</button>`;
+  const rsvpAction=pendingMemberActions().find(entry=>entry.eventId===event.id&&entry.type==='rsvp');
+  const waiting=rsvpAction?.status==='pending';
+  const needsRetry=rsvpAction?.status==='attention';
+  return `<button class="${buttonClass}${going ? " going" : ""}" type="button" data-rsvp="${event.id}" aria-label="${going ? "Cancel RSVP for" : "RSVP for"} ${escapeHtml(event.title)}">${needsRetry ? (rsvpAction.going ? "Retry RSVP" : "Retry cancellation") : waiting ? "Saved · waiting to sync" : going ? "Going" : "RSVP"}</button>`;
 }
 
 const pendingCheckIns = new Set();
@@ -1238,6 +1246,7 @@ async function openEventCheckIn(eventId) {
     const result = await recordCheckIn(location, eventId);
     if (state.authUser?.uid !== uid) return;
     if (result?.eventId !== eventId) throw new Error("We couldn’t confirm attendance. Please try again.");
+    if(result.pending){render();showActionFeedback("working","Saved on this device — attendance will sync when you reconnect.");return;}
     if (!state.checkedInEvents.includes(eventId)) state.checkedInEvents = [...state.checkedInEvents, eventId];
     state.memberPoints = Number(result.points) || state.checkedInEvents.length;
     if (result.leaderboard) {
@@ -1782,7 +1791,9 @@ function bindMobileEventSheet() {
   };
 }
 
+let rsvpChangeVersion=0;
 async function toggleRsvp(eventId) {
+  rsvpChangeVersion++;
   if (!state.loggedIn) {
     state.pendingIntent = { type: "rsvp", eventId };
     state.authPromptOpen = true;
@@ -1791,8 +1802,10 @@ async function toggleRsvp(eventId) {
     render();
     return;
   }
+  const rsvpUid=state.authUser?.uid;
   const wasGoing = state.rsvps.includes(eventId);
-  const going = !wasGoing;
+  const failed=pendingMemberActions().find(entry=>entry.eventId===eventId&&entry.type==='rsvp'&&entry.status==='attention');
+  const going = failed ? failed.going : !wasGoing;
   state.rsvps = going ? [...state.rsvps, eventId] : state.rsvps.filter((id) => id !== eventId);
   saveState();
 
@@ -1805,7 +1818,9 @@ async function toggleRsvp(eventId) {
   });
   showActionFeedback("working", going ? "Saving your RSVP…" : "Updating your RSVP…");
   try {
-    await updateEventRsvp(eventId, going);
+    const result=await updateEventRsvp(eventId, going);
+    if(state.authUser?.uid!==rsvpUid)return;
+    if(result.pending){render();showActionFeedback("working","RSVP saved on this device — waiting to reconnect.");return;}
     if (state.memberRole === "officer") state.officerOperationsLoaded = false;
     document.querySelectorAll(`[data-rsvp="${eventId}"]`).forEach((button) => {
       button.classList.remove("is-working");
@@ -1815,6 +1830,7 @@ async function toggleRsvp(eventId) {
     });
     showActionFeedback("success", going ? "RSVP confirmed — you’re going." : "RSVP removed.");
   } catch (error) {
+    if(state.authUser?.uid!==rsvpUid)return;
     state.rsvps = wasGoing ? [...new Set([...state.rsvps, eventId])] : state.rsvps.filter((id) => id !== eventId);
     state.authError = readableAuthError(error);
     saveState();
@@ -2053,7 +2069,9 @@ function profileRoleLabel(profile) {
   return profile.role === "officer" ? profile.officerTitle || "Officer" : "Member";
 }
 
+let officerAccessVersion=0;
 function applyMemberProfile(profile) {
+  if(state.memberRole!==(profile.role==='officer'?'officer':'member') || state.canManageOfficers!==(profile.canManageOfficers===true))officerAccessVersion++;
   state.memberName = profile.displayName || "FQC Member";
   state.memberUsername = profile.username || "";
   state.memberEmail = profile.email || "";
@@ -2066,6 +2084,7 @@ function applyMemberProfile(profile) {
   state.checkedInEvents = Array.isArray(profile.checkedInEvents) ? profile.checkedInEvents : [];
   state.memberPoints = state.checkedInEvents.length;
   if (state.memberRole !== "officer") {
+    state.members=[];state.leadershipSlots=[];state.leadershipRoster=[];state.memberProfileUid="";officerFormDrafts.clear();
     state.officerResources = [];
     state.officerResourcesLoaded = false;
     state.officerResourcesLoading = false;
@@ -2222,11 +2241,14 @@ function currentCheckInLocation() {
 }
 
 async function refreshMemberDirectory() {
+  const accessVersion=officerAccessVersion;const requestUid=state.authUser?.uid;
+  const stillOfficer=()=>state.memberRole==='officer'&&state.authUser?.uid===requestUid&&officerAccessVersion===accessVersion;
   if (state.memberRole !== "officer") return;
   state.membersLoading = true;
   render();
   try {
     const directory = await loadMembers();
+    if(!stillOfficer())return;
     state.members = directory.members;
     state.leadershipSlots = directory.leadershipSlots;
     state.leadershipRoster = directory.leadershipRoster || [];
@@ -2240,13 +2262,17 @@ async function refreshMemberDirectory() {
 }
 
 async function refreshOfficerResources(force = false) {
+  const accessVersion=officerAccessVersion;const requestUid=state.authUser?.uid;
+  const stillOfficer=()=>state.memberRole==='officer'&&state.authUser?.uid===requestUid&&officerAccessVersion===accessVersion;
   if (state.memberRole !== "officer" || state.officerResourcesLoading) return;
   if (state.officerResourcesLoaded && !force) return;
   state.officerResourcesLoading = true;
   state.officerResourcesError = "";
   if (state.view === "profile") render();
   try {
-    state.officerResources = await loadOfficerResources();
+    const resources = await loadOfficerResources();
+    if(!stillOfficer())return;
+    state.officerResources=resources;
     state.officerResourcesLoaded = true;
   } catch (error) {
     state.officerResourcesError = readableAuthError(error);
@@ -2257,6 +2283,8 @@ async function refreshOfficerResources(force = false) {
 }
 
 async function refreshOfficerOperations(force = false, { silent = false } = {}) {
+  const accessVersion=officerAccessVersion;const requestUid=state.authUser?.uid;
+  const stillOfficer=()=>state.memberRole==='officer'&&state.authUser?.uid===requestUid&&officerAccessVersion===accessVersion;
   if (state.memberRole !== "officer" || state.officerOperationsLoading) return;
   if (state.officerOperationsLoaded && !force) return;
   state.officerOperationsLoading = true;
@@ -2265,7 +2293,9 @@ async function refreshOfficerOperations(force = false, { silent = false } = {}) 
   // and repaint once with the saved values instead of flashing twice.
   if (state.view === "profile" && !silent) render();
   try {
-    state.officerOperations = await loadOfficerEventOperations();
+    const operations = await loadOfficerEventOperations();
+    if(!stillOfficer())return;
+    state.officerOperations=operations;
     state.officerOperationsLoaded = true;
     const operationEvents = state.officerOperations?.events || [];
     if (!operationEvents.some((event) => event.id === state.selectedOfficerEventId)) {
@@ -2965,7 +2995,7 @@ function renderMemberProfileModal() {
         ${member ? `
           <div class="member-profile-manage">
             <h3>Manage</h3>
-            ${state.memberRole === "officer" ? `
+            ${state.canManageOfficers ? `
               <label class="member-profile-role-row">
                 <span>Club role</span>
                 <select data-member-role="${escapeHtml(uid)}" ${protectedLeadership || isSelf ? "disabled" : ""}>
@@ -2981,8 +3011,8 @@ function renderMemberProfileModal() {
               ${isSelf ? '<p class="member-profile-note">You cannot change your own role.</p>' : ""}
               ${state.canManageOfficers
                 ? ""
-                : '<p class="member-profile-note">Any officer can make a member an officer. Only the President or Treasurer can take officer access away or remove an account.</p>'}
-            ` : '<p class="member-profile-note">Only officers can change club roles.</p>'}
+                : '<p class="member-profile-note">Only the President or Treasurer can grant or remove officer access.</p>'}
+            ` : '<p class="member-profile-note">Only the President or Treasurer can grant or remove officer access.</p>'}
           </div>
         ` : ""}
       </section>
@@ -3719,9 +3749,28 @@ async function resumePendingIntent() {
   }
 }
 
+observeMemberActions(event=>{
+  if(state.authUser?.uid!==event.uid)return;
+  if(event.kind==='confirmed'){
+    if(event.entry.type==='checkin'){
+      state.checkedInEvents=[...new Set([...state.checkedInEvents,event.entry.eventId])];
+      state.memberPoints=event.result.points ?? state.checkedInEvents.length;
+    }else{
+      state.rsvps=event.entry.going?[...new Set([...state.rsvps,event.entry.eventId])]:state.rsvps.filter(id=>id!==event.entry.eventId);
+      saveState();
+    }
+    showActionFeedback('success',event.entry.type==='checkin'?'Attendance confirmed':'RSVP updated');
+  }else if(event.kind==='attention')showActionFeedback('error',event.entry.message);
+  if(state.authReady)render();
+});
+window.addEventListener('online',()=>{if(state.loggedIn&&state.checkInOpen)prepareOfflineAttendance(state.activeCheckInEventId);});
+
 observeSession((session) => {
   state.authReady = true;
-  if (state.authUser?.uid !== session?.user?.uid) officerFormDrafts.clear();
+  const changedUser=state.authUser?.uid !== session?.user?.uid;
+  if(changedUser){officerFormDrafts.clear();officerAccessVersion++;state.members=[];state.officerOperations=null;state.officerOperationsLoaded=false;state.officerResources=[];state.officerResourcesLoaded=false;
+    state.rsvps=session?.user?.uid ? readJson(`fqc:rsvps:${session.user.uid}`,[]) : [];
+  }
   state.authUser = session?.user || null;
   state.loggedIn = Boolean(session?.user);
   const nextInterestUid = session?.user?.uid || null;
@@ -3771,6 +3820,14 @@ observeSession((session) => {
     state.officerResourcesError = "";
     localStorage.removeItem("fqc:name");
   }
+  if(state.loggedIn){
+    prepareOfflineAttendance(state.checkInOpen?state.activeCheckInEventId:null);
+    if(changedUser){const uid=state.authUser.uid;const version=rsvpChangeVersion;loadMyRsvps().then(ids=>{
+      if(!ids||state.authUser?.uid!==uid||version!==rsvpChangeVersion)return;
+      const next=new Set(ids);pendingMemberActions().filter(e=>e.type==='rsvp').forEach(e=>e.going?next.add(e.eventId):next.delete(e.eventId));
+      state.rsvps=[...next];saveState();render();
+    }).catch(()=>{});}
+  }
   render();
   if (state.view === "profile" && state.loggedIn) queueMicrotask(() => refreshLeaderboard());
   if (state.memberRole === "officer" && !state.members.length && !state.membersLoading) queueMicrotask(refreshMemberDirectory);
@@ -3787,6 +3844,7 @@ observeCheckIn((checkIn) => {
   state.activeCheckInEventId = checkIn.eventId || "";
   state.checkInOpen = checkIn.open === true;
   state.checkInRequireLocation = checkIn.requireLocation !== false;
+  if(state.loggedIn&&state.checkInOpen)prepareOfflineAttendance(state.activeCheckInEventId);
   if (state.authReady) render();
 }, (error) => {
   state.authError = readableAuthError(error);

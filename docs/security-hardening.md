@@ -1,5 +1,7 @@
 # Security hardening — 2.27.0
 
+Historical release notes. See [the 2.28.0 review](security-review-2026-09-08.md) for current limits, additional fixes, and remaining risks.
+
 This change addresses public workbook exposure, stale officer privileges, username-to-email disclosure, and automated callable abuse. Email verification is outside this release.
 
 ## Data boundaries

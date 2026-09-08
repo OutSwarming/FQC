@@ -32,6 +32,14 @@
           {
             "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
           }
         ]
       },
@@ -41,6 +49,14 @@
           {
             "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
           }
         ]
       },
@@ -50,6 +66,14 @@
           {
             "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
           }
         ]
       },
@@ -59,6 +83,14 @@
           {
             "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
           }
         ]
       },
@@ -68,6 +100,14 @@
           {
             "key": "Cache-Control",
             "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
           }
         ]
       },
@@ -98,6 +138,10 @@
           {
             "key": "X-Content-Type-Options",
             "value": "nosniff"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors https://flqcs.com https://florida-quantum-computing.web.app https://florida-quantum-computing.firebaseapp.com; object-src 'none'; base-uri 'self'"
           }
         ]
       }

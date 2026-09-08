@@ -1,3 +1,4 @@
+import { createMemberOutbox } from "./member-outbox.js";
 import { createSessionRestorer, isAppAttestationError, isInvalidSessionError, withAuthTimeout } from "./auth-session.js";
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
@@ -227,17 +228,55 @@ export function observeSession(callback, onError = () => {}) {
     return () => { mockSessionObserver = null; };
   }
 
+  let profileUnsubscribe=null;
+  let observedUid=null;
+  const deliver=session=>{
+    if(session?.user?.uid && session.profile)writeLocal(`fqc:member:${session.user.uid}`,{displayName:session.profile.displayName,checkedInEvents:session.profile.checkedInEvents});
+    callback(session);
+    if(session?.user)outbox.flush();
+  };
   restoreSession = createSessionRestorer({
     getCurrentUser: () => auth.currentUser,
-    loadProfile: () => pendingAccountCreation
-      ? pendingAccountCreation.promise
-      : retryOnceWhenTransient(async () => normalizedProfile((await callable("ensureUserProfile")()).data)),
+    loadProfile: () => pendingAccountCreation ? pendingAccountCreation.promise : retryOnceWhenTransient(async () => normalizedProfile((await callable("ensureUserProfile")()).data)),
     refreshToken: user => user.getIdToken(true),
     signOut: () => signOut(auth),
-    onSession: callback,
-    onError
+    onSession: session=>{
+      deliver(session);
+      const uid=session?.user?.uid;
+      if(uid!==observedUid) {
+        profileUnsubscribe?.();observedUid=uid;
+        if(uid)profileUnsubscribe=onSnapshot(doc(db,'users',uid),snapshot=>{
+          if(auth.currentUser?.uid!==uid || snapshot.metadata.fromCache)return;
+          if(!snapshot.exists()){signOut(auth);return;}
+          const data=snapshot.data();
+          data.role=data.roleOverride==='officer'||['president','vice_president','treasurer'].includes(data.leadership)?'officer':'member';
+          data.canManageOfficers=['president','treasurer'].includes(data.leadership);
+          deliver({user:auth.currentUser,profile:normalizedProfile({...data,uid,email:auth.currentUser.email})});
+        },error=>{
+          if(auth.currentUser?.uid!==uid)return;
+          // Losing permission must remove private UI even before a token refresh.
+          deliver({user:auth.currentUser,profile:normalizedProfile({uid,role:'member'})});
+          onError(error);
+          restoreSession(auth.currentUser).catch(()=>{});
+        });
+      }
+    },onError
   });
-  return onAuthStateChanged(auth, user => { restoreSession(user).catch(() => {}); }, onError);
+  const unsub=onAuthStateChanged(auth,user=>{
+    if(user && !navigator.onLine) {
+      const cached=readLocal(`fqc:member:${user.uid}`);
+      deliver({user,profile:normalizedProfile({...cached,uid:user.uid,role:'member'})});
+    }else restoreSession(user).catch(()=>{});
+  },onError);
+  const reconnect=()=>{if(auth.currentUser)restoreSession(auth.currentUser).catch(()=>{});};
+  const disconnect=()=>{
+    const user=auth.currentUser;if(!user)return;
+    deliver({user,profile:normalizedProfile({...readLocal(`fqc:member:${user.uid}`),uid:user.uid,role:'member'})});
+  };
+  window.addEventListener('online',reconnect);
+  window.addEventListener('offline',disconnect);
+  return ()=>{unsub();profileUnsubscribe?.();window.removeEventListener('online',reconnect);window.removeEventListener('offline',disconnect);};
+
 }
 
 export function observeCheckIn(callback, onError = () => {}) {
@@ -246,13 +285,17 @@ export function observeCheckIn(callback, onError = () => {}) {
     emitMockCheckIn();
     return () => { mockCheckInObserver = null; };
   }
+  const cached=readLocal("fqc:public-checkin");
+  if(cached && !navigator.onLine)queueMicrotask(()=>callback(cached));
   return onSnapshot(doc(db, "settings", "checkin"), (snapshot) => {
     const data = snapshot.data() || {};
-    callback({
+    const state={
       eventId: String(data.eventId || ""),
       open: data.open === true,
       requireLocation: data.requireLocation !== false
-    });
+    };
+    writeLocal("fqc:public-checkin",state);
+    callback(state);
   }, onError);
 }
 
@@ -388,6 +431,8 @@ export async function registerPasskey() {
 }
 
 export async function logOut() {
+  const uid=currentUid();
+  if(uid){outbox.clear(uid);for(const key of Object.keys(localStorage))if(key===`fqc:member:${uid}`||key===`fqc:rsvps:${uid}`||key.startsWith(`fqc:permit:${uid}:`))localStorage.removeItem(key);}
   if (testMode) {
     mockProfile = null;
     emitMockSession();
@@ -434,7 +479,7 @@ export async function updateUsername(username) {
   return normalizedProfile(refreshed.data);
 }
 
-export async function recordCheckIn(location = null, eventId = null) {
+async function sendCheckIn(location = null, eventId = null, permitId = null) {
   if (testMode) {
     if (!mockCheckIn.open) throw new Error("Event check-in is not open.");
     if (eventId && eventId !== mockCheckIn.eventId) throw new Error("Check-in is no longer open for this event.");
@@ -451,9 +496,61 @@ export async function recordCheckIn(location = null, eventId = null) {
     emitMockSession();
     return { eventId: mockCheckIn.eventId, awarded, points: mockProfile.points, leaderboard: mockLeaderboard };
   }
-  const result = await callable("recordEventCheckIn")({ location, eventId });
+  const result = await callable("recordEventCheckIn")({ location, eventId, permitId });
   return result.data;
 }
+
+const currentUid = () => testMode ? mockProfile?.uid : auth?.currentUser?.uid;
+const outboxListeners=new Set();
+const confirmedActions=new Map();
+const notifyOutbox=event=>{if(event.kind==='confirmed'){confirmedActions.set(event.entry.id,event.result);if(confirmedActions.size>100)confirmedActions.delete(confirmedActions.keys().next().value);}
+  outboxListeners.forEach(callback=>callback(event));};
+const outbox=createMemberOutbox({storage:localStorage,getUid:currentUid,send:async(entry,uid)=>{
+  if (currentUid()!==uid) throw new Error("The signed-in account changed.");
+  return entry.type==='checkin' ? sendCheckIn(entry.location,entry.eventId,entry.permitId) : sendEventRsvp(entry.eventId,entry.going);
+},notify:notifyOutbox});
+export const pendingMemberActions=()=>outbox.entries();
+export const observeMemberActions=callback=>{outboxListeners.add(callback);return()=>outboxListeners.delete(callback);};
+export const flushMemberActions=()=>outbox.flush({force:true});
+export async function recordCheckIn(location=null,eventId=null) {
+  const permit=readLocal(`fqc:permit:${currentUid()}:${eventId}`);
+  const entry=outbox.enqueue('checkin',eventId,{location,permitId:permit?.permitId||null});
+  await outbox.flush({force:true});
+  const queued=outbox.entries().find(r=>r.id===entry.id);
+  if(queued?.status==='attention')throw new Error(queued.message);
+  const result=confirmedActions.get(entry.id);confirmedActions.delete(entry.id);
+  return {...result,eventId,pending:Boolean(queued)};
+}
+export async function updateEventRsvp(eventId,going) {
+  const entry=outbox.enqueue('rsvp',eventId,{going});
+  await outbox.flush({force:true});
+  const queued=outbox.entries().find(r=>r.id===entry.id);
+  if(queued?.status==='attention')throw new Error(queued.message);
+  confirmedActions.delete(entry.id);
+  return {eventId,going,pending:Boolean(queued)};
+}
+function readLocal(key) {try{return JSON.parse(localStorage.getItem(key)||'null');}catch{return null;}}
+function writeLocal(key,value) {try{localStorage.setItem(key,JSON.stringify(value));}catch{}}
+let preparingPermit=null;
+export async function prepareOfflineAttendance(eventId) {
+  const uid=currentUid();if(!uid||!eventId||!navigator.onLine)return;
+  const key=`fqc:permit:${uid}:${eventId}`;
+  if(readLocal(key)?.expiresAt>Date.now()+3600000)return;
+  if(preparingPermit)return preparingPermit;
+  preparingPermit=(async()=>{
+    const permit=testMode?{permitId:`${uid}_${eventId}`,eventId,expiresAt:Date.now()+7200000}:(await callable('prepareOfflineCheckIn')({eventId})).data;
+    if(currentUid()===uid)writeLocal(key,permit);
+  })().catch(()=>{}).finally(()=>{preparingPermit=null;});
+  return preparingPermit;
+}
+export async function loadMyRsvps() {
+  if(testMode)return null;
+  return (await callable('getMyEventRsvps')()).data.eventIds || [];
+}
+window.addEventListener('online',()=>outbox.flush({force:true}));
+window.addEventListener('storage',event=>{if(event.key===`fqc:outbox:${currentUid()}`)outbox.flush();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)outbox.flush({force:true});});
+window.setInterval(()=>{if(!document.hidden)outbox.flush();},10000);
 
 export async function loadLeaderboard() {
   if (testMode) {
@@ -590,7 +687,7 @@ export async function removeClubMember(uid) {
   return result.data;
 }
 
-export async function updateEventRsvp(eventId, going) {
+async function sendEventRsvp(eventId, going) {
   if (testMode) {
     const event = mockOfficerEventOperations.events.find((entry) => entry.id === eventId);
     if (event && mockProfile) {
@@ -607,7 +704,7 @@ export async function updateEventRsvp(eventId, going) {
 export async function changeMemberRole(uid, role) {
   if (testMode) {
     if (mockProfile?.role !== "officer") throw new Error("Officer access is required.");
-    if (role !== "officer" && !mockProfile?.canManageOfficers) {
+    if (!mockProfile?.canManageOfficers) {
       throw new Error("Only the President or Treasurer can remove an officer role.");
     }
     mockMembers = mockMembers.map((member) => member.uid === uid

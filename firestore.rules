@@ -43,7 +43,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /settings/{settingId} {
+    match /settings/checkin {
       allow read: if true;
       allow write: if false;
     }

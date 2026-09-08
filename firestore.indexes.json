@@ -1,8 +1,29 @@
 {
   "indexes": [],
   "fieldOverrides": [
-    {"collectionGroup": "requestLimits", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
-    {"collectionGroup": "passkeyChallenges", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
-    {"collectionGroup": "usernameDirectory", "fieldPath": "reservationExpiresAt", "ttl": true, "indexes": []}
+    {
+      "collectionGroup": "requestLimits",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "passkeyChallenges",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "usernameDirectory",
+      "fieldPath": "reservationExpiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "offlineCheckInPermits",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    }
   ]
 }

@@ -37,6 +37,7 @@ export {
   usernameForSignupEmail
 };
 
+import { saveMemberRsvp, mergeRsvps, offlinePermitAllows, consumePasskeyChallenge } from "./lib/member-actions.js";
 import { enforceRateLimit, publicScheduleCsv, sessionIsRevoked } from "./lib/security.js";
 
 initializeApp();
@@ -962,10 +963,12 @@ async function claimUsernameForUser(userRecord, requestedUsername, reservationTo
     let collided = false;
     await db.runTransaction(async (transaction) => {
       const usernameRef = db.collection("usernameDirectory").doc(candidate);
-      const [userSnapshot, usernameSnapshot] = await Promise.all([
+      const [userSnapshot, usernameSnapshot, deletion] = await Promise.all([
         transaction.get(userRef),
-        transaction.get(usernameRef)
+        transaction.get(usernameRef),
+        transaction.get(db.collection("accountDeletions").doc(userRecord.uid))
       ]);
+      if (deletion.exists) throw new HttpsError("failed-precondition", "This account is being removed. Sign in with your new account.");
       const previous = usernameForInput(userSnapshot.data()?.username);
       const isAutomaticFirstClaim = !previous && username === automaticBase;
       const reservation = usernameSnapshot.data() || {};
@@ -1037,8 +1040,8 @@ export const signInWithUsername = secureCallable("signInWithUsername", async req
   const user = await lookupUsername(identifier);
   // Both unknown usernames and incorrect passwords follow the Firebase password check.
   const response = await identityRequest("signInWithPassword", { email: user?.email || "missing-account@invalid.example", password, returnSecureToken: true });
-  if (!response.ok || !user) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
   const result = await response.json();
+  if (!response.ok || !user) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
   if (result.localId !== user.uid) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
   await activeAuthUser(user.uid);
   if ((await db.collection("accountDeletions").doc(user.uid).get()).exists) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
@@ -1050,24 +1053,32 @@ export const requestAccountPasswordReset = secureCallable("requestAccountPasswor
   const email = identifier.includes("@") ? identifier : user?.email;
   if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     // Always return the same result; never return the email resolved from a username.
-    await identityRequest("sendOobCode", { requestType: "PASSWORD_RESET", email });
+    const response = await identityRequest("sendOobCode", { requestType: "PASSWORD_RESET", email });
+    await response.arrayBuffer();
   }
   return { sent: true };
 });
 
 let scheduleCache;
 let scheduleLoading;
+async function loadPublicSchedule() {
+  if (!scheduleCache || scheduleCache.expires < Date.now()) {
+    scheduleLoading ||= Promise.all([getSheetValues("'Events'!A1:W1001"),getSheetValues("'UF Locations'!A1:F251")]).then(([eventRows,locationRows]) => {
+      const publicCsv=publicScheduleCsv(eventRows,"events");
+      const [headers=[],...rows]=parseCsv(publicCsv);
+      const idColumn=headers.indexOf("Event ID");
+      scheduleCache={expires:Date.now()+300000,eventIds:new Set(rows.map(row=>row[idColumn]).filter(isSafeEventId)),data:{eventsCsv:publicCsv,locationsCsv:publicScheduleCsv(locationRows,"locations")}};
+    }).finally(()=>{scheduleLoading=null;});
+    await scheduleLoading;
+  }
+  return scheduleCache;
+}
 export const publicEventSchedule = onRequest({ region, maxInstances: 3, cors: [...allowedOrigins.keys()] }, async (request, response) => {
   if (request.method !== "GET") { response.set("Allow", "GET").status(405).end(); return; }
   if (!["Events", "UF Locations"].includes(request.query.sheet)) { response.set("Cache-Control", "no-store").status(400).json({ error: "Unknown public feed" }); return; }
   try {
-    if (!scheduleCache || scheduleCache.expires < Date.now()) {
-      scheduleLoading ||= Promise.all([getSheetValues("'Events'!A1:W251"), getSheetValues("'UF Locations'!A1:F251")])
-        .then(([eventRows, locationRows]) => {
-          scheduleCache = { expires: Date.now() + 300000, data: { eventsCsv: publicScheduleCsv(eventRows, "events"), locationsCsv: publicScheduleCsv(locationRows, "locations") } };
-        }).finally(() => { scheduleLoading = null; });
-      await scheduleLoading;
-    }
+
+    await loadPublicSchedule();
     const kind = request.query.sheet;
     if (!["Events", "UF Locations"].includes(kind)) { response.set("Cache-Control", "no-store").status(400).json({ error: "Unknown public feed" }); return; }
     response.set("Cache-Control", "public, max-age=60, s-maxage=300").type("text/csv").send(kind === "Events" ? scheduleCache.data.eventsCsv : scheduleCache.data.locationsCsv);
@@ -1084,10 +1095,12 @@ export const updateUserProfile = secureCallable("updateUserProfile", async (requ
   const nameRef = db.collection("displayNameDirectory").doc(key);
   const userRef = db.collection("users").doc(caller.uid);
   await db.runTransaction(async (transaction) => {
-    const [nameSnapshot, userSnapshot] = await Promise.all([
+    const [nameSnapshot, userSnapshot, deletion] = await Promise.all([
       transaction.get(nameRef),
-      transaction.get(userRef)
+      transaction.get(userRef),
+      transaction.get(db.collection("accountDeletions").doc(caller.uid))
     ]);
+    if (!userSnapshot.data()?.createdAt || deletion.exists) throw new HttpsError("failed-precondition", "This account is being removed. Sign in with your new account.");
     const owner = cleanText(nameSnapshot.data()?.uid, 160);
     if (owner && owner !== caller.uid) {
       throw new HttpsError("already-exists", "Another member is already using that display name.");
@@ -1182,7 +1195,7 @@ function eventRowValues(event, row) {
 
 function rsvpEntriesForEvent(rsvpData = {}, eventId) {
   const entries = rsvpData?.byEvent?.[eventId];
-  return Array.isArray(entries) ? entries.slice(0, 300) : [];
+  return Array.isArray(entries) ? entries.slice(0, 1000) : [];
 }
 
 export const getOfficerEventOperations = secureCallable("getOfficerEventOperations", async (request) => {
@@ -1193,6 +1206,8 @@ export const getOfficerEventOperations = secureCallable("getOfficerEventOperatio
     db.collection("system").doc("attendanceSyncStatus").get()
   ]);
   const rsvpData = rsvpSnapshot.data() || {};
+  const currentRsvps = await Promise.all(workbook.events.map(event => db.collection("events").doc(event.id).collection("rsvps").get()));
+  workbook.events.forEach((event, i) => { rsvpData.byEvent ||= {}; rsvpData.byEvent[event.id] = mergeRsvps(rsvpEntriesForEvent(rsvpData,event.id), currentRsvps[i].docs); });
   const attendanceSync = attendanceSyncSnapshot.data() || {};
   return {
     events: workbook.events.map((event) => ({
@@ -1362,6 +1377,7 @@ export const removeMember = secureCallable("removeMember", async (request) => {
   const displayName = cleanText(targetData.displayName || targetUser?.displayName || "FQC Member", 80);
   await db.collection("accountDeletions").doc(uid).set({ startedAt: FieldValue.serverTimestamp() }, { merge: true });
   if (targetUser) await auth.updateUser(uid, { disabled: true });
+  const memberRsvps = await userRef.collection("eventRsvps").get();
   const ownedRecords = await Promise.all([
     db.collection("passkeyCredentials").where("uid", "==", uid).get(),
     db.collection("passkeyChallenges").where("uid", "==", uid).get(),
@@ -1373,6 +1389,7 @@ export const removeMember = secureCallable("removeMember", async (request) => {
   const writer = db.bulkWriter();
   const removals = ownedRecords.flatMap(snapshot => snapshot.docs.map(doc => writer.delete(doc.ref, { lastUpdateTime: doc.updateTime }).catch(error => { if (error.code !== 9 && error.code !== 5) throw error; })));
   removals.push(writer.delete(db.collection("hackathonInterest").doc(uid)));
+  memberRsvps.docs.forEach(doc => {removals.push(writer.delete(db.collection("events").doc(doc.id).collection("rsvps").doc(uid)));removals.push(writer.set(db.collection("rsvpSheetQueue").doc(`${uid}_${doc.id}`),{eventId:doc.id,updatedAt:FieldValue.serverTimestamp()}));});
   uniqueEventIds(targetData.checkedInEvents).forEach(eventId => {
     removals.push(writer.delete(db.collection("events").doc(eventId).collection("checkins").doc(uid)));
   });
@@ -1409,48 +1426,26 @@ export const removeMember = secureCallable("removeMember", async (request) => {
 export const setEventRsvp = secureCallable("setEventRsvp", async (request) => {
   const caller = await requireAuth(request);
   const eventId = cleanText(request.data?.eventId, 100);
-  const going = request.data?.going === true;
   if (!isSafeEventId(eventId)) throw new HttpsError("invalid-argument", "Choose a valid event.");
-  const aggregateRef = db.collection("system").doc("eventRsvps");
-  const userRef = db.collection("users").doc(caller.uid);
-  const result = await db.runTransaction(async (transaction) => {
-    const [aggregateSnapshot, userSnapshot] = await Promise.all([
-      transaction.get(aggregateRef),
-      transaction.get(userRef)
-    ]);
-    const data = aggregateSnapshot.data() || {};
-    const byEvent = { ...(data.byEvent || {}) };
-    const current = rsvpEntriesForEvent(data, eventId).filter((entry) => entry.uid !== caller.uid);
-    const profile = userSnapshot.data() || {};
-    if (going) {
-      current.push({
-        uid: caller.uid,
-        displayName: cleanText(profile.displayName || caller.token.name || caller.token.email || "FQC Member", 80),
-        role: profileRole(profile.role || caller.token.role)
-      });
-    }
-    byEvent[eventId] = current.slice(0, 300);
-    transaction.set(aggregateRef, { byEvent, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-    return { entries: byEvent[eventId], role: profileRole(profile.role || caller.token.role) };
+  return saveMemberRsvp(db, caller.uid, eventId, request.data?.going, async id => {
+    const catalog = await loadPublicSchedule();
+    if (!catalog.eventIds.has(id)) throw new HttpsError("not-found", "That event is no longer available for RSVP.");
   });
+});
 
-  if (result.role === "officer") {
-    try {
-      const workbook = await loadEventOperationsWorkbook();
-      const row = workbook.eventRowById.get(eventId);
-      if (row) {
-        const names = result.entries.filter((entry) => entry.role === "officer").map((entry) => entry.displayName).join(", ");
-        await updateSheetValues([{ range: `'${eventSheetName}'!W${row}`, values: [[names]] }]);
-      }
-    } catch (error) {
-      console.error("Officer RSVP sheet sync failed", error);
-    }
-  }
-  return { eventId, going, entries: result.entries };
+export const getMyEventRsvps = secureCallable("getMyEventRsvps", async request => {
+  const caller = await requireAuth(request);
+  const [legacy, current] = await Promise.all([
+    db.collection("system").doc("eventRsvps").get(),
+    db.collection("users").doc(caller.uid).collection("eventRsvps").limit(1000).get()
+  ]);
+  const ids = new Set(Object.entries(legacy.data()?.byEvent || {}).filter(([,entries]) => Array.isArray(entries) && entries.some(e => e.uid === caller.uid)).map(([id])=>id));
+  current.docs.forEach(doc => doc.data().going ? ids.add(doc.id) : ids.delete(doc.id));
+  return {eventIds:[...ids]};
 });
 
 export const setMemberRole = secureCallable("setMemberRole", async (request) => {
-  const caller = await requireOfficer(request);
+  const caller = await requireOfficerManager(request);
   const uid = cleanText(request.data?.uid, 160);
   const role = profileRole(request.data?.role);
   if (!uid) throw new HttpsError("invalid-argument", "Choose a member.");
@@ -1703,6 +1698,23 @@ export const setCheckInLocationRequirement = secureCallable("setCheckInLocationR
   return { requireLocation };
 });
 
+export const prepareOfflineCheckIn = secureCallable("prepareOfflineCheckIn", async request => {
+  const caller = await requireAuth(request);
+  const eventId = cleanText(request.data?.eventId,100);
+  if (!isSafeEventId(eventId)) throw new HttpsError("invalid-argument","Choose a valid event.");
+  const permitRef=db.collection("offlineCheckInPermits").doc(`${caller.uid}_${eventId}`);
+  return db.runTransaction(async tx => {
+    const [setting,user,deletion,existing]=await Promise.all([tx.get(db.collection("settings").doc("checkin")),tx.get(db.collection("users").doc(caller.uid)),tx.get(db.collection("accountDeletions").doc(caller.uid)),tx.get(permitRef)]);
+    const checkIn=setting.data() || {};
+    if (!user.data()?.createdAt || deletion.exists) throw new HttpsError("permission-denied","An active member account is required.");
+    if (!checkIn.open || checkIn.eventId !== eventId) throw new HttpsError("failed-precondition","Check-in is not open for this event.");
+    if (existing.data()?.expiresAt?.toMillis() > Date.now()+3600000) return {permitId:permitRef.id,eventId,expiresAt:existing.data().expiresAt.toMillis()};
+    const expiresAt=Date.now()+7200000;
+    tx.set(permitRef,{uid:caller.uid,eventId,requireLocation:checkIn.requireLocation!==false,eventLat:checkIn.eventLat ?? null,eventLng:checkIn.eventLng ?? null,issuedAt:FieldValue.serverTimestamp(),expiresAt:Timestamp.fromMillis(expiresAt)});
+    return {permitId:permitRef.id,eventId,expiresAt};
+  });
+});
+
 export const recordEventCheckIn = secureCallable("recordEventCheckIn", async (request) => {
   const caller = await requireAuth(request);
   const settingRef = db.collection("settings").doc("checkin");
@@ -1712,20 +1724,24 @@ export const recordEventCheckIn = secureCallable("recordEventCheckIn", async (re
   const result = await db.runTransaction(async (transaction) => {
     const setting = await transaction.get(settingRef);
     const checkIn = setting.data() || {};
-    if (checkIn.open !== true || !checkIn.eventId) {
-      throw new HttpsError("failed-precondition", "Event check-in is not open.");
-    }
-    // Older clients omit eventId; new clients pin attendance to the event opened.
-    if (request.data?.eventId && request.data.eventId !== checkIn.eventId) {
-      throw new HttpsError("failed-precondition", "Check-in is no longer open for this event.");
-    }
-    const locationVerified = requireNearbyLocation(checkIn, request.data?.location);
-
-    const eventId = cleanText(checkIn.eventId, 100);
+    const eventId = cleanText(request.data?.eventId,100);
+    if (!isSafeEventId(eventId)) throw new HttpsError("invalid-argument","Choose a valid event to check in.");
     const checkInRef = db.collection("events").doc(eventId).collection("checkins").doc(caller.uid);
-    const checkInSnapshot = await transaction.get(checkInRef);
-    const userSnapshot = await transaction.get(userRef);
-    if (!userSnapshot.exists || !userSnapshot.data().createdAt) throw new HttpsError("failed-precondition", "Finish creating your account, then check in.");
+    const [checkInSnapshot,userSnapshot,deletion] = await Promise.all([transaction.get(checkInRef),transaction.get(userRef),transaction.get(db.collection("accountDeletions").doc(caller.uid))]);
+    if (!userSnapshot.data()?.createdAt || deletion.exists) throw new HttpsError("failed-precondition", "Finish creating your account, then check in.");
+    // A lost success response remains safe to retry after the officer closes check-in.
+    if (checkInSnapshot.exists) return {eventId,awarded:false,points:pointsForEvents(uniqueEventIds(userSnapshot.data().checkedInEvents)),newCheckIn:false};
+    let policy=checkIn;
+    let offlineReceipt=false;
+    if (checkIn.open !== true || checkIn.eventId !== eventId) {
+      const permitId=cleanText(request.data?.permitId,300);
+      if (permitId !== `${caller.uid}_${eventId}`) throw new HttpsError("failed-precondition", "Check-in is no longer open for this event.");
+      const permit=(await transaction.get(db.collection("offlineCheckInPermits").doc(permitId))).data();
+      if (!offlinePermitAllows(permit,caller.uid,eventId)) throw new HttpsError("failed-precondition","Your offline check-in window expired. Ask an officer to confirm attendance.");
+      policy=permit;
+      offlineReceipt=true;
+    }
+    const locationVerified=requireNearbyLocation(policy,request.data?.location);
     const userData = userSnapshot.data() || {};
     const currentEvents = uniqueEventIds(userData.checkedInEvents);
     const alreadyEarned = currentEvents.includes(eventId);
@@ -1741,6 +1757,7 @@ export const recordEventCheckIn = secureCallable("recordEventCheckIn", async (re
         email: cleanText(caller.token.email, 180),
         pointsAwarded: alreadyEarned ? 0 : 1,
         locationVerified,
+        offlineReceipt,
         locationRequirement: locationVerified ? "within-2-miles" : "disabled",
         checkedInAt: FieldValue.serverTimestamp()
       });
@@ -1795,6 +1812,26 @@ async function flushAttendanceSyncQueue() {
   });
 }
 
+async function flushRsvpSheetQueue() {
+  const queue=await db.collection("rsvpSheetQueue").limit(500).get();
+  if(queue.empty)return;
+  const workbook=await loadEventOperationsWorkbook();
+  const legacy=(await db.collection("system").doc("eventRsvps").get()).data() || {};
+  const updates=[];
+  for(const eventId of new Set(queue.docs.map(doc=>doc.data().eventId))){
+    const row=workbook.eventRowById.get(eventId);if(!row)continue;
+    const current=await db.collection("events").doc(eventId).collection("rsvps").get();
+    const entries=mergeRsvps(rsvpEntriesForEvent(legacy,eventId),current.docs);
+    const profiles=entries.length?await db.getAll(...entries.map(entry=>db.collection("users").doc(entry.uid))):[];
+    const names=profiles.filter(profile=>profile.exists&&resolvedAccess(profile.data()).role==='officer').map(profile=>cleanText(profile.data().displayName,80));
+    updates.push({range:`'${eventSheetName}'!W${row}`,values:[[names.join(", ")]]});
+  }
+  if(updates.length)await sheetsRequest("/values:batchUpdate",{method:"POST",body:{valueInputOption:"RAW",data:updates}});
+  const writer=db.bulkWriter();
+  const deletes=queue.docs.map(doc=>writer.delete(doc.ref,{lastUpdateTime:doc.updateTime}).catch(error=>{if(error.code!==9&&error.code!==5)throw error;}));
+  await writer.close();await Promise.all(deletes);
+}
+
 export const runDeferredMaintenance = onSchedule({
   schedule: "every 10 minutes", region, timeZone: "America/New_York",
   maxInstances: 1, concurrency: 1, timeoutSeconds: 540, memory: "512MiB"
@@ -1812,6 +1849,7 @@ export const runDeferredMaintenance = onSchedule({
   try {
     await seedMemberExport(db);
     const attendance = await flushAttendanceSyncQueue();
+    await flushRsvpSheetQueue();
     // Keep the leaderboard compact and drain burst traffic in bounded batches.
     for (let batch = 0; batch < 40; batch += 1) {
       if (!(await flushLeaderboardUpdates(db)).remaining) break;
@@ -1900,21 +1938,17 @@ export const finishPasskeyRegistration = secureCallable("finishPasskeyRegistrati
   // Registering the same authenticator twice refreshes the stored credential but
   // must not inflate the count, or the number of devices shown drifts upward.
   const credentialRef = db.collection("passkeyCredentials").doc(credential.id);
-  const alreadyRegistered = (await credentialRef.get()).exists;
-  const batch = db.batch();
-  batch.set(credentialRef, credentialData);
-  batch.set(db.collection("users").doc(caller.uid).collection("passkeys").doc(credential.id), {
-    transports: credentialData.transports,
-    deviceType: credentialDeviceType,
-    backedUp: credentialBackedUp,
-    createdAt: FieldValue.serverTimestamp()
+  await db.runTransaction(async tx => {
+    const [currentChallenge,existing,user,deletion] = await Promise.all([
+      tx.get(challengeRef),tx.get(credentialRef),tx.get(db.collection("users").doc(caller.uid)),tx.get(db.collection("accountDeletions").doc(caller.uid))
+    ]);
+    if (!currentChallenge.exists || !currentChallenge.updateTime.isEqual(challengeSnapshot.updateTime) || !user.exists || deletion.exists) throw new HttpsError("failed-precondition","This passkey request was already used or the account changed. Try again.");
+    if (existing.exists && existing.data().uid !== caller.uid) throw new HttpsError("permission-denied","This passkey belongs to another account.");
+    tx.set(credentialRef,credentialData);
+    tx.set(db.collection("users").doc(caller.uid).collection("passkeys").doc(credential.id),{transports:credentialData.transports,deviceType:credentialDeviceType,backedUp:credentialBackedUp,createdAt:FieldValue.serverTimestamp()});
+    tx.update(user.ref,{...(existing.exists?{}:{passkeyCount:FieldValue.increment(1)}),updatedAt:FieldValue.serverTimestamp()});
+    tx.delete(challengeRef);
   });
-  batch.set(db.collection("users").doc(caller.uid), {
-    ...(alreadyRegistered ? {} : { passkeyCount: FieldValue.increment(1) }),
-    updatedAt: FieldValue.serverTimestamp()
-  }, { merge: true });
-  batch.delete(challengeRef);
-  await batch.commit();
   return { verified: true };
 });
 
@@ -1972,13 +2006,10 @@ export const finishPasskeySignIn = secureCallable("finishPasskeySignIn", async (
   });
   if (!verification.verified) throw new HttpsError("permission-denied", "The passkey could not be verified.");
 
-  const batch = db.batch();
-  batch.update(credentialRef, {
+  await consumePasskeyChallenge(db, challengeSnapshot, credentialSnapshot, stored.uid, {
     counter: verification.authenticationInfo.newCounter,
     lastUsedAt: FieldValue.serverTimestamp()
   });
-  batch.delete(challengeRef);
-  await batch.commit();
   const customToken = await auth.createCustomToken(stored.uid, { passkey: true });
   return { customToken };
 });

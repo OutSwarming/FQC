@@ -27,7 +27,7 @@ test('request limits enforce per-identifier bounds and only store hashes with ex
     getAll: async (...refs) => refs.map(ref=>({data:()=>docs.get(ref.key)}))
   };
   const request = { rawRequest: {ip:'192.0.2.1'}, data:{identifier:'private-user'} };
-  for(let i=0;i<12;i++) await enforceRateLimit(db,'signInWithUsername',request,100000);
+  for(let i=0;i<30;i++) await enforceRateLimit(db,'signInWithUsername',request,100000);
   await assert.rejects(enforceRateLimit(db,'signInWithUsername',request,100000), {code:'resource-exhausted'});
   for(const [key,value] of docs) {
     assert.match(key,/^[a-f0-9]{64}$/);
