@@ -902,3 +902,48 @@ test('Samsung Internet offers Chrome installation without invoking the blocked i
   expect(await page.evaluate(() => window.__installCalls)).toBe(0);
   await card.screenshot({ path: 'test-results/samsung-install-guidance.png' });
 });
+
+test('event dock leaves and returns while the finger is still holding the sheet', async ({ page, browserName }) => {
+  await goTab(page, 'Events');
+  await page.waitForTimeout(450);
+  const handle = page.locator('#event-sheet-handle');
+  const box = await handle.boundingBox();
+  const start = { x: box.x + box.width / 2, y: box.y + 12 };
+  const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
+  const send = async (type, y) => {
+    if (cdp) return cdp.send('Input.dispatchTouchEvent', { type: { pointerdown: 'touchStart', pointermove: 'touchMove', pointerup: 'touchEnd' }[type], touchPoints: type === 'pointerup' ? [] : [{ x: start.x, y, id: 1 }] });
+    return handle.dispatchEvent(type, { button: 0, pointerId: 91, pointerType: 'touch', clientX: start.x, clientY: y });
+  };
+  await send('pointerdown', start.y);
+  await send('pointermove', Math.max(8, start.y - 220));
+  await expect(page.locator('.event-planner')).toHaveClass(/event-sheet-dragging/);
+  await expect(page.locator('.bottom-nav')).toBeHidden();
+  // Reverse without lifting: the navigation must return before release too.
+  await send('pointermove', start.y);
+  await expect(page.locator('.bottom-nav')).toBeVisible();
+  await send('pointerup', start.y);
+  await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'medium');
+});
+
+test('Android touch drags the navigation bubble from capsule padding and cancels cleanly', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Native Android touch stream via Chromium');
+  const cdp = await page.context().newCDPSession(page);
+  const dock = await page.locator('.bottom-nav').boundingBox();
+  const about = await nav(page, 'About').boundingBox(), profile = await nav(page, 'Profile').boundingBox();
+  const send = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: ['touchEnd', 'touchCancel'].includes(type) ? [] : [{ x, y, id: 1 }] });
+  const x0 = about.x + about.width / 2, x1 = profile.x + profile.width / 2;
+  await send('touchStart', x0, dock.y + 3);
+  for (let step = 1; step <= 8; step++) await send('touchMove', x0 + (x1 - x0) * step / 8, dock.y + 3 + step * 2);
+  await expect(page.locator('.bottom-nav')).toHaveClass(/is-dragging/);
+  await expect(nav(page, 'About')).toHaveAttribute('aria-current', 'page');
+  expect(await page.locator('.bottom-nav').evaluate(el => Number(el.style.getPropertyValue('--nav-index')))).toBeGreaterThan(2.8);
+  await send('touchEnd');
+  await expect(nav(page, 'Profile')).toHaveAttribute('aria-current', 'page');
+  await send('touchStart', x1, dock.y + 22);
+  for (let step = 1; step <= 8; step++) await send('touchMove', x1 + (x0 - x1) * step / 8, dock.y + 22);
+  await expect(page.locator('.bottom-nav')).toHaveClass(/is-dragging/);
+  await send('touchCancel');
+  await expect(nav(page, 'Profile')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('.bottom-nav')).not.toHaveClass(/is-dragging/);
+  expect(await page.locator('.bottom-nav').evaluate(el => Number(el.style.getPropertyValue('--nav-index')))).toBe(3);
+});

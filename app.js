@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.4";
+const APP_VERSION = "2.26.5";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.5", "Moved navigation out of the way during sheet drags and restored Android capsule dragging"],
   ["2.26.4", "Added a Chrome install option for Samsung Internet and tightened browser permissions and offline caching"],
   ["2.26.3", "Centered map pins in one movement, stabilized navigation, and protected Light mode from automatic browser darkening"],
   ["2.26.2", "Separated About from the upcoming hackathon and added the FQC footer logo"],
@@ -1510,6 +1511,7 @@ function setMobileEventSheetMode(mode, options = {}) {
   planner.style.removeProperty("--event-tabs-progress");
   planner.dataset.sheetMode = nextMode;
   explorer.dataset.sheetMode = nextMode;
+  explorer.dataset.dockHidden = String(nextMode === "high");
   planner.style.height = `${Math.round(metrics[nextMode])}px`;
   planner.classList.toggle("event-sheet-dragging", options.dragging === true);
   document.querySelector("#event-sheet-handle")?.setAttribute("aria-expanded", String(nextMode === "high"));
@@ -1645,6 +1647,10 @@ function bindMobileEventSheet() {
       dragFrame = requestAnimationFrame(() => {
         const expansion = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.medium) / (drag.metrics.high - drag.metrics.medium)));
         explorer.style.setProperty("--event-preview-fade", String(1 - expansion));
+        // Release the dock during expansion, before pointerup. Separate thresholds
+        // prevent flicker when the finger pauses or reverses near the boundary.
+        const hideThreshold = explorer.dataset.dockHidden === "true" ? .12 : .28;
+        explorer.dataset.dockHidden = String(expansion >= hideThreshold);
         const tabsProgress = Math.max(0, Math.min(1, (pendingDragHeight - drag.metrics.low) / (drag.metrics.medium - drag.metrics.low)));
         planner.style.setProperty("--event-tabs-progress", String(tabsProgress));
         planner.style.height = `${Math.round(pendingDragHeight)}px`;
@@ -3647,20 +3653,23 @@ navSlider.addEventListener("input", () => {
 });
 navSlider.addEventListener("change", () => setView(navItems[Number(navSlider.value)].dataset.view));
 bottomNav.addEventListener("pointerdown", (event) => {
-  if (event.target === navSlider || event.button !== 0) return;
+  if (navDrag || event.target === navSlider || event.button !== 0) return;
   navDrag = { startX: event.clientX, pointerId: event.pointerId, moved: false };
 });
 bottomNav.addEventListener("pointermove", (event) => {
   if (!navDrag || event.pointerId !== navDrag.pointerId) return;
   if (!navDrag.moved && Math.abs(event.clientX - navDrag.startX) < 8) return;
-  if (!navDrag.moved) bottomNav.setPointerCapture(event.pointerId);
+  if (!navDrag.moved) {
+    try { bottomNav.setPointerCapture(event.pointerId); } catch {}
+  }
   navDrag.moved = true;
   bottomNav.classList.add("is-dragging");
   const rect = bottomNav.getBoundingClientRect();
   const index = Math.max(0, Math.min(3, (event.clientX - rect.left - 7) / ((rect.width - 14) / 4) - .5));
   navDrag.index = index;
   bottomNav.style.setProperty("--nav-index", index);
-});
+  if (event.cancelable) event.preventDefault();
+}, { passive: false });
 function finishNavDrag(event) {
   if (!navDrag || event.pointerId !== navDrag.pointerId) return;
   const drag = navDrag;
@@ -3675,6 +3684,10 @@ function finishNavDrag(event) {
 }
 window.addEventListener("pointerup", finishNavDrag);
 window.addEventListener("pointercancel", finishNavDrag);
+bottomNav.addEventListener("lostpointercapture", event => {
+  // A button losing implicit touch capture to the capsule is not cancellation.
+  if (event.target === bottomNav) finishNavDrag(event);
+});
 window.addEventListener("popstate", () => setView(viewFromLocation() || "home", { history: false }));
 settingsToggle.addEventListener("click", () => setView("settings"));
 
