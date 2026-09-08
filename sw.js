@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v320-event-preview-fade";
+const CACHE_NAME = "fqc-app-v321-direct-pin-center";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.8";
+const APP_VERSION = "2.25.9";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.9", "Centered mobile map pins in one smooth movement while preserving the current zoom"],
   ["2.25.8", "Extended event previews behind navigation with a fading content hint and no map showing underneath"],
   ["2.25.7", "Restored medium-height Home previews and kept navigation visible until the event list expands for reading"],
   ["2.25.6", "Rounded the mobile event popup and made its size follow the actual screen and navigation, with reachable long lists"],
@@ -1879,20 +1880,28 @@ function focusSelectedEvent() {
   if (!eventMap) return;
   const event = getEvent(state.selectedEventId);
   const location = getEventLocation(event);
-  const zoom = Math.max(eventMap.getZoom(), 16);
   if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
+  pendingMapPan = null;
   eventMap.stop();
+  if (isMobileEventSheetViewport()) {
+    const planner = document.querySelector(".event-planner");
+    const mapHeight = eventMap.getSize().y;
+    // Use the sheet's destination height, not its animated intermediate size.
+    const sheetHeight = parseFloat(planner?.style.height) || 0;
+    const visibleCenterY = Math.max(56, (mapHeight - sheetHeight) / 2);
+    const zoom = eventMap.getZoom();
+    const center = eventMap.unproject(
+      eventMap.project([location.lat, location.lng], zoom).add([0, mapHeight / 2 - visibleCenterY]),
+      zoom
+    );
+    // One pan to the final position: no zoom flight or moveend correction.
+    eventMap.panTo(center, { animate: !window.matchMedia("(prefers-reduced-motion: reduce)").matches, duration: 0.35 });
+    return;
+  }
+  const zoom = Math.max(eventMap.getZoom(), 16);
   pendingMapPan = () => {
     if (!eventMap) return;
-    const planner = document.querySelector(".event-planner");
-    const dockClearance = isMobileEventSheetViewport() && planner ? parseFloat(getComputedStyle(planner).bottom) || 0 : 0;
-    const mapHeight = eventMap.getSize().y;
-    const sheetHeight = parseFloat(planner?.style.height) || 0;
-    // Place the selected pin in the exposed map, even on short landscape phones.
-    const pan = isMobileEventSheetViewport()
-      ? mapHeight / 2 - Math.max(56, (mapHeight - dockClearance - sheetHeight) / 2)
-      : 105;
-    eventMap.panBy([0, pan], { animate: true, duration: 0.25 });
+    eventMap.panBy([0, 105], { animate: true, duration: 0.25 });
     pendingMapPan = null;
   };
   eventMap.once("moveend", pendingMapPan);

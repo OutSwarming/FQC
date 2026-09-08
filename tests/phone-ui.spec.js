@@ -437,6 +437,45 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
   }
 });
 
+test('mobile pin centering uses one movement without zooming or a second correction', async ({ page }) => {
+  await goTab(page, 'Home');
+  const background = await mapPoint(page);
+  await page.touchscreen.tap(background.x, background.y);
+  await page.evaluate(() => {
+    const map = window.__FQC_MAP__;
+    map.stop();
+    map.setView([29.647, -82.3485], 15.5, { animate: false });
+    window.__pinMotion = { starts: 0, zooms: 0, points: [] };
+    map.on('movestart', () => window.__pinMotion.starts++);
+    map.on('zoomstart', () => window.__pinMotion.zooms++);
+    map.on('move', () => {
+      const p = map.latLngToContainerPoint([29.64631, -82.34788]);
+      window.__pinMotion.points.push({ x: p.x, y: p.y });
+    });
+  });
+  await page.locator('.event-map-pin').first().tap();
+  await expect(page.locator('.event-planner')).toHaveAttribute('data-sheet-mode', 'low');
+  await page.waitForTimeout(850); // Also catch the old delayed second pan.
+  const result = await page.evaluate(() => {
+    const map = window.__FQC_MAP__;
+    const point = map.latLngToContainerPoint([29.64631, -82.34788]);
+    const sheetHeight = parseFloat(document.querySelector('.event-planner').style.height);
+    const target = { x: map.getSize().x / 2, y: Math.max(56, (map.getSize().y - sheetHeight) / 2) };
+    const distances = window.__pinMotion.points.map(p => Math.hypot(p.x - target.x, p.y - target.y));
+    return { ...window.__pinMotion, zoom: map.getZoom(), error: Math.hypot(point.x - target.x, point.y - target.y), backwards: distances.some((d, i) => i > 0 && d > distances[i - 1] + 2) };
+  });
+  expect(result.starts).toBe(1);
+  expect(result.zooms).toBe(0);
+  expect(result.zoom).toBe(15.5);
+  expect(result.error).toBeLessThan(2);
+  expect(result.backwards).toBe(false);
+  // A repeated tap must not queue another correction after the pin has settled.
+  await page.locator('.event-map-pin').first().tap();
+  await page.waitForTimeout(550);
+  expect(await zoom(page)).toBe(15.5);
+  expect(await page.evaluate(() => window.__pinMotion.starts)).toBe(1);
+});
+
 test('pin highlight clears on tap-away and stays cleared through live refresh', async ({ page }) => {
   await goTab(page, 'Home');
   // Close the event sheet to expose the center pin on shorter phones.
