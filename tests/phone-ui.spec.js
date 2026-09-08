@@ -403,13 +403,21 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
       await page.setViewportSize({ width: original.width, height });
       await expect.poll(() => page.locator('#event-map').evaluate(el => Math.abs(el.getBoundingClientRect().bottom - innerHeight))).toBeLessThan(1);
       await expect(page.locator('.bottom-nav')).toBeVisible();
-      await expect.poll(() => planner.evaluate(el => Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().top - el.getBoundingClientRect().bottom))).toBe(8);
+      await expect.poll(() => planner.evaluate(el => Math.round(innerHeight - el.getBoundingClientRect().bottom))).toBe(0);
+      expect(await planner.evaluate(el => {
+        const map = document.querySelector('#event-map').getBoundingClientRect();
+        // Both corners outside the capsule and the bottom safe area must hit the sheet.
+        return [map.left + 4, map.right - 4].every(x =>
+          [innerHeight - 2, document.querySelector('.bottom-nav').getBoundingClientRect().top - 2].every(y => el.contains(document.elementFromPoint(x, y))));
+      })).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight + 1)).toBe(true);
     }
     await page.setViewportSize(original);
     await swipe(1);
     await expect(planner).toHaveAttribute('data-sheet-mode', 'low');
     await expect(page.locator('.bottom-nav')).toBeVisible();
+    await expect(page.locator('.event-mode-panel[data-event-panel="list"]')).toHaveCSS('display', 'block');
+    await expect.poll(() => page.locator('.event-explorer').evaluate(el => getComputedStyle(el, '::after').opacity)).toBe('1');
     await swipe(-1);
     if (await planner.getAttribute('data-sheet-mode') === 'medium') await swipe(-1);
     await expect(planner).toHaveAttribute('data-sheet-mode', 'high');
@@ -419,7 +427,7 @@ test('Home opens medium with navigation, swipes smaller and larger, and hides th
     await handle.tap();
     await expect(planner).toHaveAttribute('data-sheet-mode', 'medium');
     await expect(page.locator('.bottom-nav')).toBeVisible();
-    await expect.poll(() => planner.evaluate(el => Math.round(document.querySelector('.bottom-nav').getBoundingClientRect().top - el.getBoundingClientRect().bottom))).toBe(8);
+    await expect.poll(() => planner.evaluate(el => Math.round(innerHeight - el.getBoundingClientRect().bottom))).toBe(0);
     const point = await mapPoint(page);
     await page.touchscreen.tap(point.x, point.y);
     await expect(planner).toHaveAttribute('data-sheet-mode', 'closed');

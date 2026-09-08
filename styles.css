@@ -2257,25 +2257,40 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
     position: absolute;
     z-index: 600;
     right: 0;
-    --event-sheet-bottom: var(--event-dock-clearance, calc(96px + var(--safe-bottom)));
-    bottom: var(--event-sheet-bottom);
+    bottom: 0;
     left: 0;
     height: 53%;
     overflow: hidden;
-    max-height: calc(100% - var(--event-sheet-bottom) - 8px);
-    padding: 0 14px 24px;
+    max-height: calc(100% - 8px);
+    padding: 0 14px calc(24px + var(--safe-bottom));
     border: 1px solid var(--line);
-    border-radius: 22px;
+    border-radius: 22px 22px 0 0;
+    border-bottom: 0;
     scroll-padding-block: 104px 24px;
     box-shadow: 0 -14px 36px rgba(7, 16, 36, 0.22);
     overscroll-behavior: contain;
     will-change: height;
     transition:
-      bottom 380ms cubic-bezier(0.2, 0.9, 0.25, 1),
       height 380ms cubic-bezier(0.2, 0.9, 0.25, 1),
       border-color 180ms ease,
       box-shadow 240ms ease;
   }
+
+  /* Fade only the content; the opaque sheet beneath it always covers the map. */
+  .event-explorer::after {
+    content: "";
+    position: absolute;
+    z-index: 605;
+    inset: auto 0 0;
+    height: calc(var(--event-dock-clearance, calc(96px + var(--safe-bottom))) + 48px);
+    background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 86%, transparent) 48%, var(--bg) 78%);
+    pointer-events: none;
+    opacity: var(--event-preview-fade, 1);
+    transition: opacity 200ms ease;
+  }
+  .event-explorer[data-sheet-mode="closed"]::after,
+  .event-explorer[data-sheet-mode="high"]::after { opacity: var(--event-preview-fade, 0); }
+  .event-explorer:has(.event-sheet-dragging)::after { transition: none; }
 
   .event-planner.event-sheet-dragging { transition: none; }
   body:has(.events-home .event-explorer[data-sheet-mode="high"]) .bottom-nav { visibility: hidden; pointer-events: none; }
@@ -2286,10 +2301,6 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
   }
 
   .event-planner[data-sheet-mode="high"] {
-    --event-sheet-bottom: 0px;
-    padding-bottom: calc(24px + var(--safe-bottom));
-    border-radius: 22px 22px 0 0;
-    border-bottom: 0;
     overflow-y: auto;
     overscroll-behavior-y: contain;
     touch-action: none;
@@ -2376,8 +2387,7 @@ button.leader-open:focus-visible { background: var(--surface-soft); }
 
   .event-planner[data-sheet-mode="low"] .event-intro-summary,
   .event-planner[data-sheet-mode="low"] .event-data-status,
-  .event-planner[data-sheet-mode="low"] .event-tabs-sticky,
-  .event-planner[data-sheet-mode="low"] .event-mode-panel {
+  .event-planner[data-sheet-mode="low"] .event-tabs-sticky {
     display: none;
   }
 
