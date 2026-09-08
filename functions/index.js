@@ -4,6 +4,8 @@ import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { memberExportChanged, enqueueMemberExport, seedMemberExport, drainMemberExports } from "./lib/member-sync.js";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { GoogleAuth } from "google-auth-library";
 import {
@@ -17,12 +19,6 @@ import {
   usernameForInput,
   usernameForSignupEmail
 } from "./lib/accounts.js";
-import {
-  attendanceSyncId,
-  attendanceSyncPayload,
-  maxAttendanceSyncsPerRun,
-  planAttendanceSheetBatch
-} from "./lib/attendance.js";
 import {
   buildLeaderboardEntries,
   flushLeaderboardUpdates,
@@ -312,6 +308,7 @@ async function sheetsRequest(path, { method = "GET", body } = {}) {
   const token = await sheetsAccessToken();
   const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${officerRosterSpreadsheetId}${path}`, {
     method,
+    signal: AbortSignal.timeout(25000),
     headers: {
       authorization: `Bearer ${token}`,
       accept: "application/json",
@@ -377,7 +374,7 @@ async function ensureMasterMembersSchema() {
     properties = response.replies?.[0]?.addSheet?.properties;
     created = true;
   }
-  if (!properties?.sheetId) throw new HttpsError("unavailable", "The Master Members tab is unavailable.");
+  if (!Number.isInteger(properties?.sheetId)) throw new HttpsError("unavailable", "The Master Members tab is unavailable.");
 
   const needsStructure = created ||
     Number(properties.gridProperties?.columnCount) < masterMembersColumnCount ||
@@ -525,57 +522,54 @@ async function syncMasterMemberEventHeaders(workbook) {
   return columnByEventId;
 }
 
-async function syncAttendanceQueueBatch(queueDocuments, workbook) {
-  const columnByEventId = await syncMasterMemberEventHeaders(workbook);
-  const memberRows = await getSheetValues(`'${masterMembersSheetName}'!A3:A1000`);
-  const existingRows = new Map(memberRows
-    .map((row, index) => [cleanText(row[0], 80), index + 3])
-    .filter(([key]) => key));
-  const { updates, appends } = planAttendanceSheetBatch(
-    queueDocuments.map((document) => document.data()),
-    columnByEventId,
-    existingRows
-  );
-  const valueUpdates = [];
-  for (const update of updates) {
-    valueUpdates.push({
-      range: `'${masterMembersSheetName}'!A${update.row}:E${update.row}`,
-      values: [update.baseValues]
-    });
-    update.attendedColumns.forEach((column) => valueUpdates.push({
-      range: `'${masterMembersSheetName}'!${sheetColumnLetter(column)}${update.row}`,
-      values: [["✓"]]
-    }));
+async function prepareMemberSheetExport() {
+  const workbook = await loadEventOperationsWorkbook();
+  const columns = await syncMasterMemberEventHeaders(workbook);
+  const properties = await ensureMasterMembersSchema();
+  const rows = await getSheetValues(`'${masterMembersSheetName}'!A3:E`);
+  const lastCheckInByKey = new Map(rows.map((row) => [row[0], row[4] || ""]));
+  const rowByKey = new Map(rows.map((row, index) => [cleanText(row[0], 80), index + 3]).filter(([key]) => key));
+  // Expand once, rather than append individual rows during a signup rush.
+  const rowCount = Math.max(10002, rows.length + 10002, properties.gridProperties?.rowCount || 0);
+  if (rowCount > (properties.gridProperties?.rowCount || 0)) {
+    await sheetsRequest(":batchUpdate", { method: "POST", body: { requests: [{ updateSheetProperties: {
+      properties: { sheetId: properties.sheetId, gridProperties: { rowCount } }, fields: "gridProperties.rowCount"
+    } }] } });
   }
-  if (valueUpdates.length) await updateSheetValues(valueUpdates);
-  if (appends.length) {
-    const rows = appends.map((append) => {
-      const finalColumn = Math.max(masterMembersBaseColumns - 1, ...append.attendedColumns);
-      const values = Array(finalColumn + 1).fill("");
-      append.baseValues.forEach((value, index) => { values[index] = value; });
-      append.attendedColumns.forEach((column) => { values[column] = "✓"; });
-      return values;
-    });
-    await appendSheetValues(`'${masterMembersSheetName}'!A:IZ`, rows);
-  }
-  return { members: updates.length + appends.length, updated: updates.length, added: appends.length };
+  return { columns, rowByKey, lastCheckInByKey, nextRow: rows.length + 3 };
 }
 
-async function syncExistingMasterMemberProfile(uid, profile = {}) {
-  await ensureMasterMembersSchema();
-  const memberKey = masterMemberKey(uid);
-  const memberRows = await getSheetValues(`'${masterMembersSheetName}'!A3:A1000`);
-  const existingIndex = memberRows.findIndex((row) => cleanText(row[0], 80) === memberKey);
-  if (existingIndex < 0) return false;
-  const role = profileRole(profile.role);
-  const roleLabel = cleanText(profile.officerTitle || (role === "officer" ? "Officer" : "Member"), 80);
-  const points = pointsForEvents(profile.checkedInEvents);
-  const row = existingIndex + 3;
-  await updateSheetValues([{
-    range: `'${masterMembersSheetName}'!B${row}:D${row}`,
-    values: [[cleanText(profile.displayName || "FQC Member", 80), roleLabel, points]]
-  }]);
-  return true;
+export function memberSheetRows(context, profiles) {
+  const data = [];
+  for (const profile of profiles) {
+    const key = masterMemberKey(profile.uid);
+    let row = context.rowByKey.get(key);
+    if (!row && profile.deleted) continue;
+    if (!row) { row = context.nextRow++; context.rowByKey.set(key, row); }
+    const values = Array(masterMembersColumnCount).fill("");
+    values[0] = key;
+    if (!profile.deleted) {
+      values[1] = cleanText(profile.displayName || "FQC Member", 80);
+      values[2] = cleanText(profile.officerTitle || (profile.role === "officer" ? "Officer" : "Member"), 80);
+      values[3] = pointsForEvents(profile.checkedInEvents);
+      values[4] = cleanText(profile.lastCheckInAt || context.lastCheckInByKey.get(key), 40);
+      for (const id of uniqueEventIds(profile.checkedInEvents)) {
+        const column = context.columns.get(id);
+        if (Number.isInteger(column)) values[column] = "✓";
+      }
+    }
+    data.push({ range: `'${masterMembersSheetName}'!A${row}:IZ${row}`, values: [values] });
+  }
+  return data;
+}
+
+async function exportMemberProfiles(context, profiles) {
+  const data = memberSheetRows(context, profiles);
+  // RAW prevents a member name beginning with '=' becoming a Sheet formula.
+  // Fixed ranges and stable keys make retries safe after an ambiguous response.
+  if (data.length) await sheetsRequest("/values:batchUpdate", {
+    method: "POST", body: { valueInputOption: "RAW", data }
+  });
 }
 
 async function ensureEventOperationsSchema() {
@@ -822,6 +816,7 @@ function publicProfile(uid, data = {}) {
   const checkedInEvents = uniqueEventIds(data.checkedInEvents);
   return {
     uid,
+    username: usernameForInput(data.username),
     displayName: cleanText(data.displayName || "FQC Member", 80),
     email: cleanText(data.email, 180),
     photoURL: cleanText(data.photoURL, 500),
@@ -837,54 +832,34 @@ function publicProfile(uid, data = {}) {
 
 async function ensureProfileForUser(userRecord) {
   const userRef = db.collection("users").doc(userRecord.uid);
-  let snapshot = await userRef.get();
-  let existing = snapshot.exists ? snapshot.data() : {};
-  if (!snapshot.exists) assertEligibleSignupEmail(userRecord.email);
-  if (!usernameForInput(existing.username)) {
-    const automaticUsername = usernameForSignupEmail(userRecord.email);
-    if (!automaticUsername) throw new HttpsError("failed-precondition", "This UF email cannot create an automatic username. Contact an FQC officer.");
-    await claimUsernameForUser(userRecord, automaticUsername, "");
-    snapshot = await userRef.get();
-    existing = snapshot.data() || {};
-  }
+  // Only initialize a missing profile. A retry cannot overwrite attendance or
+  // officer edits that happen concurrently with sign-in.
+  const existing = await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(userRef);
+    if (snapshot.exists && snapshot.data().createdAt) return snapshot.data();
+    assertEligibleSignupEmail(userRecord.email);
+    const prior = snapshot.data() || {};
+    const priorEvents = uniqueEventIds(prior.checkedInEvents);
+    const initial = {
+      ...prior,
+      displayName: cleanText(prior.displayName || userRecord.displayName || userRecord.email?.split("@")[0] || "FQC Member", 80),
+      email: cleanText(userRecord.email, 180),
+      ...resolvedAccess(prior),
+      checkedInEvents: priorEvents, points: pointsForEvents(priorEvents), passkeyCount: Number(prior.passkeyCount) || 0,
+      createdAt: FieldValue.serverTimestamp()
+    };
+    transaction.set(userRef, initial, { merge: true });
+    enqueueMemberExport(transaction, db, userRecord.uid);
+    return initial;
+  });
   const access = resolvedAccess(existing);
   const checkedInEvents = uniqueEventIds(existing.checkedInEvents);
   const displayName = cleanText(existing.displayName || userRecord.displayName || userRecord.email?.split("@")[0] || "FQC Member", 80);
   const points = pointsForEvents(checkedInEvents);
-  const lastLoginIsFresh = Date.now() - timestampMillis(existing.lastLoginAt) < 6 * 60 * 60 * 1000;
-  const data = {
-    username: usernameForInput(existing.username),
-    displayName,
-    email: cleanText(userRecord.email, 180),
-    photoURL: cleanText(userRecord.photoURL, 500),
-    ...access,
-    checkedInEvents,
-    points,
-    passkeyCount: Number(existing.passkeyCount) || 0,
-    createdAt: existing.createdAt || FieldValue.serverTimestamp(),
-    lastLoginAt: lastLoginIsFresh ? existing.lastLoginAt : FieldValue.serverTimestamp()
-  };
-  const profileChanged = !existing.createdAt
-    || usernameForInput(existing.username) !== data.username
-    || cleanText(existing.displayName, 80) !== data.displayName
-    || cleanText(existing.email, 180) !== data.email
-    || cleanText(existing.photoURL, 500) !== data.photoURL
-    || profileRole(existing.role) !== data.role
-    || cleanText(existing.leadership, 40) !== data.leadership
-    || cleanText(existing.officerTitle, 80) !== data.officerTitle
-    || existing.canManageOfficers !== data.canManageOfficers
-    || JSON.stringify(uniqueEventIds(existing.checkedInEvents)) !== JSON.stringify(data.checkedInEvents)
-    || Number(existing.points) !== data.points
-    || Number(existing.passkeyCount) !== data.passkeyCount;
-  const leaderboardChanged = !existing.createdAt
-    || cleanText(existing.displayName, 80) !== data.displayName
-    || profileRole(existing.role) !== data.role
-    || Number(existing.points) !== data.points;
-  if (profileChanged || !lastLoginIsFresh) {
-    const profileBatch = db.batch();
-    profileBatch.set(userRef, data, { merge: true });
-    if (leaderboardChanged) queueLeaderboardUpdate(profileBatch, db, userRecord.uid, data);
-    await profileBatch.commit();
+  const data = { ...existing, ...access, displayName, checkedInEvents, points,
+    email: cleanText(userRecord.email, 180), photoURL: cleanText(userRecord.photoURL, 500) };
+  if (existing.email !== data.email || (existing.photoURL || "") !== data.photoURL) {
+    await userRef.set({ email: data.email, photoURL: data.photoURL }, { merge: true });
   }
   await setAccessClaims(userRecord, access);
   return publicProfile(userRecord.uid, data);
@@ -1058,11 +1033,6 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
   const snapshot = await db.collection("users").doc(caller.uid).get();
   const profile = snapshot.data() || {};
   await syncLeaderboardProfile(caller.uid, profile);
-  try {
-    await syncExistingMasterMemberProfile(caller.uid, profile);
-  } catch (error) {
-    console.error("Master Members profile sync failed", error);
-  }
   return publicProfile(caller.uid, profile);
 });
 
@@ -1154,7 +1124,6 @@ export const getOfficerEventOperations = onCall(callableOptions, async (request)
     db.collection("system").doc("eventRsvps").get(),
     db.collection("system").doc("attendanceSyncStatus").get()
   ]);
-  await syncMasterMemberEventHeaders(workbook);
   const rsvpData = rsvpSnapshot.data() || {};
   const attendanceSync = attendanceSyncSnapshot.data() || {};
   return {
@@ -1442,11 +1411,6 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   await Promise.all([auth.setCustomUserClaims(uid, claims), batch.commit()]);
   const updatedProfile = { ...targetData, role, officerTitle: role === "officer" ? "Officer" : "" };
   await syncLeaderboardProfile(uid, updatedProfile);
-  try {
-    await syncExistingMasterMemberProfile(uid, updatedProfile);
-  } catch (error) {
-    console.error("Master Members officer title sync failed", error);
-  }
   await db.collection("officerRosterAudit").add({
     action: role === "officer" ? "officer-granted" : "officer-revoked",
     targetUid: uid,
@@ -1507,11 +1471,6 @@ export const assignMemberLeadership = onCall(callableOptions, async (request) =>
   ]);
   const synchronizedProfile = { ...targetData, ...access };
   await syncLeaderboardProfile(uid, synchronizedProfile);
-  try {
-    await syncExistingMasterMemberProfile(uid, synchronizedProfile);
-  } catch (error) {
-    console.error("Master Members leadership sync failed", error);
-  }
   await db.collection("officerRosterAudit").add({
     action: "leadership-slot-linked",
     targetUid: uid,
@@ -1587,11 +1546,6 @@ export const unassignMemberLeadership = onCall(callableOptions, async (request) 
       setAccessClaims(targetUser, access)
     ]);
     await syncLeaderboardProfile(uid, { ...targetData, ...access });
-    try {
-      await syncExistingMasterMemberProfile(uid, { ...targetData, ...access });
-    } catch (error) {
-      console.error("Master Members leadership removal sync failed", error);
-    }
   }
 
   await db.collection("officerRosterAudit").add({
@@ -1690,9 +1644,9 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
 
     const eventId = cleanText(checkIn.eventId, 100);
     const checkInRef = db.collection("events").doc(eventId).collection("checkins").doc(caller.uid);
-    const attendanceSyncRef = db.collection("attendanceSyncQueue").doc(attendanceSyncId(eventId, caller.uid));
     const checkInSnapshot = await transaction.get(checkInRef);
     const userSnapshot = await transaction.get(userRef);
+    if (!userSnapshot.exists || !userSnapshot.data().createdAt) throw new HttpsError("failed-precondition", "Finish creating your account, then check in.");
     const userData = userSnapshot.data() || {};
     const currentEvents = uniqueEventIds(userData.checkedInEvents);
     const alreadyEarned = currentEvents.includes(eventId);
@@ -1711,27 +1665,19 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
         locationRequirement: locationVerified ? "within-2-miles" : "disabled",
         checkedInAt: FieldValue.serverTimestamp()
       });
-      transaction.set(attendanceSyncRef, attendanceSyncPayload({
-        memberKey: masterMemberKey(caller.uid),
-        uid: caller.uid,
-        eventId,
-        displayName,
-        roleLabel,
-        points,
-        checkedInEvents,
-        checkedInAt
-      }));
+      enqueueMemberExport(transaction, db, caller.uid);
     }
 
     if (!alreadyEarned || Number(userData.points) !== points) {
       transaction.set(userRef, {
         checkedInEvents,
         points,
+        lastCheckInAt: checkedInAt,
         updatedAt: FieldValue.serverTimestamp()
       }, { merge: true });
     }
 
-    queueLeaderboardUpdate(transaction, db, caller.uid, {
+    if (!checkInSnapshot.exists) queueLeaderboardUpdate(transaction, db, caller.uid, {
       displayName,
       checkedInEvents,
       role
@@ -1752,53 +1698,59 @@ export const recordEventCheckIn = onCall(callableOptions, async (request) => {
   };
 });
 
-async function flushAttendanceSyncQueue(limit = maxAttendanceSyncsPerRun) {
-  const statusRef = db.collection("system").doc("attendanceSyncStatus");
-  const queued = await db.collection("attendanceSyncQueue")
-    .limit(Math.max(1, Math.min(400, Number(limit) || maxAttendanceSyncsPerRun)))
-    .get();
-  if (queued.empty) return { processed: 0, remaining: false };
-  try {
-    const workbook = await loadEventOperationsWorkbook();
-    const result = await syncAttendanceQueueBatch(queued.docs, workbook);
-    const batch = db.batch();
-    queued.docs.forEach((document) => batch.delete(document.ref));
-    batch.set(statusRef, {
-      state: queued.size >= limit ? "catching-up" : "current",
-      processed: queued.size,
-      members: result.members,
-      remaining: queued.size >= limit,
-      lastError: "",
-      lastSuccessAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp()
-    }, { merge: true });
-    await batch.commit();
-    return { processed: queued.size, remaining: queued.size >= limit, ...result };
-  } catch (error) {
-    console.error("Deferred Master Members attendance sync failed", error);
-    await statusRef.set({
-      state: "retrying",
-      processed: 0,
-      remaining: true,
-      lastError: cleanText(error?.message || "Google Sheets sync failed", 240),
-      updatedAt: FieldValue.serverTimestamp()
-    }, { merge: true });
-    return { processed: 0, remaining: true, error: cleanText(error?.message, 240) };
-  }
+export const queueMemberSheetExport = onDocumentWritten({
+  document: "users/{uid}", region, retry: true, maxInstances: 5
+}, async (event) => {
+  if (!memberExportChanged(event.data.before.data(), event.data.after.data())) return;
+  const batch = db.batch();
+  enqueueMemberExport(batch, db, event.params.uid);
+  queueLeaderboardUpdate(batch, db, event.params.uid, event.data.after.data() || {}, !event.data.after.exists);
+  await batch.commit();
+});
+
+async function flushAttendanceSyncQueue() {
+  let context;
+  return drainMemberExports(db, async (profiles) => {
+    if (!context) context = await prepareMemberSheetExport();
+    await exportMemberProfiles(context, profiles);
+  });
 }
 
 export const runDeferredMaintenance = onSchedule({
-  schedule: "every 5 minutes",
-  region,
-  timeZone: "America/New_York",
-  maxInstances: 1,
-  timeoutSeconds: 180
+  schedule: "every 10 minutes", region, timeZone: "America/New_York",
+  maxInstances: 1, concurrency: 1, timeoutSeconds: 540, memory: "512MiB"
 }, async () => {
-  const [leaderboard, attendance] = await Promise.all([
-    flushLeaderboardUpdates(db),
-    flushAttendanceSyncQueue()
-  ]);
-  console.log("Deferred maintenance complete", { leaderboard, attendance });
+  const statusRef = db.collection("system").doc("attendanceSyncStatus");
+  const leaseRef = db.collection("system").doc("memberExportLease");
+  const owner = randomUUID();
+  const acquired = await db.runTransaction(async (transaction) => {
+    const lease = (await transaction.get(leaseRef)).data();
+    if (timestampMillis(lease?.expiresAt) > Date.now()) return false;
+    transaction.set(leaseRef, { owner, expiresAt: Timestamp.fromMillis(Date.now() + 600000) });
+    return true;
+  });
+  if (!acquired) return;
+  try {
+    await seedMemberExport(db);
+    const attendance = await flushAttendanceSyncQueue();
+    // Keep the leaderboard compact and drain burst traffic in bounded batches.
+    for (let batch = 0; batch < 40; batch += 1) {
+      if (!(await flushLeaderboardUpdates(db)).remaining) break;
+    }
+    await statusRef.set({ ...attendance, state: attendance.remaining ? "catching-up" : "current",
+      lastError: "", lastSuccessAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    console.log("Ten-minute member export complete", attendance);
+  } catch (error) {
+    await statusRef.set({ state: "retrying", remaining: true,
+      lastError: cleanText(error?.message, 240), updatedAt: FieldValue.serverTimestamp()
+    }, { merge: true });
+    throw error;
+  } finally {
+    await db.runTransaction(async (transaction) => {
+      if ((await transaction.get(leaseRef)).data()?.owner === owner) transaction.delete(leaseRef);
+    });
+  }
 });
 
 export const beginPasskeyRegistration = onCall(callableOptions, async (request) => {

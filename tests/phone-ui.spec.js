@@ -1,0 +1,417 @@
+import { test, expect } from '@playwright/test';
+const nav = (page, name) => page.locator('.bottom-nav').getByRole('button', { name, exact: true });
+const zoom = page => page.evaluate(() => window.__FQC_MAP__.getZoom());
+const mapPoint = async page => {
+  const box = await page.locator('#event-map').boundingBox();
+  return { x: box.x + box.width * .3, y: box.y + 85 };
+};
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { window.__FQC_AUTH_TEST__ = true; });
+  await page.route('https://*.tile.openstreetmap.org/**', route => route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') }));
+  await page.route('https://docs.google.com/spreadsheets/**', route => {
+    const sheet = new URL(route.request().url()).searchParams.get('sheet');
+    const body = sheet === 'UF Locations' ? '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive, Gainesville, FL 32611","29.64631","-82.34788"' : sheet === 'Events' ? '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"\n"Quantum Workshop","2027-03-24","6:00 PM","Reitz Student Union","2340","Build quantum circuits together.","Yes","phone-workshop"' : '"Budget Summary","Amount"\n"Total Approved","100"';
+    return route.fulfill({ status: 200, contentType: 'text/csv', body });
+  });
+  await page.goto('/hackathon');
+  await expect(page.locator('.app-splash')).toBeHidden();
+});
+
+test('clear controls, round navigation, all screens and appearance choices fit', async ({ page }, info) => {
+  await expect(page.locator('.topbar-actions button:visible')).toHaveCount(1);
+  await expect(page.locator('.bottom-nav .nav-item')).toHaveText(['Hackathon', 'Home', 'Check In', 'Profile']);
+  const geometry = await page.locator('.bottom-nav').evaluate(el => {
+    const b = el.getBoundingClientRect(); return { width: b.width, height: b.height, radius: parseFloat(getComputedStyle(el).borderRadius), right: b.right };
+  });
+  expect(geometry.radius).toBeGreaterThanOrEqual(geometry.height / 2);
+  expect(geometry.right).toBeLessThanOrEqual(page.viewportSize().width);
+  await expect(page.locator('.hack-hero h2')).toHaveCSS('color', 'rgb(245, 245, 247)');
+  await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-landing.png` });
+  for (const name of ['Home', 'Check In', 'Profile', 'Hackathon']) {
+    await nav(page, name).click();
+    await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  for (const appearance of ['Dark', 'Light', 'System']) await page.getByRole('radio', { name: appearance, exact: true }).check();
+  await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-settings.png` });
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(nav(page, 'Hackathon')).toHaveAttribute('aria-current', 'page');
+  await nav(page, 'Profile').click();
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
+  await page.screenshot({ animations: "disabled", path: `test-results/${info.project.name}-profile.png` });
+});
+
+test('workshop story stays readable and interactive with expanded layers on phones', async ({ page }, info) => {
+  const stats = await page.locator('.hackathon-landing').evaluate(el => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    pageScreens: +(el.scrollHeight / innerHeight).toFixed(1),
+    interestScreensDown: +(document.querySelector('#hackathon-interest').getBoundingClientRect().top / innerHeight).toFixed(1),
+    captionPx: getComputedStyle(document.querySelector('.phase-experiment > small')).fontSize,
+    mainCopyPx: getComputedStyle(document.querySelector('.workshop-copy > p:not(.hack-kicker)')).fontSize,
+  }));
+  console.log(info.project.name, JSON.stringify(stats));
+  const originalSize = page.viewportSize();
+  const compactDetails = page.locator('.workshop-phase > .workshop-depth');
+  await expect(compactDetails).toHaveCount(originalSize.width <= 680 ? 2 : 0);
+  await page.setViewportSize({ width: 750, height: 342 });
+  await expect(compactDetails).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 664 });
+  await expect(compactDetails).toHaveCount(2);
+  await page.setViewportSize(originalSize);
+  for (const photo of await page.locator('.hackathon-landing img').all()) {
+    await photo.scrollIntoViewIfNeeded();
+    await expect.poll(() => photo.evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
+  }
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({ path: `test-results/audit-${info.project.name}-hero.png` });
+  const phase = page.locator('[data-apply-h]');
+  await phase.tap();
+  await expect(page.locator('[data-phase-state="minus"]')).toHaveText('|1⟩');
+  await expect(page.locator('[data-phase-state="plus"]')).toHaveText('|0⟩');
+  await page.locator('.phase-experiment').screenshot({ path: `test-results/audit-${info.project.name}-phase.png` });
+  for (const detail of await page.locator('.workshop-depth').all()) {
+    await detail.locator('summary').tap();
+    await expect(detail).toHaveAttribute('open', '');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  const rounds = page.getByRole('slider', { name: 'Try a different number of rounds' });
+  await rounds.focus();
+  await page.keyboard.press('Home');
+  await expect(page.locator('#grover-probability')).toHaveText('0.024%');
+  await page.keyboard.press('End');
+  await expect(page.locator('#grover-probability')).toHaveText('<0.001%');
+  await page.locator('.grover-experiment').screenshot({ path: `test-results/audit-${info.project.name}-grover.png` });
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  expect(await page.locator('.phase-probabilities b').first().evaluate(el => parseFloat(getComputedStyle(el).transitionDuration))).toBeLessThan(.001);
+  await page.locator('.phase-experiment').screenshot({ path: `test-results/audit-${info.project.name}-dark.png` });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('appearance follows the device and explicit preference survives reload', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('radio', { name: 'Light', exact: true }).check();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.getByRole('radio', { name: 'System', exact: true }).check();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce', contrast: 'more' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  expect(await page.locator('.nav-glass-lens').evaluate(el => parseFloat(getComputedStyle(el).transitionDuration))).toBeLessThan(.001);
+});
+
+test('app gestures keep every screen at normal size and form focus does not zoom', async ({ page }) => {
+  for (const name of ['Hackathon', 'Home', 'Check In', 'Profile']) {
+    await nav(page, name).click();
+    const result = await page.evaluate(() => {
+      const cancellations = ['gesturestart', 'gesturechange', 'gestureend'].map(name => {
+        const event = new Event(name, { bubbles: true, cancelable: true });
+        document.querySelector('#app').dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      return { cancellations, scale: visualViewport.scale };
+    });
+    expect(result.cancellations).toEqual([true, true, true]);
+    expect(result.scale).toBeCloseTo(1, 3);
+  }
+  const email = page.locator('#auth-identifier');
+  await email.tap();
+  expect(await email.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
+  expect(await page.evaluate(() => visualViewport.scale)).toBeCloseTo(1, 3);
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  expect(await page.evaluate(() => {
+    const event = new WheelEvent('wheel', { ctrlKey: true, deltaY: -100, bubbles: true, cancelable: true });
+    document.querySelector('#app').dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(true);
+});
+
+test('page pinch and double tap leave app scale fixed while one-finger scrolling works', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Raw multi-touch input uses Chromium device input.');
+  const cdp = await page.context().newCDPSession(page);
+  const center = { x: page.viewportSize().width / 2, y: 290 };
+  const pinch = (type, distance) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: center.x-distance, y: center.y, id: 1 }, { x: center.x+distance, y: center.y, id: 2 }] });
+  await pinch('touchStart', 20);
+  for (let d = 30; d <= 120; d += 10) await pinch('touchMove', d);
+  await pinch('touchEnd');
+  await page.touchscreen.tap(center.x, center.y);
+  await page.touchscreen.tap(center.x, center.y);
+  expect(await page.evaluate(() => visualViewport.scale)).toBeCloseTo(1, 3);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: center.x, y: 550, id: 1 }] });
+  for (let y = 530; y >= 250; y -= 20) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: center.x, y, id: 1 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(50);
+  expect(await page.evaluate(() => visualViewport.scale)).toBeCloseTo(1, 3);
+});
+
+test('double tap zooms once and zoom buttons work without losing pin details', async ({ page }) => {
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
+  const center = await page.evaluate(() => { const c = window.__FQC_MAP__.getCenter(); return { lat: c.lat, lng: c.lng }; });
+  const p = await mapPoint(page);
+  await page.touchscreen.tap(p.x, p.y);
+  await page.touchscreen.tap(p.x, p.y);
+  await expect.poll(() => zoom(page)).toBe(16);
+  expect(await page.evaluate(center => window.__FQC_MAP__.getCenter().distanceTo(center), center)).toBeLessThan(1);
+  await page.waitForTimeout(550);
+  await expect.poll(() => zoom(page)).toBe(16);
+  await page.getByRole('button', { name: 'Zoom out' }).click();
+  await expect.poll(() => zoom(page)).toBe(15);
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect.poll(() => zoom(page)).toBe(16);
+  await page.locator('.event-map-pin').first().click();
+  await expect(page.locator('.event-intro h2')).toContainText('Quantum Workshop');
+});
+
+test('mouse double click zooms in and shift double click zooms out', async ({ page }) => {
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
+  const p = await mapPoint(page);
+  await page.mouse.dblclick(p.x, p.y);
+  await expect.poll(() => zoom(page)).toBe(16);
+  await page.keyboard.down('Shift');
+  await page.mouse.dblclick(p.x, p.y);
+  await page.keyboard.up('Shift');
+  await expect.poll(() => zoom(page)).toBe(15);
+});
+
+test('one-finger double-tap drag zooms both ways and cancellation restores panning', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Raw touch sequences use Chromium device input; native double taps are tested in WebKit above.');
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
+  const p = await mapPoint(page);
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x,y]) => ({ x,y,id:1 })) });
+  for (const dy of [100, -100]) {
+    const before = await zoom(page);
+    await touch('touchStart', [[p.x,p.y]]); await touch('touchEnd', []);
+    await touch('touchStart', [[p.x,p.y]]);
+    for (let i=1;i<=10;i++) await touch('touchMove', [[p.x,p.y+dy*i/10]]);
+    await touch('touchEnd', []);
+    await expect.poll(() => zoom(page)).toBeCloseTo(before+dy/100, 5);
+    await page.waitForTimeout(550);
+  }
+  await touch('touchStart', [[p.x,p.y]]); await touch('touchEnd', []);
+  await touch('touchStart', [[p.x,p.y]]); await touch('touchCancel', []);
+  expect(await page.evaluate(() => window.__FQC_MAP__.dragging.enabled())).toBe(true);
+});
+
+test('pinch zoom remains available', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Pinch injected through Chromium device input.');
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setZoom(15, { animate: false }));
+  const p = await mapPoint(page);
+  const cdp = await page.context().newCDPSession(page);
+  const pinch = (type, distance) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type==='touchEnd' ? [] : [{ x:p.x-distance,y:p.y,id:1 }, { x:p.x+distance,y:p.y,id:2 }] });
+  await pinch('touchStart',20);
+  for(let d=25;d<=65;d+=5) await pinch('touchMove',d);
+  await pinch('touchEnd',0);
+  await expect.poll(() => zoom(page)).toBeGreaterThan(15);
+});
+
+test('rapid reversing pinches keep loaded map tiles visible through release and cancellation', async ({ page, browserName }) => {
+  await page.route('https://*.tile.openstreetmap.org/**', async route => {
+    await new Promise(resolve => setTimeout(resolve, 120));
+    await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') });
+  });
+  await nav(page, 'Home').click();
+  await page.waitForFunction(() => Boolean(window.__FQC_MAP__));
+  await page.evaluate(() => window.__FQC_MAP__.setZoom(16, { animate: false }));
+  await expect.poll(() => page.locator('.leaflet-tile-loaded').count()).toBeGreaterThan(0);
+  await page.waitForTimeout(220); // Let the initial tiles become fully opaque.
+  await page.evaluate(() => {
+    window.__pinchFrames = { resets: 0, blank: 0, frames: 0, running: true, values: [] };
+    window.__FQC_MAP__.on('viewprereset', () => window.__pinchFrames.resets++);
+    const sample = () => {
+      const state = window.__pinchFrames;
+      state.frames++;
+      if (![...document.querySelectorAll('.leaflet-tile-loaded')].some(tile => parseFloat(getComputedStyle(tile).opacity) > .1)) state.blank++;
+      if (state.running) requestAnimationFrame(sample);
+    };
+    sample();
+  });
+  const p = await mapPoint(page);
+  const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
+  const pinch = (type, distance = 0) => {
+    const points = ['touchEnd', 'touchCancel'].includes(type) ? [] : [{ x: p.x-distance, y: p.y, id: 1 }, { x: p.x+distance, y: p.y, id: 2 }];
+    if (cdp) return cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+    // WebKit has no raw device-input API. Exercise its DOM touch event path.
+    return page.evaluate(({ type, points }) => {
+      const container = document.querySelector('#event-map');
+      const event = new Event(type.toLowerCase(), { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'touches', { value: points.map(p => ({ identifier: p.id, clientX: p.x, clientY: p.y, target: container })) });
+      container.dispatchEvent(event);
+    }, { type, points });
+  };
+  for (const end of ['touchEnd', 'touchCancel', 'touchEnd']) {
+    await pinch('touchStart', 35);
+    for (const distance of [42, 60, 80, 55, 35, 22, 40]) {
+      await pinch('touchMove', distance);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => { window.__pinchFrames.values.push(window.__FQC_MAP__.getZoom()); resolve(); })));
+    }
+    await pinch(end);
+    await page.waitForTimeout(45);
+  }
+  const frames = await page.evaluate(() => { window.__pinchFrames.running = false; return window.__pinchFrames; });
+  expect(frames.frames).toBeGreaterThan(15);
+  expect(Math.max(...frames.values) - Math.min(...frames.values)).toBeGreaterThan(1);
+  expect(frames.resets).toBe(0);
+  expect(frames.blank).toBe(0);
+  expect(await page.evaluate(() => window.__FQC_MAP__.dragging.enabled())).toBe(true);
+  expect(await page.evaluate(() => visualViewport.scale)).toBeCloseTo(1, 3);
+});
+
+
+test('single-form signup survives live updates and fits the phone', async ({ page }, info) => {
+  await nav(page, 'Profile').click();
+  await page.locator('#auth-mode-create').click();
+  const dialog = page.getByRole('dialog', { name: 'Create your FQC account' });
+  await dialog.getByLabel('UF email', { exact: true }).fill('q@ufl.edu');
+  await dialog.locator('#signup-password').fill('quantum-safe-password');
+  await dialog.locator('#signup-password-confirm').fill('quantum-safe-password');
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ eventId: 'phone-workshop', open: true, requireLocation: false }));
+  await expect(dialog.locator('#signup-password')).toHaveValue('quantum-safe-password');
+  await expect(dialog.getByLabel('UF email', { exact: true })).toHaveValue('q@ufl.edu');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ animations: 'disabled', path: `test-results/${info.project.name}-signup.png` });
+  await dialog.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'q', exact: true })).toBeVisible();
+});
+
+
+test('navigation keeps the same bottom inset after scrolling, tab changes, and viewport resizing', async ({ page }) => {
+  const size = page.viewportSize();
+  // Include a home-indicator inset even when the emulator reports zero.
+  await page.evaluate(() => document.documentElement.style.setProperty('--safe-bottom', '34px'));
+  for (const height of [size.height, Math.max(300, size.height - 100), size.height]) {
+    await page.setViewportSize({ width: size.width, height });
+    await nav(page, 'Hackathon').click();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    for (const name of ['Profile', 'Home', 'Check In', 'Home', 'Hackathon']) {
+      await nav(page, name).click();
+      await expect(nav(page, name)).toHaveAttribute('aria-current', 'page');
+      const position = await page.locator('.bottom-nav').evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return { gap: innerHeight - box.bottom, center: box.left + box.width / 2, height: box.height, fixedBody: getComputedStyle(document.body).position === 'fixed' };
+      });
+      expect(position.gap).toBeCloseTo(46, 0);
+      expect(position.center).toBeCloseTo(size.width / 2, 0);
+      expect(position.height).toBeCloseTo(76, 0);
+      expect(position.fixedBody).toBe(false);
+    }
+  }
+});
+
+
+test('pin highlight clears on tap-away and stays cleared through live refresh', async ({ page }) => {
+  await nav(page, 'Home').click();
+  // Close the event sheet to expose the center pin on shorter phones.
+  const background = await mapPoint(page);
+  await page.touchscreen.tap(background.x, background.y);
+  const pin = page.locator('.event-map-pin').first();
+  await pin.click();
+  await expect(pin).toHaveClass(/active/);
+  await page.evaluate(() => window.__FQC_MAP__.stop());
+  const p = await mapPoint(page);
+  await page.touchscreen.tap(p.x, p.y);
+  await expect(page.locator('.event-map-pin.active')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.__mapBeforeUpdate = window.__FQC_MAP__;
+    window.__tileBeforeUpdate = document.querySelector('.leaflet-tile');
+    window.__FQC_AUTH_TEST_API__.setCheckIn({ open: true });
+  });
+  await expect.poll(() => page.evaluate(() => window.__FQC_MAP__ === window.__mapBeforeUpdate)).toBe(true);
+  expect(await page.evaluate(() => document.querySelector('.leaflet-tile') === window.__tileBeforeUpdate)).toBe(true);
+  await expect(page.locator('.event-map-pin.active')).toHaveCount(0);
+  expect(await page.locator('#event-map').evaluate(el => getComputedStyle(el).getPropertyValue('user-select') || getComputedStyle(el).getPropertyValue('-webkit-user-select'))).toBe('none');
+  const cancelled = await page.locator('#event-map').evaluate(el => {
+    const event = new Event('selectstart', { bubbles: true, cancelable: true });
+    el.dispatchEvent(event); return event.defaultPrevented;
+  });
+  expect(cancelled).toBe(true);
+});
+
+test('quick zoom renders fractional frames and preserves the map center during a live update', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'Raw continuous touch input uses Chromium device input.');
+  await nav(page, 'Home').click();
+  await page.evaluate(() => {
+    const map = window.__FQC_MAP__;
+    map.setZoom(16, { animate: false });
+    window.__smoothZoom = { values: [], resets: 0, original: map };
+    map.on('zoom', () => window.__smoothZoom.values.push(map.getZoom()));
+    map.on('viewreset', () => window.__smoothZoom.resets++);
+  });
+  const p = await mapPoint(page);
+  const anchor = await page.evaluate(p => {
+    const ll = window.__FQC_MAP__.getCenter();
+    return { lat: ll.lat, lng: ll.lng };
+  }, p);
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: p.x, y, id: 1 }] });
+  await touch('touchStart', p.y); await touch('touchEnd'); await touch('touchStart', p.y);
+  for (let i = 1; i <= 13; i++) {
+    await touch('touchMove', p.y + i * 7);
+    if (i === 5) await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: true }));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  }
+  await touch('touchEnd');
+  await expect.poll(() => zoom(page)).toBeCloseTo(16.91, 4);
+  const result = await page.evaluate(anchor => {
+    const map = window.__FQC_MAP__;
+    const point = map.latLngToContainerPoint(anchor);
+    const box = map.getContainer().getBoundingClientRect();
+    return { sameMap: map === window.__smoothZoom.original, frames: new Set(window.__smoothZoom.values).size, resets: window.__smoothZoom.resets, x: point.x + box.x, y: point.y + box.y };
+  }, anchor);
+  expect(result.sameMap).toBe(true);
+  expect(result.frames).toBeGreaterThan(8);
+  expect(result.resets).toBeLessThanOrEqual(2);
+  const mapBox = await page.locator('#event-map').boundingBox();
+  expect(Math.abs(result.x - (mapBox.x + mapBox.width / 2))).toBeLessThan(3);
+  expect(Math.abs(result.y - (mapBox.y + mapBox.height / 2))).toBeLessThan(3);
+});
+
+test('photo entrances happen once, respect reduced motion, and leave the invitation usable', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__photoEntrances = [];
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function(...args) {
+      if (this.tagName === 'FIGURE') window.__photoEntrances.push(this.querySelector('img')?.getAttribute('src'));
+      return animate.apply(this, args);
+    };
+  });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.reload();
+  await expect(page.locator('.app-splash')).toBeHidden();
+  for (const figure of await page.locator('.hackathon-landing figure').all()) {
+    await figure.scrollIntoViewIfNeeded();
+    await expect.poll(() => figure.locator('img').evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
+  }
+  await expect.poll(() => page.evaluate(() => window.__photoEntrances.length)).toBe(4);
+  await page.waitForTimeout(400);
+  await nav(page, 'Home').click();
+  await nav(page, 'Hackathon').click();
+  await page.locator('.workshop-outlook').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(4);
+  await expect(page.locator('#hackathon-title')).toHaveText('Your turn to build');
+  await page.locator('[data-hackathon-rsvp]').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload();
+  await expect(page.locator('.app-splash')).toBeHidden();
+  for (const figure of await page.locator('.hackathon-landing figure').all()) {
+    await figure.scrollIntoViewIfNeeded();
+    await expect(figure).toBeVisible();
+    expect(await figure.evaluate(el => getComputedStyle(el).opacity)).toBe('1');
+  }
+  expect(await page.evaluate(() => window.__photoEntrances.length)).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

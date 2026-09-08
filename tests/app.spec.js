@@ -1,14 +1,14 @@
+import { checkContinuousWheel } from './map-wheel-check.js';
 import { expect, test } from "@playwright/test";
 
 const navButton = (page, name) => page.locator(".bottom-nav").getByRole("button", { name, exact: true });
-const createTwoStepAccount = async (page, { email = "new.gator@ufl.edu", password = "quantum-safe-password", addPasskey = false } = {}) => {
-  await page.getByRole("tab", { name: "Create Account" }).click();
+const createSimpleAccount = async (page, { email = "new.gator@ufl.edu", password = "quantum-safe-password", addPasskey = false } = {}) => {
+  await page.locator("#auth-mode-create").click();
   await page.getByLabel("UF email", { exact: true }).fill(email);
-  await page.getByRole("button", { name: "Next: create a password" }).click();
   await page.locator("#signup-password").fill(password);
   await page.locator("#signup-password-confirm").fill(password);
-  if (addPasskey) await page.getByLabel(/Add Face ID \/ Touch ID/).check();
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+
+  await page.getByRole("dialog", { name: "Create your FQC account" }).getByRole("button", { name: "Create account", exact: true }).click();
 };
 const eventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID","Source URL"
 "IonQ Quantum Networking Speaker Session","2026-03-03","3:30 PM","Reitz Student Union","2340","Daniel Pompa of IonQ presented on current industry progress in quantum networking; Palm & Pine catering was provided.","Yes","fqc-2026-03-03-ionq","https://www.linkedin.com/company/florida-quantum-computing-society"
@@ -77,7 +77,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("renders the unified event explorer and simplified navigation", async ({ page }) => {
-  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /user-scalable=no/);
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /width=device-width/);
+  // App-shell zoom is fixed; gestures zoom only the map.
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /maximum-scale=1/);
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
   await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Florida Quantum Computing logo" })).toHaveAttribute("src", /fqc-app-icon-192\.png/);
@@ -370,7 +372,7 @@ test("mobile event sheet expands, collapses, and reveals pin selections with swi
   const intro = page.locator("#event-intro");
   await expect(handle).toBeVisible();
   await expect(planner).toHaveAttribute("data-sheet-mode", "medium");
-  await expect(page.locator("body")).toHaveCSS("position", "fixed");
+  await expect(page.locator("body")).not.toHaveCSS("position", "fixed");
   expect(await page.evaluate(() => {
     window.scrollTo(0, 120);
     return window.scrollY;
@@ -498,13 +500,14 @@ test("saves a signed-in RSVP from the unified home", async ({ page }) => {
 
 test("switches between light and dark themes and remembers the choice", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Use dark theme" }).click();
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByRole("radio", { name: "Dark", exact: true }).check();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.getByRole("button", { name: "Use light theme" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Dark", exact: true })).toBeChecked();
 
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.getByRole("button", { name: "Use light theme" }).click();
+  await page.getByRole("radio", { name: "Light", exact: true }).check();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
@@ -527,8 +530,8 @@ test("display name takes any characters within the limit but not one already in 
   await page.getByRole("button", { name: "Save Profile" }).click();
   await expect(page.locator("#action-feedback")).toContainText("Profile saved.");
 
-  // A name another member holds is refused.
-  await page.getByRole("button", { name: "Open settings" }).click();
+  // Saving keeps Settings open. A name another member holds is refused.
+  await expect(page.locator('[data-screen="settings"]')).toBeVisible();
   await page.getByLabel("Display name").fill("alex q");
   await page.getByRole("button", { name: "Save Profile" }).click();
   await expect(page.locator("#action-feedback")).toContainText("Another member is already using that display name.");
@@ -579,11 +582,12 @@ test("account management and updates are both collapsible", async ({ page }) => 
 
 test("settings offers a home-screen install so the app runs without browser chrome", async ({ page }) => {
   await page.getByRole("button", { name: "Open settings" }).click();
+  await page.locator('summary').filter({ hasText: "Install FQC" }).click();
   const installCard = page.locator(".install-card");
   await expect(installCard.getByRole("heading", { name: "Install FQC" })).toBeVisible();
   // Without a browser install event there is still a manual route.
   await expect(installCard.locator(".install-steps")).toBeVisible();
-  await expect(installCard).toContainText("no address bar, search field, or browser buttons");
+  await expect(installCard).toContainText("Open FQC directly from your Home Screen.");
 
   // A browser that offers installation gets a one-tap button instead.
   await page.evaluate(() => {
@@ -603,7 +607,7 @@ test("settings hides device reset under Advanced and shows version history", asy
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Version History" })).toBeVisible();
   await page.getByRole("heading", { name: "Version History" }).click();
-  await expect(page.getByText("v2.16.0 · Current")).toBeVisible();
+  await expect(page.getByText("v2.25.0 · Current")).toBeVisible();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toHaveCount(0);
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Nuke & Reload" })).toBeVisible();
@@ -867,7 +871,7 @@ test("member login enables event check-in and shows a member profile", async ({ 
 
   await navButton(page, "Profile").click();
   await expect(page.getByRole("heading", { name: "Alex Q", level: 2 })).toBeVisible();
-  await expect(page.locator("#profile-initial")).toHaveText("A");
+  await expect(page.locator(".profile-overview .avatar")).toHaveText("A");
 });
 
 test("leaderboard uses one cached read and awards one point per unique event", async ({ page }) => {
@@ -955,42 +959,37 @@ test("a long leaderboard previews ten and opens the rest in a scrollable popup",
   await expect(section.locator(".leader-row")).toHaveCount(10);
 });
 
-test("account creation is a clean two-step UF email and confirmed-password flow", async ({ page }) => {
+test("account creation is one form with email and a confirmed password", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await expect(page.getByRole("tab", { name: "Log In" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByLabel("Username or UF email")).toBeVisible();
-  await expect(page.getByLabel("Private password", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.getByLabel("Email or username")).toBeVisible();
+  await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue with Google" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Continue with Apple" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
   await expect(page.getByText(/officer code/i)).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.locator("#auth-mode-create").click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toBeVisible();
   await page.getByRole("button", { name: "Close account creation" }).click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.locator("#auth-mode-create").click();
   await page.locator("#signup-modal-backdrop").click({ position: { x: 4, y: 4 } });
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Create Account" }).click();
-  await expect(page.getByText("Step 1 of 2")).toBeVisible();
-  await expect(page.getByText("Two quick steps: your UF email and a password.")).toBeVisible();
+  await page.locator("#auth-mode-create").click();
+  await expect(page.locator("#signup-security-form input")).toHaveCount(3);
   await page.getByLabel("UF email", { exact: true }).fill("new.gator@ufl.edu");
-  await page.getByRole("button", { name: "Next: create a password" }).click();
-  await expect(page.getByText("Step 2 of 2")).toBeVisible();
-  await expect(page.getByText("@new.gator")).toBeVisible();
   await expect(page.getByLabel("Username", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel(/Add Face ID \/ Touch ID/)).not.toBeChecked();
+  await expect(page.getByLabel(/Add Face ID \/ Touch ID/)).toHaveCount(0);
   await expect(page.getByLabel("UFID verification")).toHaveCount(0);
   await page.locator("#signup-password").fill("quantum-safe-password");
   await page.locator("#signup-password-confirm").fill("different-password");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("dialog", { name: "Create your FQC account" }).getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByText("The passwords do not match yet.")).toBeVisible();
   await page.locator("#signup-password-confirm").fill("quantum-safe-password");
   await expect(page.getByText("Passwords match.")).toBeVisible();
-  await page.getByLabel(/Add Face ID \/ Touch ID/).check();
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("dialog", { name: "Create your FQC account" }).getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "new.gator" })).toBeVisible();
   await expect(page.getByText("Member", { exact: true })).toBeVisible();
@@ -999,27 +998,26 @@ test("account creation is a clean two-step UF email and confirmed-password flow"
 test("an automatic username collision never blocks account creation", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setUsernameDirectory({ taken: "another.member@ufl.edu" }));
-  await page.getByRole("tab", { name: "Create Account" }).click();
+  await page.locator("#auth-mode-create").click();
   await page.getByLabel("UF email", { exact: true }).fill("taken@ufl.edu");
-  await page.getByRole("button", { name: "Next: create a password" }).click();
   await page.locator("#signup-password").fill("quantum-safe-password");
   await page.locator("#signup-password-confirm").fill("quantum-safe-password");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("dialog", { name: "Create your FQC account" }).getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Create your FQC account" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "taken.2" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "taken" })).toBeVisible();
 });
 
 test("forgot password accepts a username or UF email", async ({ page }) => {
   await navButton(page, "Profile").click();
   await page.getByRole("button", { name: "Forgot password?" }).click();
   await expect(page.getByText("Enter your username or UF email first, then choose Forgot password.")).toBeVisible();
-  await page.getByLabel("Username or UF email").fill("member@ufl.edu");
+  await page.getByLabel("Email or username").fill("member@ufl.edu");
   await page.getByRole("button", { name: "Forgot password?" }).click();
   await expect(page.getByText("If an FQC account matches that, a link to set a password is on its way to the UF inbox.")).toBeVisible();
 
   // The same wording comes back for an identifier with no account, so the form
   // cannot be used to find out who has one.
-  await page.getByLabel("Username or UF email").fill("nobody.here@ufl.edu");
+  await page.getByLabel("Email or username").fill("nobody.here@ufl.edu");
   await page.getByRole("button", { name: "Forgot password?" }).click();
   await expect(page.getByText("If an FQC account matches that, a link to set a password is on its way to the UF inbox.")).toBeVisible();
 });
@@ -1044,7 +1042,7 @@ test("any officer can make a member an officer but cannot demote or remove one",
   await page.getByRole("button", { name: "Open settings" }).click();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
   await expect(page.locator('[data-member-id]')).toHaveCount(0);
-  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
 
   await page.getByRole("button", { name: /Open Jordan/ }).click();
   const profile = page.locator(".member-profile-modal");
@@ -1349,7 +1347,7 @@ test("officer controls list every leadership seat, linked and pending alike", as
 
 test("a brand new account is always a plain member with no officer controls", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await createTwoStepAccount(page, { email: "hopeful@ufl.edu" });
+  await createSimpleAccount(page, { email: "hopeful@ufl.edu" });
   await expect(page.locator(".profile-role-line").getByText("Member", { exact: true })).toBeVisible();
   await expect(page.locator(".officer-settings-group")).toHaveCount(0);
   await page.getByRole("button", { name: "Open settings" }).click();
@@ -1370,7 +1368,7 @@ test("a passkey member can email themselves a link to set a backup password", as
 
 test("the login screen tells a member with no passkey on this device how to get in", async ({ page }) => {
   await navButton(page, "Profile").click();
-  await expect(page.getByText(/No passkey on this device, or never set a password/)).toBeVisible();
+  await expect(page.getByText(/Need access on a new device/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
 });
@@ -1398,6 +1396,161 @@ test("nukes local app data and reloads a fresh events home", async ({ page }) =>
   await reload;
 
   await expect(page.getByRole("heading", { name: "Events", level: 1 })).toBeVisible();
-  await expect(page.locator("#profile-initial")).toHaveText("F");
+  await expect(page.locator("#quick-profile")).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => localStorage.getItem("fqc:name"))).toBeNull();
 });
+
+
+test("hackathon landing has four stable tabs, real club photos, and a working interest anchor", async ({ page }) => {
+  await navButton(page, "Hackathon").click();
+  await expect(page.locator(".bottom-nav .nav-item")).toHaveText(["Hackathon", "Home", "Check In", "Profile"]);
+  await expect(navButton(page, "Hackathon")).toHaveAttribute("aria-current", "page");
+  await page.getByRole("link", { name: "Explore the hackathon" }).click();
+  await expect(page.locator("#hackathon-title")).toBeInViewport();
+  await expect(page.locator(".hackathon-landing")).toBeVisible();
+  await page.locator(".hack-photo-story").scrollIntoViewIfNeeded();
+  await expect.poll(() => page.locator(".hack-photo-story img").evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `test-results/hackathon-${test.info().project.name}-photos.png` });
+  await page.goto("/hackathon");
+  await expect(page.locator(".hack-hero")).toBeVisible();
+  await expect(page.locator(".app-splash")).toBeHidden();
+  await expect(page.locator(".hack-hero h2")).toHaveCSS("color", "rgb(245, 245, 247)");
+  await page.screenshot({ path: `test-results/hackathon-${test.info().project.name}-hero.png` });
+});
+
+test("hackathon workshop layers reveal phase, reverse cleanly, and keep the Grover peak honest", async ({ page }) => {
+  await navButton(page, "Hackathon").click();
+  const gate = page.getByRole("button", { name: "Apply H to both" });
+  await expect(page.locator('[data-phase-bars="plus"]')).toHaveAttribute("aria-label", "Plus input: zero 50 percent, one 50 percent");
+  await expect(page.locator('[data-phase-bars="minus"]')).toHaveAttribute("aria-label", "Minus input: zero 50 percent, one 50 percent");
+  await gate.click();
+  await expect(page.getByRole("button", { name: "Remove H", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('[data-phase-bars="plus"]')).toHaveAttribute("aria-label", "Plus input: zero 100 percent, one 0 percent");
+  await expect(page.locator('[data-phase-bars="minus"]')).toHaveAttribute("aria-label", "Minus input: zero 0 percent, one 100 percent");
+  await expect(page.locator('[data-phase-state="plus"]')).toHaveText("|0⟩");
+  await expect(page.locator('[data-phase-state="minus"]')).toHaveText("|1⟩");
+  await page.getByRole("button", { name: "Remove H", exact: true }).click();
+  await expect(page.locator('[data-phase-bars="minus"]')).toHaveAttribute("aria-label", "Minus input: zero 50 percent, one 50 percent");
+  await expect(page.locator('[data-phase-state="minus"]')).toHaveText("|−⟩");
+  await page.getByText("Inside our search notebook", { exact: false }).click();
+  const rounds = page.getByRole("slider", { name: "Try a different number of rounds" });
+  await expect(page.locator("#grover-probability")).toHaveText("99.995%");
+  const field = page.locator('[data-grover-field]');
+  await expect(field).toHaveAttribute('aria-label', /99.995 percent/);
+  const targetAlpha = () => field.evaluate(el => el.getContext('2d').getImageData(387, 147, 1, 1).data[3]);
+  const peakAlpha = await targetAlpha();
+  await rounds.focus();
+  await page.keyboard.press("Home");
+  await expect(rounds).toHaveValue("0");
+  await expect(page.locator("#grover-probability")).toHaveText("0.024%");
+  await page.keyboard.press("End");
+  await expect(rounds).toHaveValue("100");
+  await expect(page.locator("#grover-explanation")).toContainText("undo the amplification");
+  await expect(page.locator("#grover-probability")).toHaveText("<0.001%");
+  await expect(field).toHaveAttribute('aria-label', /less than 0.001 percent/);
+  expect(await targetAlpha()).toBeLessThan(peakAlpha / 1.5);
+  await page.getByText("Before the search: two hidden bits", { exact: false }).click();
+  await expect(page.locator(".oracle-outcomes")).toContainText("same → |0⟩");
+  await expect(page.locator(".oracle-outcomes")).toContainText("different → |1⟩");
+  await expect(navButton(page, "Hackathon")).toHaveAttribute("aria-current", "page");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `test-results/workshop-${test.info().project.name}-depth.png` });
+  await page.locator(".phase-experiment").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `test-results/workshop-${test.info().project.name}-phase.png` });
+  await page.locator(".workshop-hardware").screenshot({ path: `test-results/workshop-${test.info().project.name}-hardware.png` });
+});
+
+test("existing members can RSVP, withdraw, and keep interest separate between accounts", async ({ page }) => {
+  const signIn = uid => page.evaluate(uid => window.__FQC_AUTH_TEST_API__.signInAs({ uid, email: `${uid}@ufl.edu`, displayName: uid, role: "member" }), uid);
+  await navButton(page, "Hackathon").click();
+  await signIn("interested-member");
+  await page.locator("[data-hackathon-rsvp]").first().click();
+  await expect(page.getByText("Your interest is saved to your FQC account.", { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => window.__FQC_AUTH_TEST_API__.getHackathonInterest("interested-member"))).toBe(true);
+  await navButton(page, "Home").click();
+  await navButton(page, "Hackathon").click();
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toBeDisabled();
+  await signIn("other-member");
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toBeEnabled();
+  await signIn("interested-member");
+  await page.getByRole("button", { name: "Remove my interest" }).click();
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toBeEnabled();
+  expect(await page.evaluate(() => window.__FQC_AUTH_TEST_API__.getHackathonInterest("interested-member"))).toBe(false);
+});
+
+test("hackathon RSVP resumes after existing-account login", async ({ page }) => {
+  await navButton(page, "Hackathon").click();
+  await page.locator("[data-hackathon-rsvp]").first().click();
+  await page.getByRole("button", { name: "Log In", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await expect(navButton(page, "Hackathon")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toContainText("Interest registered");
+});
+
+test("hackathon RSVP creates an account and saves interest automatically", async ({ page }) => {
+  await navButton(page, "Hackathon").click();
+  await page.locator("[data-hackathon-rsvp]").first().click();
+  await page.getByRole("button", { name: "Create Account", exact: true }).click();
+  await page.getByLabel("UF email", { exact: true }).fill("hackathon.gator@ufl.edu");
+  await page.locator("#signup-password").fill("quantum-safe-password");
+  await page.locator("#signup-password-confirm").fill("quantum-safe-password");
+  await page.getByRole("dialog", { name: "Create your FQC account" }).getByRole("button", { name: "Create account", exact: true }).click();
+  await expect(navButton(page, "Hackathon")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toContainText("Interest registered");
+});
+
+test("failed hackathon RSVP shows retry and never falsely confirms", async ({ page }) => {
+  await navButton(page, "Hackathon").click();
+  await page.evaluate(() => {
+    window.__FQC_AUTH_TEST_API__.signInAs({ uid: "retry-member", email: "retry@ufl.edu", role: "member" });
+    window.__FQC_AUTH_TEST_API__.setInterestFailure(true);
+  });
+  await page.locator("[data-hackathon-rsvp]").first().click();
+  await expect(page.locator(".hack-interest-error")).toContainText("wasn’t saved");
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toBeEnabled();
+  expect(await page.evaluate(() => window.__FQC_AUTH_TEST_API__.getHackathonInterest("retry-member"))).toBe(false);
+  await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setInterestFailure(false));
+  await page.locator("[data-hackathon-rsvp]").first().click();
+  await expect(page.locator("[data-hackathon-rsvp]").first()).toContainText("Interest registered");
+});
+
+test("glass navigation supports keyboard, slider, dragging, and browser history", async ({ page }) => {
+  await expect(page.locator(".app-splash")).toBeHidden();
+  await navButton(page, "Home").focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(navButton(page, "Hackathon")).toHaveAttribute("aria-current", "page");
+  const slider = page.getByRole("slider", { name: "Slide between tabs" });
+  await slider.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(navButton(page, "Home")).toHaveAttribute("aria-current", "page");
+  const start = await navButton(page, "Home").boundingBox();
+  const end = await navButton(page, "Profile").boundingBox();
+  await page.mouse.move(start.x + start.width / 2, start.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + 20, { steps: 12 });
+  await page.mouse.up();
+  await expect(navButton(page, "Profile")).toHaveAttribute("aria-current", "page");
+  await page.goBack();
+  await expect(navButton(page, "Home")).toHaveAttribute("aria-current", "page");
+  await page.goForward();
+  await expect(navButton(page, "Profile")).toHaveAttribute("aria-current", "page");
+});
+
+test("browser tabs retain independent screens after focus, refresh, and reload", async ({ page, context }) => {
+  await navButton(page, "Profile").click();
+  const second = await context.newPage();
+  await second.addInitScript(() => { window.__FQC_AUTH_TEST__ = true; });
+  await second.goto("/hackathon");
+  await expect(navButton(second, "Hackathon")).toHaveAttribute("aria-current", "page");
+  await page.bringToFront();
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(navButton(page, "Profile")).toHaveAttribute("aria-current", "page");
+  await second.reload();
+  await expect(navButton(second, "Hackathon")).toHaveAttribute("aria-current", "page");
+  await page.reload();
+  await expect(navButton(page, "Profile")).toHaveAttribute("aria-current", "page");
+  await second.close();
+});
+
+test('trackpad reversals preserve visible tiles and continuous zoom through live updates', async ({ page }) => { await checkContinuousWheel(page); });

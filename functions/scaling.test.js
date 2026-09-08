@@ -66,3 +66,22 @@ test("leaderboard aggregation keeps one compact top-one-hundred snapshot", () =>
   assert.equal(entries[0].points, 499);
   assert.equal(entries.at(-1).points, 400);
 });
+
+
+// Exercise the actual export row planner against a populated 10K roster.
+import { memberSheetRows, masterMemberKey } from "./index.js";
+test("10K member rows are stable, formula-safe values and removals clear attendance", () => {
+  const context = { columns: new Map([["event", 5]]), rowByKey: new Map(), lastCheckInByKey: new Map(), nextRow: 3 };
+  const profiles = Array.from({ length: 10000 }, (_, i) => ({ uid: `member-${i}`, displayName: i === 9999 ? "=1+1" : `Member ${i}`, checkedInEvents: ["event"] }));
+  const first = memberSheetRows(context, profiles);
+  assert.equal(first.length, 10000);
+  assert.equal(first[9999].range, "'Master Members'!A10002:IZ10002");
+  assert.equal(first[9999].values[0][1], "=1+1");
+  assert.equal(first[9999].values[0][5], "✓");
+  const retry = memberSheetRows(context, [profiles[9999]]);
+  assert.deepEqual(retry[0], first[9999]);
+  assert.equal(context.nextRow, 10003);
+  const removed = memberSheetRows(context, [{ uid: "member-9999", deleted: true }])[0];
+  assert.equal(removed.values[0][0], masterMemberKey("member-9999"));
+  assert.equal(removed.values[0].slice(1).every(value => value === ""), true);
+});

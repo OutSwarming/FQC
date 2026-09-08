@@ -9,3 +9,6 @@ ui-debug.log
 .DS_Store
 .vite/
 .firebase/
+
+# Local photo originals, research downloads, and visual review artifacts
+output/

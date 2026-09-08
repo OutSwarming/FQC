@@ -1,3 +1,5 @@
+import { renderWorkshopStories, bindWorkshopStories } from "./workshop-stories.js";
+import { bindMapQuickZoom } from "./map-gestures.js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -13,6 +15,8 @@ import {
   logOut,
   observeCheckIn,
   observeSession,
+  observeHackathonInterest,
+  saveHackathonInterest,
   readableAuthError,
   requestPasswordReset,
   sendPasswordSetupEmail,
@@ -31,9 +35,24 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.16.0";
-const APP_RELEASE_DATE = "September 1, 2026";
+const APP_VERSION = "2.25.0";
+const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.0", "Added subtle mobile photo entrances and a clearer invitation to build at the hackathon"],
+  ["2.24.1", "Centered one-finger map zoom and kept map tiles visible during continuous trackpad scrolling"],
+  ["2.24.0", "Connected the mobile workshop story with tighter layouts, side-by-side qubit experiments and an interactive Grover probability field"],
+  ["2.23.0", "Rebuilt the workshop story from FQC’s hardware deck, Quirk exercises, SwampHacks lesson and Grover notebook, with interactive explanations and deeper optional reading"],
+  ["2.22.0", "Connected FQC’s founding, circuit workshops and sensing sessions to the planned quantum drug-discovery hackathon, with stronger photo dehazing"],
+  ["2.21.1", "Enhanced original club photos with natural color and exposure corrections, tighter crops, and fuller room photos"],
+  ["2.21.0", "Rebuilt the hackathon story around FQC’s founding, real workshop material, and spring club photos"],
+  ["2.20.2", "Removed the map tile reset that caused flashes after rapid two-finger pinch zooms"],
+  ["2.20.1", "Kept the app at its normal size during pinch and double-tap gestures, while preserving map zoom and page scrolling"],
+  ["2.20.0", "Smoothed continuous map zoom, removed text-selection interference, cleared pin highlights on tap-away, and preserved the live map during updates"],
+  ["2.19.2", "Kept the floating navigation at the same height on Home and every other tab"],
+  ["2.19.1", "Matched login, account creation, and sign-in prompts to the app’s glass appearance in light and dark mode"],
+  ["2.19.0", "Simplified Firebase email signup and moved member and attendance exports to a retryable ten-minute batch, with support for larger membership rosters"],
+  ["2.18.0", "Simplified colors and Settings, moved appearance into one place, refined the floating tab bar, and restored map zoom gestures including one-finger double-tap and drag"],
+  ["2.17.0", "Added the FQC hackathon landing page and account-based interest list, a floating glass navigation bar with drag and keyboard controls, and independent navigation in each browser tab"],
   ["2.16.0", "Rebuilt account creation and event check-in for crowded meetings with retryable profile setup, collision-safe usernames, independent leaderboard updates, cached location checks, and five-minute batched attendance Sheet sync"],
   ["2.15.0", "Fixed the production account-creation transaction, removed the signup reservation round trip, and stopped duplicate profile setup during account creation so crowded GBMs can sign up reliably"],
   ["2.14.0", "Simplified signup to UF email and a confirmed password, automatically uses the UF email name as the username, offers Face ID or Touch ID as an optional add-on, and moved username changes into Settings"],
@@ -69,7 +88,7 @@ const RELEASE_HISTORY = [
   ["1.6.0", "Unified UF event map, list, calendar, and mobile bottom sheet"],
   ["1.5.0", "Google Sheets event updates and UF campus locations"]
 ];
-const allowedViews = new Set(["home", "checkin", "profile", "settings"]);
+const allowedViews = new Set(["hackathon", "home", "checkin", "profile", "settings"]);
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 const EVENT_SHEET_ID = "1xB4q--RsY7girF9JumjbUKKRu9lFQ8XHRlkCHttbgd0";
 const EVENTS_SHEET_NAME = "Events";
@@ -118,10 +137,20 @@ function readJson(key, fallback) {
   }
 }
 
-const storedView = localStorage.getItem("fqc:view") || "home";
+// Navigation belongs to this window; shared local storage must not steer other tabs.
+function viewFromLocation() {
+  const hash = window.location.hash.slice(1);
+  if (allowedViews.has(hash)) return hash;
+  if (hash === "hackathon-interest") return "hackathon";
+  if (/^\/hackathon\/?$/.test(window.location.pathname)) return "hackathon";
+  return null;
+}
+const storedView = viewFromLocation() || sessionStorage.getItem("fqc:view") || "home";
 const state = {
   view: allowedViews.has(storedView) ? storedView : "home",
-  theme: localStorage.getItem("fqc:theme") || document.documentElement.dataset.theme || systemTheme,
+  theme: document.documentElement.dataset.theme || systemTheme,
+  appearance: localStorage.getItem("fqc:theme") || "system",
+  settingsReturnView: "home",
   eventMode: localStorage.getItem("fqc:event-mode") || "list",
   calendarMonth: localStorage.getItem("fqc:calendar-month") || "2026-03",
   selectedEventId: localStorage.getItem("fqc:selected-event") || "fqc-2026-03-03-ionq",
@@ -139,11 +168,12 @@ const state = {
   authPromptAction: "",
   authPromptEventId: "",
   pendingIntent: null,
+  hackathonInterested: false,
+  hackathonReady: false,
+  hackathonBusy: false,
+  hackathonError: "",
   signupOpen: false,
-  signupStep: 1,
   signupEmail: "",
-  signupUsername: "",
-  signupAddPasskey: false,
   authUser: null,
   memberRole: "member",
   leadership: "",
@@ -657,6 +687,7 @@ if (!/^\d{4}-\d{2}$/.test(state.calendarMonth)) state.calendarMonth = events[0].
 if (!/^(light|dark)$/.test(state.theme)) state.theme = systemTheme;
 
 const titles = {
+  hackathon: "Hackathon",
   home: "Events",
   checkin: "Check In",
   profile: "Profile",
@@ -666,11 +697,17 @@ const titles = {
 const app = document.querySelector("#app");
 const title = document.querySelector("#screen-title");
 const navItems = [...document.querySelectorAll(".nav-item")];
-const quickProfile = document.querySelector("#quick-profile");
-const profileInitial = document.querySelector("#profile-initial");
-const themeToggle = document.querySelector("#theme-toggle");
+const bottomNav = document.querySelector(".bottom-nav");
+const navSlider = document.querySelector("#nav-slider");
+const viewScroll = new Map();
+let interestUnsubscribe = null;
+let interestUid = null;
 const settingsToggle = document.querySelector("#settings-toggle");
 let eventMap = null;
+let highlightedMapLocationId = null;
+let mapInteractionActive = false;
+let deferredMapRender = false;
+let renderedMarkerSignature = "";
 let eventMarkers = new Map();
 let pendingMapPan = null;
 let renderedView = "";
@@ -695,8 +732,8 @@ const MOBILE_EVENT_SHEET_MODES = ["closed", "low", "medium", "high"];
 let mobileEventSheetMode = "medium";
 
 function saveState() {
-  localStorage.setItem("fqc:view", state.view);
-  localStorage.setItem("fqc:theme", state.theme);
+  sessionStorage.setItem("fqc:view", state.view);
+  localStorage.setItem("fqc:theme", state.appearance);
   localStorage.setItem("fqc:event-mode", state.eventMode);
   localStorage.setItem("fqc:calendar-month", state.calendarMonth);
   localStorage.setItem("fqc:selected-event", state.selectedEventId);
@@ -803,17 +840,16 @@ function escapeHtml(value) {
   })[char]);
 }
 
-function applyTheme(theme, persist = true) {
-  state.theme = theme === "dark" ? "dark" : "light";
+function applyTheme(appearance, persist = true) {
+  state.appearance = ["light", "dark"].includes(appearance) ? appearance : "system";
+  state.theme = state.appearance === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : state.appearance;
   document.documentElement.dataset.theme = state.theme;
-  themeToggle.setAttribute("aria-label", `Use ${state.theme === "dark" ? "light" : "dark"} theme`);
-  themeToggle.title = `Use ${state.theme === "dark" ? "light" : "dark"} theme`;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute(
-    "content",
-    state.theme === "dark" ? "#080d1d" : "#f7f9fe"
-  );
+  document.querySelectorAll('meta[name="theme-color"]').forEach(meta => meta.setAttribute("content", state.theme === "dark" ? "#000000" : "#f2f2f7"));
   if (persist) saveState();
 }
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (state.appearance === "system") applyTheme("system", false);
+});
 
 async function nukeAndReload() {
   try {
@@ -839,7 +875,7 @@ async function nukeAndReload() {
     }
   } catch {}
 
-  window.setTimeout(() => window.location.reload(), 80);
+  window.setTimeout(() => window.location.replace("/"), 80);
 }
 
 async function checkForUpdates() {
@@ -863,12 +899,15 @@ async function checkForUpdates() {
   }
 }
 
-function stopZoomGesture(event) {
-  event.preventDefault();
-}
-
-function setView(view) {
+function setView(view, { history = true } = {}) {
+  if (view === "settings" && state.view !== "settings") state.settingsReturnView = state.view;
+  if (state.view !== view) viewScroll.set(state.view, window.scrollY);
   state.view = allowedViews.has(view) ? view : "home";
+  if (history) {
+    const url = new URL(window.location.href);
+    url.hash = state.view;
+    if (url.href !== window.location.href) window.history.pushState(null, "", url);
+  }
   saveState();
   render();
   if (state.view === "profile" && state.loggedIn) queueMicrotask(() => refreshLeaderboard());
@@ -893,14 +932,25 @@ function disclosureAttrs(key, defaultOpen = false) {
 }
 
 function render() {
+  // Do not detach a container while a pointer is captured or the view is moving.
+  if (state.view === "home" && eventMap && mapInteractionActive) {
+    deferredMapRender = true;
+    return;
+  }
+  deferredMapRender = false;
+  // Keep in-progress credentials in the DOM across live event/settings updates.
+  // This snapshot lasts only for this render; passwords never enter storage.
+  const authDraft = [...app.querySelectorAll("#email-auth-form input, #signup-security-form input")]
+    .map(input => ({ id: input.id, value: input.value, focused: input === document.activeElement }));
+  // Keep the live map (and tile/gesture state) when the surrounding UI updates.
+  const retainedMap = state.view === "home" && eventMap ? eventMap.getContainer() : null;
   if (eventMap) {
-    // Remember where the reader had the map so the rebuild lands in the same place.
     savedMapView = { center: eventMap.getCenter(), zoom: eventMap.getZoom() };
-    if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
-    eventMap.remove();
-    eventMap = null;
-    eventMarkers = new Map();
-    pendingMapPan = null;
+    if (retainedMap) retainedMap.remove();
+    else {
+      if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
+      eventMap.remove(); eventMap = null; eventMarkers = new Map(); pendingMapPan = null; mapInteractionActive = false;
+    }
   }
 
   const eventsScreenActive = state.view === "home";
@@ -909,15 +959,24 @@ function render() {
   document.body.classList.toggle("signup-modal-open", state.signupOpen || state.authPromptOpen || state.budgetBreakdownOpen || Boolean(state.memberProfileUid) || state.leaderboardExpanded);
   if (eventsScreenActive && isMobileEventSheetViewport() && window.scrollY !== 0) window.scrollTo(0, 0);
 
+  document.body.classList.toggle("hackathon-screen-active", state.view === "hackathon");
   title.textContent = titles[state.view] || "Events";
-  profileInitial.textContent = state.memberName.trim().charAt(0).toUpperCase() || "F";
+  settingsToggle.hidden = state.view === "settings";
   navItems.forEach((item) => {
     const active = item.dataset.view === state.view;
     item.classList.toggle("active", active);
     item.setAttribute("aria-current", active ? "page" : "false");
   });
 
+  const navIndex = navItems.findIndex((item) => item.dataset.view === state.view);
+  bottomNav.dataset.settings = String(navIndex < 0);
+  if (navIndex >= 0) {
+    bottomNav.style.setProperty("--nav-index", navIndex);
+    navSlider.value = String(navIndex);
+    navSlider.setAttribute("aria-valuetext", navItems[navIndex].textContent.trim());
+  }
   const views = {
+    hackathon: renderHackathon,
     home: renderHome,
     checkin: renderCheckIn,
     profile: renderProfile,
@@ -927,6 +986,18 @@ function render() {
   const sameView = renderedView === state.view;
   const previousScrollY = window.scrollY;
   app.innerHTML = `${views[state.view]?.() || renderHome()}${state.authPromptOpen ? renderAuthPromptModal() : ""}${state.signupOpen ? renderSignupModal() : ""}`;
+  // A live update must not replay the page entrance beneath an active map.
+  if (sameView) app.firstElementChild.style.animation = "none";
+  if (retainedMap) {
+    document.querySelector("#event-map")?.replaceWith(retainedMap);
+    eventMap.invalidateSize({ pan: false });
+    drawMapMarkers({ preserveView: true });
+  }
+  if (state.signupOpen || state.authPromptOpen) { app.firstElementChild.inert = true; app.firstElementChild.setAttribute("aria-hidden", "true"); }
+  for (const draft of authDraft) {
+    const input = document.getElementById(draft.id);
+    if (input) { input.value = draft.value; if (draft.focused) input.focus({ preventScroll: true }); }
+  }
   bindViewEvents();
   renderedView = state.view;
   if (sameView) {
@@ -934,7 +1005,8 @@ function render() {
     // out from under the officer who is still working in it.
     if (window.scrollY !== previousScrollY) window.scrollTo(0, previousScrollY);
   } else {
-    app.focus({ preventScroll: true });
+    window.scrollTo(0, viewScroll.get(state.view) || 0);
+    if (!bottomNav.contains(document.activeElement)) app.focus({ preventScroll: true });
   }
   if (mapInitFrame) cancelAnimationFrame(mapInitFrame);
   if (state.view === "home") {
@@ -944,6 +1016,71 @@ function render() {
     });
   } else {
     mapInitFrame = null;
+  }
+}
+
+function hackathonCta() {
+  const disabled = state.hackathonBusy || (state.loggedIn && !state.hackathonReady);
+  const label = state.hackathonBusy ? "Saving your interest…" : state.loggedIn && !state.hackathonReady ? "Checking your RSVP…" : state.hackathonInterested ? "Interest registered" : "Join the interest list";
+  return `<button class="hack-cta" data-hackathon-rsvp type="button" ${disabled || state.hackathonInterested ? "disabled" : ""}>${label}</button>`;
+}
+
+function hackathonPhoto(name, alt, eager = false, wide = false) {
+  const larger = name.endsWith('-clear') ? `, /assets/hackathon/${name}-2400.webp 2400w` : '';
+  return `<img src="/assets/hackathon/${name}-800.webp" srcset="/assets/hackathon/${name}-800.webp 800w, /assets/hackathon/${name}-1600.webp 1600w${larger}" sizes="${wide ? '(max-width: 1440px) 96vw, 1380px' : '(max-width: 680px) 95vw, 48vw'}" width="1600" height="1200" alt="${alt}" loading="${eager ? "eager" : "lazy"}" ${eager ? 'fetchpriority="high"' : ''} decoding="async">`;
+}
+
+function renderHackathon() {
+  return `
+    <section class="hackathon-landing" data-screen="hackathon">
+      <header class="hack-hero">
+        <div class="hack-eyebrow"><span class="hack-live-dot"></span> FLORIDA QUANTUM COMPUTING</div>
+        <span class="hack-state-mark" aria-hidden="true">|0⟩</span>
+        <div class="hack-hero-grid">
+          <div><h2>We started<br>from <em>zero</em></h2><p class="hack-origin"><strong class="hack-reader">You can too</strong><br>UF had no quantum club, so we built a place to start together</p><a class="hack-outline-link" href="#hackathon-interest">Explore the hackathon <span aria-hidden="true">↗</span></a></div>
+          <figure class="hack-hero-shot">${hackathonPhoto('sign-enhanced', 'Five FQC members beside the club banner at the spring 2026 end-of-year social', true)}<figcaption>Built by students · Open to every major</figcaption></figure>
+        </div>
+        <div class="hack-hero-footnote"><span>UF’S FIRST QUANTUM COMPUTING CLUB</span><span aria-hidden="true">|0⟩ ── H ── |+⟩</span></div>
+      </header>
+      ${renderWorkshopStories(hackathonPhoto)}
+      <section class="hack-intro hack-build-card" id="hackathon-interest" aria-labelledby="hackathon-title">
+        <div><p class="hack-kicker">FQC HACKATHON / IN DEVELOPMENT</p><h2 id="hackathon-title">Your turn<br> to <em>build</em></h2><div class="hack-molecule" aria-hidden="true"><svg viewBox="0 0 210 78"><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 24 44 10 68 24 68 52 44 66 20 52Z M68 24 92 10 116 24 116 52 92 66 68 52 M116 24 145 24 164 44 192 44 M27 28 44 18 M60 29 60 48 M28 49 44 58"/></g><circle cx="164" cy="44" r="4" fill="currentColor"/></svg></div></div>
+        <div class="hack-intro-copy"><p>The next problem is molecular<br> Put quantum + AI to work on drug discovery</p><p class="hack-detail">Molecular screening · Protein binding<br>Exploring CUDA-Q and HiPerGator</p>${hackathonCta()}${state.hackathonInterested ? '<p class="hack-interest-status" role="status">Your interest is saved to your FQC account. Final registration details will follow.</p><button class="hack-cancel" type="button" id="cancel-hackathon-interest">Remove my interest</button>' : '<p class="hack-small">Sign in or create an FQC account to save your interest</p>'}${state.hackathonError ? `<p class="hack-interest-status hack-interest-error" role="alert">${escapeHtml(state.hackathonError)}</p>` : ""}</div>
+      </section>
+      <section class="hack-faq" aria-labelledby="hack-faq-title"><div><p class="hack-kicker">BEFORE YOU JOIN</p><h2 id="hack-faq-title">A few <em>details</em></h2></div><div class="hack-questions"><details><summary>What’s confirmed?</summary><p>The hackathon is in development<br>Dates, venue, challenges and computing access will be confirmed before registration</p></details><details><summary>Does this reserve my spot?</summary><p>This saves your interest, not a confirmed place<br>Final registration details will follow</p></details><details><summary>New to FQC?</summary><p>Create an account with your UF email<br>We’ll bring you back here and save your interest</p></details></div></section>
+      <footer class="hack-story-footer"><span aria-hidden="true">|ψ⟩</span><p>The next state<br><em>includes you</em></p><small>FLORIDA QUANTUM COMPUTING<br>UNIVERSITY OF FLORIDA</small></footer>
+    </section>`;
+}
+
+async function registerHackathonInterest(interested = true) {
+  if (state.hackathonBusy) return;
+  if (!state.loggedIn) {
+    state.pendingIntent = { type: "hackathon" };
+    state.authPromptOpen = true;
+    state.authPromptAction = "hackathon";
+    state.authPromptEventId = "";
+    render();
+    return;
+  }
+  const uid = state.authUser.uid;
+  state.hackathonBusy = true;
+  state.hackathonError = "";
+  render();
+  try {
+    await saveHackathonInterest(interested);
+    if (state.authUser?.uid !== uid) return;
+    state.hackathonInterested = interested;
+    state.hackathonReady = true;
+    showActionFeedback("success", interested ? "You’re on the hackathon interest list." : "Your interest has been removed.");
+  } catch (error) {
+    if (state.authUser?.uid !== uid) return;
+    state.hackathonError = "Your RSVP wasn’t saved. Check your connection and try again.";
+    showActionFeedback("error", state.hackathonError);
+  } finally {
+    if (state.authUser?.uid === uid) {
+      state.hackathonBusy = false;
+      if (state.view === "hackathon") render();
+    }
   }
 }
 
@@ -1172,7 +1309,7 @@ function setEventMode(mode) {
     panel.hidden = panel.dataset.eventPanel !== state.eventMode;
   });
   drawMapMarkers();
-  selectEvent(state.selectedEventId, { focusMap: false });
+  selectEvent(state.selectedEventId, { focusMap: false, highlightMap: false });
   if (isMobileEventSheetViewport()) {
     const nextSheetMode = state.eventMode === "calendar" || state.eventMode === "past" || mobileEventSheetMode === "high"
       ? "high"
@@ -1211,8 +1348,9 @@ function selectEvent(eventId, options = {}) {
   });
 
   const activeLocationId = getEventLocation(getEvent(eventId))?.id;
+  if (options.highlightMap !== false) highlightedMapLocationId = activeLocationId;
   eventMarkers.forEach((marker, locationId) => {
-    marker.getElement()?.querySelector(".event-map-pin")?.classList.toggle("active", locationId === activeLocationId);
+    marker.getElement()?.querySelector(".event-map-pin")?.classList.toggle("active", locationId === highlightedMapLocationId);
   });
 
   const details = document.querySelector("#event-details");
@@ -1238,12 +1376,13 @@ function selectEvent(eventId, options = {}) {
 }
 
 function isMobileEventSheetViewport() {
-  return window.matchMedia("(max-width: 680px)").matches;
+  return window.matchMedia("(max-width: 680px), (max-height: 500px) and (pointer: coarse)").matches;
 }
 
 function getMobileEventSheetMetrics() {
   const explorer = document.querySelector(".event-explorer");
   const availableHeight = explorer?.getBoundingClientRect().height || Math.max(520, window.innerHeight - 160);
+  if (availableHeight < 320) return { closed: 0, low: availableHeight * .25, medium: availableHeight * .5, high: availableHeight * .84 };
   const low = Math.min(190, Math.max(154, availableHeight * 0.24));
   const medium = Math.min(320, Math.max(low + 94, availableHeight * 0.45));
   const high = Math.max(medium + 112, availableHeight * 0.78);
@@ -1585,8 +1724,15 @@ function initEventMap() {
     center: [UF_CAMPUS_CENTER.lat, UF_CAMPUS_CENTER.lng],
     zoom: UF_CAMPUS_CENTER.zoom,
     zoomControl: false,
+    // Quick zoom uses the continuous pinch renderer instead of CSS step zoom.
+    zoomAnimation: false,
     attributionControl: true,
-    scrollWheelZoom: false,
+    scrollWheelZoom: true,
+    doubleClickZoom: false,
+    touchZoom: true,
+    zoomSnap: 0,
+    bounceAtZoomLimits: false,
+    tapHold: false,
     maxBounds: [
       [UF_CAMPUS_BOUNDS.south, UF_CAMPUS_BOUNDS.west],
       [UF_CAMPUS_BOUNDS.north, UF_CAMPUS_BOUNDS.east]
@@ -1594,13 +1740,29 @@ function initEventMap() {
     maxBoundsViscosity: 1
   });
 
+  eventMap.on("movestart", () => { mapInteractionActive = true; });
+  eventMap.on("moveend", () => {
+    mapInteractionActive = false;
+    if (deferredMapRender) requestAnimationFrame(() => { if (deferredMapRender) render(); });
+  });
+  eventMap.on("userzoomstart", () => {
+    clearMapPinHighlight();
+    if (pendingMapPan) eventMap.off("moveend", pendingMapPan);
+    pendingMapPan = null;
+  });
+  bindMapQuickZoom(eventMap);
   window.L.control.zoom({ position: "topright" }).addTo(eventMap);
   window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
+    updateWhenIdle: false,
+    updateWhenZooming: true,
+    updateInterval: 80,
+    keepBuffer: 3,
     attribution: "&copy; OpenStreetMap contributors"
   }).addTo(eventMap);
 
   eventMap.on("click", () => {
+    clearMapPinHighlight();
     if (isMobileEventSheetViewport()) setMobileEventSheetMode("closed");
   });
 
@@ -1610,15 +1772,26 @@ function initEventMap() {
   window.setTimeout(revealApp, 180);
 }
 
+function clearMapPinHighlight() {
+  highlightedMapLocationId = null;
+  document.querySelectorAll(".event-map-pin.active").forEach(pin => pin.classList.remove("active"));
+}
+document.addEventListener("pointerdown", event => {
+  if (!event.target.closest?.(".leaflet-marker-icon")) clearMapPinHighlight();
+}, true);
+
 // Pins follow the visible tab, so Past events only appear while Past is open.
-function drawMapMarkers() {
+function drawMapMarkers({ preserveView = false } = {}) {
   if (!eventMap) return;
+  const groups = eventsByLocation(eventsForMode());
+  const markerSignature = groups.map(({ location, events: list }) => `${location.id}:${location.lat}:${location.lng}:${list.map(event => event.id).join(",")}`).join("|");
+  if (preserveView && markerSignature === renderedMarkerSignature) return;
+  renderedMarkerSignature = markerSignature;
   eventMarkers.forEach((marker) => marker.remove());
   eventMarkers = new Map();
 
   const bounds = [];
-  const selectedLocationId = getEventLocation(getEvent(state.selectedEventId))?.id;
-  const groups = eventsByLocation(eventsForMode());
+  const selectedLocationId = highlightedMapLocationId;
   groups.forEach(({ location, events: locationEvents }) => {
     const count = locationEvents.length;
     const marker = window.L.marker([location.lat, location.lng], {
@@ -1645,9 +1818,9 @@ function drawMapMarkers() {
   // Only reframe when the pins actually change. Refitting on every repaint is
   // what yanked the map away after a background Sheet refresh.
   const signature = groups.map(({ location, events: list }) => `${location.id}:${list.length}`).join("|");
-  if (bounds.length && signature !== mapPinSignature) {
+  if (!preserveView && bounds.length && signature !== mapPinSignature) {
     eventMap.fitBounds(bounds, { padding: [54, 54], maxZoom: 16 });
-  } else if (savedMapView) {
+  } else if (!preserveView && savedMapView) {
     eventMap.setView(savedMapView.center, savedMapView.zoom, { animate: false });
   }
   mapPinSignature = signature;
@@ -2009,8 +2182,8 @@ function renderOfficerWorkspace() {
   const visibleCurrentEvents = state.showAllOfficerEvents ? currentEvents : currentEvents.slice(0, 4);
   const attendanceSync = operations?.attendanceSync || { state: "current", remaining: false };
   const attendanceSyncLabel = attendanceSync.state === "retrying"
-    ? "Attendance Sheet retrying"
-    : attendanceSync.remaining ? "Attendance Sheet catching up" : "Attendance Sheet current";
+    ? "Export will retry"
+    : attendanceSync.remaining ? "Export catching up" : "Ten-minute export";
   return `
     <section class="section officer-operations">
       <div class="section-header officer-operations-header"><div><p class="section-kicker">Officer workspace</p><h2>Events</h2></div><span class="attendance-sync-pill state-${escapeHtml(attendanceSync.state)}">${escapeHtml(attendanceSyncLabel)}</span></div>
@@ -2354,7 +2527,7 @@ function renderLeadershipSlots() {
 function renderAccountSettings() {
   if (!state.authReady) return renderAuthLoading("settings");
   if (!state.loggedIn) {
-    return `<section class="section settings-account-summary"><div class="section-header"><div><p class="section-kicker">Account management</p><h2>No account signed in</h2><p>Open Profile to log in or create an account.</p></div><button class="secondary-button" id="settings-go-to-login" type="button">Open Login</button></div></section>`;
+    return `<section class="section settings-account-summary"><div class="section-header"><div><p class="section-kicker">Account management</p><h2>Account</h2><p>Sign in to manage your account.</p></div><button class="secondary-button" id="settings-go-to-login" type="button">Open Login</button></div></section>`;
   }
   return `
     <details class="section settings-group settings-account-summary" ${disclosureAttrs("settings-account", true)}>
@@ -2412,7 +2585,7 @@ function renderInstallCard() {
         <div>
           <p class="section-kicker">Home screen app</p>
           <h2>Install FQC</h2>
-          <p>Adds the FQC icon to your home screen and opens full screen — no address bar, search field, or browser buttons.</p>
+          <p>Open FQC directly from your Home Screen.</p>
         </div>
       </div>
       ${installPrompt
@@ -2447,31 +2620,22 @@ function renderSettings() {
     <section class="view settings-view" data-screen="settings">
       <section class="section settings-hero">
         <div>
-          <p class="section-kicker">App settings</p>
-          <h2>Florida Quantum Computing</h2>
-          <p>Version ${APP_VERSION} · Released ${APP_RELEASE_DATE}</p>
+          <p>Your account and app preferences.</p>
         </div>
-        <button class="secondary-button" id="close-settings" type="button">Back</button>
+        <button class="secondary-button" id="close-settings" type="button">Done</button>
+      </section>
+      <section class="section appearance-settings" aria-labelledby="appearance-title">
+        <h2 id="appearance-title">Appearance</h2><p>Choose a look, or match your device.</p>
+        <fieldset class="appearance-options"><legend class="visually-hidden">Appearance</legend>${["system", "light", "dark"].map(value => `<label><input type="radio" name="appearance" value="${value}" ${state.appearance === value ? "checked" : ""}><span>${value[0].toUpperCase() + value.slice(1)}</span></label>`).join("")}</fieldset>
       </section>
       ${renderAccountSettings()}
-      ${renderInstallCard()}
+      <details class="section settings-group" ${disclosureAttrs("settings-install")}><summary><strong>Install FQC</strong><small>Home Screen</small></summary><div class="settings-group-content">${renderInstallCard()}</div></details>
       ${renderOfficerSettings()}
-      <section class="section contact-settings">
-        <div class="section-header">
-          <div>
-            <p class="section-kicker">Get in touch</p>
-            <h2>Contact</h2>
-            <p>Questions, ideas, or something not working? Email the FQC officers and we’ll get back to you.</p>
-          </div>
-        </div>
-        <a class="secondary-button" href="mailto:officers@flqcs.com">
-          <svg><use href="#icon-mail"></use></svg><span>officers@flqcs.com</span>
-        </a>
-      </section>
+      <a class="section settings-contact" href="mailto:officers@flqcs.com"><span>Contact FQC</span><span>officers@flqcs.com ↗</span></a>
       <details class="section settings-group" ${disclosureAttrs("settings-updates")}>
-        <summary><span><p class="section-kicker">App shell</p><strong>Updates</strong></span><small>v${APP_VERSION}</small></summary>
+        <summary><span><strong>Updates</strong></span><small>v${APP_VERSION}</small></summary>
         <div class="settings-group-content">
-          <p>Fetch the newest app shell while keeping your account and saved app data.</p>
+          <p>Check for the latest version of FQC.</p>
           <button class="primary-button" id="check-for-updates" type="button" ${state.authBusy ? "disabled" : ""}>
             <svg><use href="#icon-check"></use></svg><span>Check for Updates</span>
           </button>
@@ -2671,52 +2835,24 @@ function renderMemberProfileModal() {
   `;
 }
 
-function signupProgress() {
-  return `
-    <div class="signup-progress" aria-label="Account creation progress">
-      ${["UF email", "Password"].map((label, index) => {
-        const step = index + 1;
-        return `<div class="signup-progress-step${state.signupStep === step ? " active" : ""}${state.signupStep > step ? " complete" : ""}"><span>${state.signupStep > step ? "✓" : step}</span><strong>${label}</strong></div>`;
-      }).join("")}
-    </div>
-  `;
-}
-
 function renderSignupWizard() {
-  if (state.signupStep === 1) {
-    return `
-      ${signupProgress()}
-      <form class="email-auth-form signup-step" id="signup-email-form">
-        <div class="signup-step-copy"><p class="section-kicker">Step 1 of 2</p><h3>Enter your UF email</h3><p>Your username will automatically be the part before @ufl.edu.</p></div>
-        <div class="form-row">
-          <label for="signup-email">UF email</label>
-          <input id="signup-email" type="email" inputmode="email" autocomplete="email" value="${escapeHtml(state.signupEmail)}" placeholder="you@ufl.edu" required autofocus />
-        </div>
-        <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}><span>Next: create a password</span></button>
-      </form>
-    `;
-  }
-  const passkeyAvailable = supportsPasskeys();
   return `
-    ${signupProgress()}
     <form class="email-auth-form signup-step" id="signup-security-form" novalidate>
-      <div class="signup-step-copy"><p class="section-kicker">Step 2 of 2</p><h3>Create your password</h3><p>Use it with your UF email or automatic username to sign in.</p></div>
-      <div class="signup-summary"><span>${escapeHtml(state.signupEmail)}</span><strong>@${escapeHtml(state.signupUsername)}</strong></div>
+      <div class="form-row">
+        <label for="signup-email">UF email</label>
+        <input id="signup-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${escapeHtml(state.signupEmail)}" placeholder="you@ufl.edu" required autofocus />
+      </div>
       <div class="form-row">
         <label for="signup-password">Password</label>
-        <input id="signup-password" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required autofocus />
+        <input id="signup-password" name="password" type="password" autocomplete="new-password" minlength="10" placeholder="At least 10 characters" required />
       </div>
       <div class="form-row">
         <label for="signup-password-confirm">Confirm password</label>
-        <input id="signup-password-confirm" type="password" autocomplete="new-password" minlength="10" placeholder="Type it again" required aria-describedby="signup-password-status" />
-        <small class="password-match-status" id="signup-password-status" aria-live="polite">Both passwords must match.</small>
+        <input id="signup-password-confirm" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" placeholder="Re-enter your password" required aria-describedby="signup-password-status" />
+        <small class="password-match-status" id="signup-password-status" aria-live="polite"></small>
       </div>
-      <label class="signup-passkey-addon${state.signupAddPasskey ? " selected" : ""}${passkeyAvailable ? "" : " unavailable"}">
-        <input id="signup-add-passkey" type="checkbox" ${state.signupAddPasskey ? "checked" : ""} ${passkeyAvailable ? "" : "disabled"} />
-        <svg><use href="#icon-lock"></use></svg>
-        <span><strong>Add Face ID / Touch ID</strong><small>${passkeyAvailable ? "Optional · set it up after the account is created" : "Optional passkeys are unavailable on this device"}</small></span>
-      </label>
-      <div class="signup-actions"><button class="secondary-button" id="signup-back-email" type="button">Back</button><button class="primary-button" type="submit" ${state.authBusy ? "disabled" : ""}>Create account</button></div>
+      <p class="signup-inline-error" id="signup-inline-error" role="alert"></p>
+      <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}>Create account</button>
     </form>
   `;
 }
@@ -2724,16 +2860,16 @@ function renderSignupWizard() {
 function renderSignupModal() {
   return `
     <div class="signup-modal-backdrop" id="signup-modal-backdrop">
-      <section class="signup-modal" role="dialog" aria-modal="true" aria-labelledby="signup-modal-title">
+      <section class="signup-modal auth-glass" role="dialog" aria-modal="true" aria-labelledby="signup-modal-title">
         <button class="signup-modal-close" id="close-signup-modal" type="button" aria-label="Close account creation" ${state.authBusy ? "disabled" : ""}>×</button>
         <div class="signup-modal-heading">
           <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
-          <div><p class="section-kicker">Join Florida Quantum Computing</p><h2 id="signup-modal-title">Create your FQC account</h2><p>Two quick steps: your UF email and a password.</p></div>
+          <div><h2 id="signup-modal-title">Create your FQC account</h2><p>One account for events, attendance, and the hackathon.</p></div>
         </div>
         ${renderSignupWizard()}
         ${state.authBusy ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Creating your account…</p>' : ""}
         ${renderAuthFeedback()}
-        <p class="auth-privacy">Every new account starts as a member. Officers grant officer access from the member directory.</p>
+        <p class="auth-privacy">Already a member? <button class="text-button" id="signup-to-login" type="button">Log in</button></p>
       </section>
     </div>
   `;
@@ -2742,16 +2878,17 @@ function renderSignupModal() {
 function renderAuthPromptModal() {
   const event = state.authPromptEventId ? getEvent(state.authPromptEventId) : null;
   const isRsvp = state.authPromptAction === "rsvp" && event;
+  const isHackathon = state.authPromptAction === "hackathon";
   return `
     <div class="signup-modal-backdrop auth-prompt-backdrop" id="auth-prompt-backdrop">
-      <section class="signup-modal auth-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="auth-prompt-title">
+      <section class="signup-modal auth-prompt-modal auth-glass" role="dialog" aria-modal="true" aria-labelledby="auth-prompt-title">
         <button class="signup-modal-close" id="close-auth-prompt" type="button" aria-label="Close sign-in prompt">×</button>
         <div class="signup-modal-heading">
           <div class="checkin-icon"><svg><use href="#icon-${isRsvp ? "calendar" : "check"}"></use></svg></div>
           <div>
-            <p class="section-kicker">${isRsvp ? "Save your spot" : "FQC attendance"}</p>
-            <h2 id="auth-prompt-title">${isRsvp ? `RSVP to ${escapeHtml(event.title)}` : "Sign in to check in"}</h2>
-            <p>Log in to continue, or create your FQC account in three quick steps.</p>
+            <p class="section-kicker">${isHackathon ? "FQC hackathon" : isRsvp ? "Save your spot" : "FQC attendance"}</p>
+            <h2 id="auth-prompt-title">${isHackathon ? "Join the interest list" : isRsvp ? `RSVP to ${escapeHtml(event.title)}` : "Sign in to check in"}</h2>
+            <p>Log in to continue, or create an account to get started.</p>
           </div>
         </div>
         <div class="auth-prompt-actions">
@@ -2768,32 +2905,29 @@ function renderProfile() {
   if (!state.authReady) return renderAuthLoading("profile");
   if (!state.loggedIn) {
     return `
-      <section class="view" data-screen="profile">
-        <section class="section profile-login">
+      <section class="view auth-screen" data-screen="profile">
+        <section class="section profile-login auth-glass">
           <div class="auth-brand">
             <div class="checkin-icon"><svg><use href="#icon-lock"></use></svg></div>
             <div>
-              <p class="section-kicker">One secure FQC account</p>
+
               <h2>Welcome back</h2>
-              <p>Use your username or UF email with your private password, or use a passkey.</p>
+              <p>Log in to view your profile and event activity.</p>
             </div>
           </div>
-          <div class="auth-mode-tabs" role="tablist" aria-label="Account access">
-            <button id="auth-mode-login" role="tab" aria-selected="true" type="button">Log In</button>
-            <button id="auth-mode-create" role="tab" aria-selected="false" type="button">Create Account</button>
-          </div>
+
           <form class="email-auth-form" id="email-auth-form">
               <div class="form-row">
-                <label for="auth-identifier">Username or UF email</label>
-                <input id="auth-identifier" name="identifier" type="text" inputmode="email" autocomplete="username" placeholder="quantumgator or you@ufl.edu" required />
+                <label for="auth-identifier">Email or username</label>
+                <input id="auth-identifier" name="identifier" type="text" inputmode="email" autocomplete="username" placeholder="you@ufl.edu" required />
               </div>
               <div class="form-row">
-                <label for="auth-password">Private password</label>
-                <input id="auth-password" name="password" type="password" autocomplete="current-password" minlength="10" placeholder="Your private password" required />
+                <label for="auth-password">Password</label>
+                <input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required />
               </div>
               <button class="primary-button email-auth-submit" type="submit" ${state.authBusy ? "disabled" : ""}><svg><use href="#icon-lock"></use></svg><span>Log In</span></button>
               <button class="text-button" id="forgot-password" type="button">Forgot password?</button>
-              <p class="auth-recovery-hint">No passkey on this device, or never set a password? Enter your username or UF email above and choose <strong>Forgot password</strong> — we email you a link to set one.</p>
+              <p class="auth-recovery-hint">Need access on a new device? Reset your password by email.</p>
           </form>
           <div class="auth-divider"><span>or</span></div>
           <div class="auth-provider-list">
@@ -2803,7 +2937,7 @@ function renderProfile() {
           </div>
           ${state.authBusy && !state.signupOpen ? '<p class="auth-working"><span class="auth-spinner" aria-hidden="true"></span> Opening secure sign-in…</p>' : ""}
           ${state.signupOpen ? "" : renderAuthFeedback()}
-          <p class="auth-privacy">Firebase Authentication protects sign-in sessions. Use Face ID, Touch ID, or your device lock with a passkey, or your private password. You can use both, and add a passkey on every device you sign in from.</p>
+          <p class="auth-privacy auth-create-link">New to FQC? <button class="text-button" id="auth-mode-create" type="button">Create account</button></p>
         </section>
       </section>
     `;
@@ -2814,7 +2948,7 @@ function renderProfile() {
     <section class="view" data-screen="profile">
       <section class="section profile-overview">
         <div class="profile-summary">
-          <div class="avatar">${profileInitial.textContent}</div>
+          <div class="avatar">${escapeHtml(state.memberName.trim().charAt(0).toUpperCase() || "F")}</div>
           <div><div class="profile-role-line"><h2>${escapeHtml(state.memberName)}</h2><span class="role-badge ${state.memberRole}">${roleLabel()}</span></div><p>${points} ${points === 1 ? "point" : "points"} from verified event check-ins</p><div class="progress" aria-label="Event attendance progress"><span style="width: ${Math.min(100, points * 20)}%"></span></div></div>
         </div>
       </section>
@@ -2825,6 +2959,8 @@ function renderProfile() {
 }
 
 function bindViewEvents() {
+  bindWorkshopStories();
+  document.querySelectorAll('[name="appearance"]').forEach(input => input.addEventListener("change", () => applyTheme(input.value)));
   document.querySelectorAll("[data-event-tab]").forEach((button) => {
     button.addEventListener("click", () => setEventMode(button.dataset.eventTab));
   });
@@ -2850,6 +2986,8 @@ function bindViewEvents() {
   budgetBackdrop?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) closeBudgetBreakdown();
   });
+  document.querySelectorAll("[data-hackathon-rsvp]").forEach((button) => button.addEventListener("click", () => registerHackathonInterest()));
+  document.querySelector("#cancel-hackathon-interest")?.addEventListener("click", () => registerHackathonInterest(false));
   bindCalendarEvents();
   bindRsvpEvents();
   bindMobileEventSheet();
@@ -2866,7 +3004,7 @@ function bindViewEvents() {
     setView("profile");
   });
   document.querySelector("#settings-go-to-login")?.addEventListener("click", () => setView("profile"));
-  document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.loggedIn ? "profile" : "home"));
+  document.querySelector("#close-settings")?.addEventListener("click", () => setView(state.settingsReturnView));
   document.querySelector("#check-for-updates")?.addEventListener("click", checkForUpdates);
   document.querySelector("#refresh-leaderboard")?.addEventListener("click", () => refreshLeaderboard(true));
   document.querySelector("#checkin-location-required")?.addEventListener("change", async (event) => {
@@ -2912,7 +3050,6 @@ function bindViewEvents() {
     state.authPromptAction = "";
     state.authPromptEventId = "";
     state.signupOpen = true;
-    state.signupStep = 1;
     state.authError = "";
     state.authMessage = "";
     render();
@@ -2920,7 +3057,6 @@ function bindViewEvents() {
   document.querySelector("#auth-mode-create")?.addEventListener("click", () => {
     state.authMode = "login";
     state.signupOpen = true;
-    state.signupStep = 1;
     state.authError = "";
     state.authMessage = "";
     render();
@@ -2928,12 +3064,20 @@ function bindViewEvents() {
   const closeSignup = () => {
     if (state.authBusy) return;
     state.signupOpen = false;
-    state.signupStep = 1;
+    state.pendingIntent = null;
     state.authError = "";
     state.authMessage = "";
     render();
   };
   document.querySelector("#close-signup-modal")?.addEventListener("click", closeSignup);
+  document.querySelector("#signup-to-login")?.addEventListener("click", () => {
+    if (state.authBusy) return;
+    const intent = state.pendingIntent;
+    const email = document.querySelector("#signup-email")?.value || state.signupEmail;
+    closeSignup(); state.pendingIntent = intent; setView("profile");
+    document.querySelector("#auth-identifier").value = email;
+    document.querySelector("#auth-password").focus();
+  });
   const signupBackdrop = document.querySelector("#signup-modal-backdrop");
   signupBackdrop?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) closeSignup();
@@ -2945,38 +3089,8 @@ function bindViewEvents() {
     event.preventDefault();
     const identifier = document.querySelector("#auth-identifier")?.value.trim() || "";
     const password = document.querySelector("#auth-password")?.value || "";
-    await runAuthAction(() => signInWithEmail(identifier, password));
-  });
-  document.querySelector("#signup-email-form")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const email = document.querySelector("#signup-email")?.value.trim().toLowerCase() || "";
-    if (!/^[^\s@]+@ufl\.edu$/i.test(email)) {
-      state.authError = "Use your UF email ending in @ufl.edu.";
-      render();
-      return;
-    }
-    const username = email.split("@")[0];
-    state.signupEmail = email;
-    state.signupUsername = username;
-    if (!/^[a-z0-9](?:[a-z0-9._]{1,22}[a-z0-9])$/.test(username)
-      || ["admin", "administrator", "fqc", "officer", "president", "support", "treasurer"].includes(username)) {
-      state.authError = "This UF email cannot make an automatic username. Contact an FQC officer for help.";
-      render();
-      return;
-    }
-    state.signupStep = 2;
-    state.authError = "";
-    render();
-  });
-  document.querySelector("#signup-back-email")?.addEventListener("click", () => {
-    state.signupStep = 1;
-    state.authError = "";
-    render();
-  });
-  const signupPasskeyAddon = document.querySelector("#signup-add-passkey");
-  signupPasskeyAddon?.addEventListener("change", () => {
-    state.signupAddPasskey = signupPasskeyAddon.checked;
-    signupPasskeyAddon.closest(".signup-passkey-addon")?.classList.toggle("selected", signupPasskeyAddon.checked);
+    if (state.authBusy) return;
+    await runAuthAction(() => signInWithEmail(identifier, password), "Welcome back.", "Signing in…");
   });
   const signupPassword = document.querySelector("#signup-password");
   const signupPasswordConfirm = document.querySelector("#signup-password-confirm");
@@ -2992,6 +3106,16 @@ function bindViewEvents() {
   signupPasswordConfirm?.addEventListener("input", updatePasswordMatch);
   document.querySelector("#signup-security-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (state.authBusy) return;
+    const email = document.querySelector("#signup-email")?.value.trim().toLowerCase() || "";
+    const emailError = document.querySelector("#signup-inline-error");
+    if (!/^[^\s@]+@ufl\.edu$/i.test(email)) {
+      emailError.textContent = "Use your UF email ending in @ufl.edu.";
+      document.querySelector("#signup-email")?.focus();
+      return;
+    }
+    emailError.textContent = "";
+    state.signupEmail = email;
     const password = signupPassword?.value || "";
     const confirmation = signupPasswordConfirm?.value || "";
     const passwordStatus = document.querySelector("#signup-password-status");
@@ -3011,35 +3135,20 @@ function bindViewEvents() {
       signupPasswordConfirm?.focus();
       return;
     }
-    const shouldAddPasskey = Boolean(signupPasskeyAddon?.checked && supportsPasskeys());
     const profile = await runAuthAction(
       () => createEmailAccount({
-        username: state.signupUsername,
         email: state.signupEmail,
-        password,
-        method: "password"
+        password
       }),
-      "Account created securely."
+      "Your account is ready.",
+      "Creating your account…"
     );
     if (profile) {
       applyMemberProfile(profile);
       state.signupOpen = false;
-      state.signupStep = 1;
       state.signupEmail = "";
-      state.signupUsername = "";
-      state.signupAddPasskey = false;
       render();
-      if (shouldAddPasskey) {
-        const securedProfile = await runAuthAction(
-          registerPasskey,
-          "Face ID / Touch ID is ready.",
-          "Setting up Face ID / Touch ID…"
-        );
-        if (securedProfile) {
-          applyMemberProfile(securedProfile);
-          render();
-        }
-      }
+
     }
   });
   document.querySelector("#forgot-password")?.addEventListener("click", async () => {
@@ -3319,10 +3428,59 @@ function bindViewEvents() {
   document.querySelector("#nuke-reload")?.addEventListener("click", nukeAndReload);
 }
 
-navItems.forEach((item) => item.addEventListener("click", () => setView(item.dataset.view)));
-quickProfile.addEventListener("click", () => setView("profile"));
+let navDrag = null;
+let suppressNavClickUntil = 0;
+navItems.forEach((item, index) => {
+  item.addEventListener("click", () => {
+    if (performance.now() < suppressNavClickUntil) return;
+    setView(item.dataset.view);
+  });
+  item.addEventListener("keydown", (event) => {
+    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!delta && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? 3 : (index + delta + 4) % 4;
+    navItems[next].focus();
+    setView(navItems[next].dataset.view);
+  });
+});
+navSlider.addEventListener("input", () => {
+  const index = Number(navSlider.value);
+  bottomNav.style.setProperty("--nav-index", index);
+  navSlider.setAttribute("aria-valuetext", navItems[index].textContent.trim());
+});
+navSlider.addEventListener("change", () => setView(navItems[Number(navSlider.value)].dataset.view));
+bottomNav.addEventListener("pointerdown", (event) => {
+  if (event.target === navSlider || event.button !== 0) return;
+  navDrag = { startX: event.clientX, pointerId: event.pointerId, moved: false };
+});
+bottomNav.addEventListener("pointermove", (event) => {
+  if (!navDrag || event.pointerId !== navDrag.pointerId) return;
+  if (!navDrag.moved && Math.abs(event.clientX - navDrag.startX) < 8) return;
+  if (!navDrag.moved) bottomNav.setPointerCapture(event.pointerId);
+  navDrag.moved = true;
+  bottomNav.classList.add("is-dragging");
+  const rect = bottomNav.getBoundingClientRect();
+  const index = Math.max(0, Math.min(3, (event.clientX - rect.left - 7) / ((rect.width - 14) / 4) - .5));
+  navDrag.index = index;
+  bottomNav.style.setProperty("--nav-index", index);
+});
+function finishNavDrag(event) {
+  if (!navDrag || event.pointerId !== navDrag.pointerId) return;
+  const drag = navDrag;
+  navDrag = null;
+  bottomNav.classList.remove("is-dragging");
+  if (bottomNav.hasPointerCapture(event.pointerId)) bottomNav.releasePointerCapture(event.pointerId);
+  if (drag.moved) {
+    suppressNavClickUntil = performance.now() + 350;
+    if (event.type === "pointerup") setView(navItems[Math.round(drag.index)].dataset.view);
+    else bottomNav.style.setProperty("--nav-index", Math.max(0, navItems.findIndex((item) => item.dataset.view === state.view)));
+  }
+}
+window.addEventListener("pointerup", finishNavDrag);
+window.addEventListener("pointercancel", finishNavDrag);
+window.addEventListener("popstate", () => setView(viewFromLocation() || "home", { history: false }));
 settingsToggle.addEventListener("click", () => setView("settings"));
-themeToggle.addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -3340,9 +3498,18 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => registration.update()).catch(() => {}));
 }
 
-["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
-  document.addEventListener(eventName, stopZoomGesture, { passive: false });
-});
+// Keep the app shell at its native size. Prevent only browser gesture defaults;
+// Leaflet still receives touch/pointer events and controls the map's own zoom.
+for (const name of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(name, event => event.preventDefault(), { passive: false });
+}
+document.addEventListener("touchmove", event => {
+  if (event.touches.length > 1 && !event.target.closest?.("#event-map")) event.preventDefault();
+}, { passive: false });
+document.addEventListener("wheel", event => {
+  // Trackpad pinch is delivered as a Ctrl-wheel gesture in Chromium.
+  if (event.ctrlKey) event.preventDefault();
+}, { passive: false });
 
 window.addEventListener("online", () => {
   refreshEventData("network reconnect");
@@ -3365,10 +3532,15 @@ async function resumePendingIntent() {
   const intent = state.pendingIntent;
   if (!intent || !state.loggedIn) return;
   state.pendingIntent = null;
+  if (intent.type === "hackathon") {
+    state.authPromptOpen = false;
+    state.signupOpen = false;
+    setView("hackathon");
+    await registerHackathonInterest(true);
+    return;
+  }
   if (intent.type === "rsvp" && intent.eventId) {
-    state.view = "home";
-    saveState();
-    render();
+    setView("home");
     await toggleRsvp(intent.eventId);
     return;
   }
@@ -3379,6 +3551,27 @@ observeSession((session) => {
   state.authReady = true;
   state.authUser = session?.user || null;
   state.loggedIn = Boolean(session?.user);
+  const nextInterestUid = session?.user?.uid || null;
+  if (nextInterestUid !== interestUid) {
+    interestUnsubscribe?.();
+    interestUnsubscribe = null;
+    interestUid = nextInterestUid;
+    state.hackathonInterested = false;
+    state.hackathonReady = !nextInterestUid;
+    state.hackathonBusy = false;
+    state.hackathonError = "";
+    if (nextInterestUid) interestUnsubscribe = observeHackathonInterest((interested) => {
+      if (interestUid !== nextInterestUid) return;
+      state.hackathonInterested = interested;
+      state.hackathonReady = true;
+      if (state.view === "hackathon" && !state.signupOpen && !state.authPromptOpen) render();
+    }, () => {
+      if (interestUid !== nextInterestUid) return;
+      state.hackathonReady = true;
+      state.hackathonError = "We couldn’t check your RSVP. You can safely try saving it again.";
+      if (state.view === "hackathon") render();
+    });
+  }
   if (session?.profile) {
     applyMemberProfile(session.profile);
   } else {
@@ -3427,7 +3620,7 @@ observeCheckIn((checkIn) => {
   if (state.authReady) render();
 });
 
-applyTheme(state.theme, false);
+applyTheme(state.appearance, false);
 render();
 // If the first screen has no map to wait on, reveal right after paint; otherwise
 // initEventMap() reveals once the map is up. Hard cap so the splash never sticks.

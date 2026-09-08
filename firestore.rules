@@ -27,6 +27,18 @@ service cloud.firestore {
       }
     }
 
+    match /hackathonInterest/{uid} {
+      allow read: if isSelf(uid) || isOfficer();
+      allow create, update: if isSelf(uid)
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && request.resource.data.keys().hasOnly(['uid', 'eventId', 'interested', 'updatedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.eventId == 'fqc-upcoming-hackathon'
+        && request.resource.data.interested is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
       allow read: if true;
       allow write: if false;

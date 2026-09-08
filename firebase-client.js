@@ -11,7 +11,7 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "firebase/auth";
-import { doc, getDoc, getFirestore, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, getFirestore, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 
@@ -29,6 +29,9 @@ let auth;
 let db;
 let functions;
 let mockSessionObserver = null;
+let mockInterestObserver = null;
+const mockInterests = new Map();
+let mockInterestFailure = false;
 let mockCheckInObserver = null;
 let mockProfile = null;
 let mockCheckIn = { eventId: "fqc-2026-03-03-ionq", open: true, requireLocation: false };
@@ -70,6 +73,7 @@ let mockOfficerEventOperations = {
 let mockUsernameDirectory = new Map();
 let mockUsernameReservations = new Map();
 let pendingAccountCreation = null;
+let sessionCallback = null;
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
@@ -187,6 +191,8 @@ function normalizedLeaderboard(snapshot = {}) {
 if (testMode) {
   globalThis.__FQC_AUTH_TEST_API__ = {
     signInAs: mockSignIn,
+    setInterestFailure: (value) => { mockInterestFailure = value; },
+    getHackathonInterest: (uid) => mockInterests.get(uid) === true,
     signOut: () => { mockProfile = null; emitMockSession(); },
     setCheckIn: (next) => { mockCheckIn = { ...mockCheckIn, ...next }; emitMockCheckIn(); },
     setMembers: (members) => { mockMembers = members.map(normalizedProfile); },
@@ -218,6 +224,7 @@ export function observeSession(callback, onError = () => {}) {
     return () => { mockSessionObserver = null; };
   }
 
+  sessionCallback = callback;
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
       callback(null);
@@ -282,45 +289,24 @@ export async function signInWithEmail(identifier, password) {
     mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email });
     return;
   }
-  await signInWithEmailAndPassword(auth, email, password);
+  const wasSameUser = auth.currentUser?.email?.toLowerCase() === email.toLowerCase();
+  const credential = await signInWithEmailAndPassword(auth, email, password);
+  // A failed initial profile setup can leave Firebase signed in. Logging in
+  // again must repair that profile even when the Auth uid has not changed.
+  if (wasSameUser) {
+    const profile = normalizedProfile((await retryAccountFinalization(() => callable("ensureUserProfile")())).data);
+    await credential.user.getIdToken(true);
+    if (auth.currentUser?.uid === credential.user.uid) sessionCallback?.({ user: credential.user, profile });
+  }
 }
 
-function generatedAccountPassword() {
-  const bytes = new Uint8Array(32);
-  globalThis.crypto.getRandomValues(bytes);
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-export async function createEmailAccount({ username, email, password, method = "password", reservationToken = "" }) {
-  let normalizedUsername = String(username || "").trim().toLowerCase();
+export async function createEmailAccount({ email, password }) {
   if (testMode) {
-    const automaticUsername = normalizedUsername === String(email || "").trim().toLowerCase().split("@")[0];
-    if (mockUsernameDirectory.has(normalizedUsername)
-      && automaticUsername) {
-      const base = normalizedUsername;
-      for (let suffix = 2; suffix <= 100; suffix += 1) {
-        const suffixText = `.${suffix}`;
-        const candidate = `${base.slice(0, 24 - suffixText.length).replace(/[._]+$/g, "")}${suffixText}`;
-        if (!mockUsernameDirectory.has(candidate)) {
-          normalizedUsername = candidate;
-          break;
-        }
-      }
-    }
-    if (mockUsernameDirectory.has(normalizedUsername)) throw new Error("That username is already taken.");
-    if (!automaticUsername && mockUsernameReservations.get(normalizedUsername) !== reservationToken) {
-      throw new Error("Your username reservation expired. Choose the username again.");
-    }
-    mockUsernameDirectory.set(normalizedUsername, email);
-    mockUsernameReservations.delete(normalizedUsername);
-    mockSignIn({ uid: "new-email-user", username: normalizedUsername, displayName: normalizedUsername, email });
-    if (method === "passkey") {
-      mockProfile = normalizedProfile({ ...mockProfile, passkeyCount: 1 });
-      emitMockSession();
-    }
+    // Email is the sign-in identity; optional usernames never gate signup.
+    const displayName = String(email).split("@")[0];
+    mockSignIn({ uid: "new-email-user", username: "", displayName, email });
     return mockProfile;
   }
-  const accountPassword = method === "passkey" ? generatedAccountPassword() : password;
   let settleAccountCreation;
   let rejectAccountCreation;
   const creation = {
@@ -336,22 +322,23 @@ export async function createEmailAccount({ username, email, password, method = "
   pendingAccountCreation = creation;
   let credential;
   try {
-    credential = await createUserWithEmailAndPassword(auth, email, accountPassword);
-    const result = await retryAccountFinalization(() => callable("finalizeAccount")({ username: normalizedUsername }));
+    credential = await createUserWithEmailAndPassword(auth, email, password);
+    const result = await retryAccountFinalization(() => callable("finalizeAccount")({}));
     const profile = normalizedProfile(result.data);
     settleAccountCreation(profile);
-    return method === "passkey" ? registerPasskey() : profile;
+    return profile;
   } catch (error) {
     rejectAccountCreation(error);
     const code = String(error?.code || "");
     if (credential?.user && (code.includes("permission-denied") || code.includes("invalid-argument"))) {
       await deleteUser(credential.user).catch(() => {});
     }
+    if (credential?.user && isTransientFirebaseError(error)) {
+      throw new Error("Your account was created, but setup could not finish. Choose Log in below and use the same email and password to finish.");
+    }
     throw error;
   } finally {
-    globalThis.setTimeout(() => {
-      if (pendingAccountCreation === creation) pendingAccountCreation = null;
-    }, 5000);
+    if (pendingAccountCreation === creation) pendingAccountCreation = null;
   }
 }
 
@@ -715,4 +702,38 @@ export function readableAuthError(error) {
   if (code.includes("permission-denied")) return "Your account does not have permission for that action.";
   if (error?.name === "NotAllowedError") return "Face ID, Touch ID, or the passkey prompt was cancelled.";
   return String(error?.message || "Something went wrong. Please try again.").replace(/^Firebase:\s*/i, "").slice(0, 220);
+}
+
+// Each member owns a durable interest record; no RSVP is inferred from device storage.
+export function observeHackathonInterest(callback, onError = () => {}) {
+  if (testMode) {
+    mockInterestObserver = callback;
+    const uid = mockProfile?.uid;
+    queueMicrotask(() => { if (mockInterestObserver === callback) callback(mockInterests.get(uid) === true); });
+    return () => { if (mockInterestObserver === callback) mockInterestObserver = null; };
+  }
+  if (!auth.currentUser) return () => {};
+  return onSnapshot(doc(db, "hackathonInterest", auth.currentUser.uid), (snapshot) => {
+    // Wait for server acknowledgement before showing a saved RSVP.
+    if (!snapshot.metadata.hasPendingWrites) callback(snapshot.data()?.interested === true);
+  }, onError);
+}
+
+export async function saveHackathonInterest(interested) {
+  if (testMode) {
+    if (!mockProfile) throw new Error("Sign in first.");
+    if (mockInterestFailure) throw new Error("Connection unavailable.");
+    mockInterests.set(mockProfile.uid, interested === true);
+    mockInterestObserver?.(interested === true);
+    return;
+  }
+  const user = auth.currentUser;
+  if (!user) throw new Error("Sign in first.");
+  if (!navigator.onLine) throw new Error("Connect to the internet to save your RSVP.");
+  await setDoc(doc(db, "hackathonInterest", user.uid), {
+    uid: user.uid,
+    eventId: "fqc-upcoming-hackathon",
+    interested: interested === true,
+    updatedAt: serverTimestamp()
+  });
 }

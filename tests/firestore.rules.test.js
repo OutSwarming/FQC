@@ -6,7 +6,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 let testEnvironment;
 
@@ -96,4 +96,34 @@ test("members read their own attendance and officers can read attendance", async
   await assertFails(getDoc(doc(otherDatabase, "events", "gbm-1", "checkins", "member-1")));
   await assertSucceeds(getDoc(doc(officerDatabase, "events", "gbm-1", "checkins", "member-1")));
   await assertFails(setDoc(checkIn, { uid: "member-1" }, { merge: true }));
+});
+
+const interestRecord = (uid, interested = true) => ({ uid, eventId: "fqc-upcoming-hackathon", interested, updatedAt: serverTimestamp() });
+
+test("hackathon interest is saved, read, and withdrawn only by its member", async () => {
+  const member = testEnvironment.authenticatedContext("member-1", { role: "member" }).firestore();
+  const record = doc(member, "hackathonInterest", "member-1");
+  await assertSucceeds(setDoc(record, interestRecord("member-1")));
+  const secondSession = testEnvironment.authenticatedContext("member-1", { role: "member" }).firestore();
+  assert.equal((await assertSucceeds(getDoc(doc(secondSession, "hackathonInterest", "member-1")))).data().interested, true);
+  await assertSucceeds(setDoc(record, interestRecord("member-1", false)));
+  assert.equal((await getDoc(record)).data().interested, false);
+  const other = testEnvironment.authenticatedContext("member-2", { role: "member" }).firestore();
+  const guest = testEnvironment.unauthenticatedContext().firestore();
+  for (const database of [other, guest]) {
+    await assertFails(getDoc(doc(database, "hackathonInterest", "member-1")));
+    await assertFails(setDoc(doc(database, "hackathonInterest", "member-1"), interestRecord("member-1")));
+  }
+  const officer = testEnvironment.authenticatedContext("officer-1", { role: "officer" }).firestore();
+  await assertSucceeds(getDoc(doc(officer, "hackathonInterest", "member-1")));
+  await assertFails(setDoc(doc(officer, "hackathonInterest", "member-1"), interestRecord("member-1")));
+});
+
+test("hackathon interest rejects incomplete accounts and forged records", async () => {
+  const incomplete = testEnvironment.authenticatedContext("no-profile").firestore();
+  await assertFails(setDoc(doc(incomplete, "hackathonInterest", "no-profile"), interestRecord("no-profile")));
+  const member = testEnvironment.authenticatedContext("member-1").firestore();
+  for (const extra of [{ uid: "member-2" }, { eventId: "other-event" }, { interested: "yes" }, { updatedAt: new Date(0) }, { role: "officer" }]) {
+    await assertFails(setDoc(doc(member, "hackathonInterest", "member-1"), { ...interestRecord("member-1"), ...extra }));
+  }
 });

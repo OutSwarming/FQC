@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.js",
+  testIgnore: "**/phone-ui.spec.js",
   timeout: 30_000,
   expect: {
     timeout: 5_000

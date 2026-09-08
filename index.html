@@ -3,22 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#f4f7fc" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#0b0b2c" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="FQC" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Florida Quantum Computing</title>
+    <meta name="description" content="Meet Florida Quantum Computing at UF. Explore our community and register your interest in our upcoming hackathon." />
     <link rel="manifest" href="/manifest.webmanifest?v=29" />
     <link rel="icon" href="/assets/fqc-app-icon-192.png?v=29" type="image/png" />
     <link rel="apple-touch-icon" href="/assets/fqc-app-icon-180.png?v=29" />
-    <link rel="stylesheet" href="./styles.css?v=event-sheet-1" />
+    <link rel="stylesheet" href="./styles.css" />
     <script>
       try {
         const savedTheme = localStorage.getItem("fqc:theme");
         const systemTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        document.documentElement.dataset.theme = savedTheme || systemTheme;
+        document.documentElement.dataset.theme = ["light", "dark"].includes(savedTheme) ? savedTheme : systemTheme;
       } catch {}
     </script>
     <style>
@@ -26,19 +27,19 @@
          from the very first paint — never a flash of unstyled markup, and never
          dependent on the external stylesheet or the service-worker cache. */
       :root {
-        --splash-bg: #f4f7fc;
-        --splash-ink: #152039;
-        --splash-muted: #647189;
-        --splash-accent: #5476f2;
-        --splash-accent-strong: #3d5fd8;
+        --splash-bg: #f2f2f7;
+        --splash-ink: #1c1c1e;
+        --splash-muted: #636366;
+        --splash-accent: #007aff;
+        --splash-accent-strong: #0066d6;
         --splash-shadow: 0 18px 50px rgba(28, 48, 88, 0.12);
       }
       :root[data-theme="dark"] {
-        --splash-bg: #070c19;
-        --splash-ink: #f1f5ff;
-        --splash-muted: #93a0b9;
-        --splash-accent: #718cff;
-        --splash-accent-strong: #8ea2ff;
+        --splash-bg: #000000;
+        --splash-ink: #f5f5f7;
+        --splash-muted: #aeaeb2;
+        --splash-accent: #0a84ff;
+        --splash-accent-strong: #409cff;
         --splash-shadow: 0 22px 60px rgba(0, 0, 0, 0.38);
       }
       body.splash-active { overflow: hidden; }
@@ -157,6 +158,9 @@
     </div>
 
     <svg aria-hidden="true" class="icon-sprite" xmlns="http://www.w3.org/2000/svg">
+      <symbol id="icon-spark" viewBox="0 0 24 24">
+        <path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z" />
+      </symbol>
       <symbol id="icon-home" viewBox="0 0 24 24">
         <path d="M3 10.6 12 3l9 7.6v9.1a1.3 1.3 0 0 1-1.3 1.3h-5.2v-6.1h-5V21H4.3A1.3 1.3 0 0 1 3 19.7z" />
       </symbol>
@@ -224,36 +228,34 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button class="theme-toggle settings-toggle" id="settings-toggle" type="button" aria-label="Open settings">
-            <svg><use href="#icon-settings"></use></svg>
-          </button>
-          <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Use dark theme">
-            <svg class="sun-icon"><use href="#icon-sun"></use></svg>
-            <svg class="moon-icon"><use href="#icon-moon"></use></svg>
-          </button>
-          <button class="profile-chip" id="quick-profile" type="button" aria-label="Open profile">
-            <span id="profile-initial">F</span>
-          </button>
+          <button class="header-settings" id="settings-toggle" type="button" aria-label="Open settings"><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Settings</span></button>
         </div>
       </header>
 
       <main id="app" tabindex="-1"></main>
-
-      <nav class="bottom-nav" aria-label="Primary">
-        <button class="nav-item active" type="button" data-view="home" aria-current="page">
-          <svg><use href="#icon-home"></use></svg>
-          <span>Home</span>
-        </button>
-        <button class="nav-item" type="button" data-view="checkin">
-          <svg><use href="#icon-check"></use></svg>
-          <span>Check In</span>
-        </button>
-        <button class="nav-item" type="button" data-view="profile">
-          <svg><use href="#icon-user"></use></svg>
-          <span>Profile</span>
-        </button>
-      </nav>
     </div>
+
+    <!-- The shared dock is outside each screen's sizing and clipping context. -->
+    <nav class="bottom-nav" aria-label="Primary">
+      <span class="nav-glass-lens" aria-hidden="true"></span>
+      <button class="nav-item" type="button" data-view="hackathon">
+        <svg><use href="#icon-spark"></use></svg>
+        <span>Hackathon</span>
+      </button>
+      <button class="nav-item active" type="button" data-view="home" aria-current="page">
+        <svg><use href="#icon-home"></use></svg>
+        <span>Home</span>
+      </button>
+      <button class="nav-item" type="button" data-view="checkin">
+        <svg><use href="#icon-check"></use></svg>
+        <span>Check In</span>
+      </button>
+      <button class="nav-item" type="button" data-view="profile">
+        <svg><use href="#icon-user"></use></svg>
+        <span>Profile</span>
+      </button>
+      <input class="nav-slider" id="nav-slider" type="range" min="0" max="3" step="1" value="1" aria-label="Slide between tabs" aria-valuetext="Home" />
+    </nav>
 
     <template id="metric-template">
       <article class="metric-card">
@@ -262,6 +264,6 @@
       </article>
     </template>
 
-    <script src="./app.js?v=cold-map-fix-1" type="module"></script>
+    <script src="./app.js" type="module"></script>
   </body>
 </html>

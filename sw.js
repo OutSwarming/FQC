@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v297-scalable-accounts-checkins";
+const CACHE_NAME = "fqc-app-v312-mobile-photo-entrances";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
@@ -12,13 +12,10 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
       .then(async (keys) => {
-        const isUpgrade = keys.some((key) => key.startsWith("fqc-app-") && key !== CACHE_NAME);
-        await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+        await Promise.all(keys.filter((key) => key.startsWith("fqc-app-") && key !== CACHE_NAME).map((key) => caches.delete(key)));
         await self.clients.claim();
-        if (!isUpgrade) return;
-
-        const windowClients = await self.clients.matchAll({ type: "window" });
-        await Promise.all(windowClients.map((client) => client.navigate(client.url)));
+        // Never force all open tabs to navigate on activation. The new version
+        // takes effect on each window's next normal reload or explicit update.
       })
   );
 });
