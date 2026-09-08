@@ -947,3 +947,58 @@ test('Android touch drags the navigation bubble from capsule padding and cancels
   await expect(page.locator('.bottom-nav')).not.toHaveClass(/is-dragging/);
   expect(await page.locator('.bottom-nav').evaluate(el => Number(el.style.getPropertyValue('--nav-index')))).toBe(3);
 });
+
+test('app text rejects long-press selection while form editing remains available', async ({ page, browserName }) => {
+  const selectionProperty = browserName === 'webkit' ? '-webkit-user-select' : 'user-select';
+  const defaults = locator => locator.evaluate(el => Object.fromEntries(['selectstart', 'contextmenu'].map(type => {
+    const event = type === 'contextmenu' ? new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: 'touch' }) : new Event(type, { bubbles: true, cancelable: true });
+    el.dispatchEvent(event);
+    return [type, event.defaultPrevented];
+  })));
+  for (const name of ['About', 'Events', 'Hackathon', 'Profile']) {
+    await goTab(page, name);
+    const text = page.locator('#app h2').first();
+    await expect(text).toHaveCSS(selectionProperty, 'none');
+    expect(await defaults(text)).toEqual({ selectstart: true, contextmenu: true });
+  }
+  const field = page.locator('#auth-identifier');
+  await field.fill('member@ufl.edu');
+  await expect(field).toHaveCSS(selectionProperty, 'text');
+  expect(await defaults(field)).toEqual({ selectstart: false, contextmenu: false });
+  await field.evaluate(el => { el.focus(); el.setSelectionRange(0, 6); });
+  expect(await field.evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('member');
+  await page.keyboard.insertText('gator');
+  await expect(field).toHaveValue('gator@ufl.edu');
+  await field.blur();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const heading = page.locator('.appearance-settings h2');
+  await expect(heading).toHaveCSS(selectionProperty, 'none');
+  if (browserName === 'chromium') {
+    const cdp = await page.context().newCDPSession(page);
+    const box = await heading.boundingBox();
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + 40, y: box.y + box.height / 2, id: 1 }] });
+    await page.waitForTimeout(900);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    expect(await page.evaluate(() => getSelection().toString())).toBe('');
+  }
+});
+
+test('Samsung Light guidance follows selection and browser color follows the saved app theme', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (Linux; Android 16) SamsungBrowser/29.0' }));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.reload();
+  await expect(page.locator('.app-splash')).toBeHidden();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(page.locator('#browser-appearance-help')).toBeHidden();
+  await page.getByRole('radio', { name: 'Light', exact: true }).check();
+  await expect(page.locator('#browser-appearance-help')).toContainText('Light sites');
+  await expect(page.locator('#browser-appearance-help')).toBeVisible();
+  await expect(page.locator('meta[name="theme-color"]')).toHaveCount(1);
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f2f2f7');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f2f2f7');
+  await page.getByRole('radio', { name: 'Dark', exact: true }).check();
+  await expect(page.locator('#browser-appearance-help')).toBeHidden();
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#000000');
+});

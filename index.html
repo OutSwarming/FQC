@@ -4,8 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="color-scheme" content="light dark" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f2f2f7" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="FQC" />
@@ -20,7 +19,9 @@
       try {
         const savedTheme = localStorage.getItem("fqc:theme");
         const systemTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        document.documentElement.dataset.theme = ["light", "dark"].includes(savedTheme) ? savedTheme : systemTheme;
+        const theme = ["light", "dark"].includes(savedTheme) ? savedTheme : systemTheme;
+        document.documentElement.dataset.theme = theme;
+        document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#000000" : "#f2f2f7";
       } catch {}
     </script>
     <style>

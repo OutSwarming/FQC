@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.5";
+const APP_VERSION = "2.26.6";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.26.6", "Disabled long-press selection on app surfaces and clarified Samsung browser appearance controls"],
   ["2.26.5", "Moved navigation out of the way during sheet drags and restored Android capsule dragging"],
   ["2.26.4", "Added a Chrome install option for Samsung Internet and tightened browser permissions and offline caching"],
   ["2.26.3", "Centered map pins in one movement, stabilized navigation, and protected Light mode from automatic browser darkening"],
@@ -880,6 +881,8 @@ function applyTheme(appearance, persist = true) {
   state.theme = state.appearance === "system" ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : state.appearance;
   document.documentElement.dataset.theme = state.theme;
   document.querySelectorAll('meta[name="theme-color"]').forEach(meta => meta.setAttribute("content", state.theme === "dark" ? "#000000" : "#f2f2f7"));
+  const browserHelp = document.querySelector("#browser-appearance-help");
+  if (browserHelp) browserHelp.hidden = state.theme !== "light";
   if (persist) saveState();
 }
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -2826,6 +2829,7 @@ function renderSettings() {
       <section class="section appearance-settings" aria-labelledby="appearance-title">
         <h2 id="appearance-title">Appearance</h2><p>Choose a look, or match your device.</p>
         <fieldset class="appearance-options"><legend class="visually-hidden">Appearance</legend>${["system", "light", "dark"].map(value => `<label><input type="radio" name="appearance" value="${value}" ${state.appearance === value ? "checked" : ""}><span>${value[0].toUpperCase() + value.slice(1)}</span></label>`).join("")}</fieldset>
+        ${isSamsungInternet() ? `<p id="browser-appearance-help" class="field-hint" ${state.theme === "light" ? "" : "hidden"}>If this page stays dark, open Samsung Internet’s menu and tap <strong>Light sites</strong>. Samsung’s browser controls use its own theme.</p>` : ""}
       </section>
       ${renderAccountSettings()}
       <details class="section settings-group" ${disclosureAttrs("settings-install")}><summary><strong>Install FQC</strong><small>Home Screen</small></summary><div class="settings-group-content">${renderInstallCard()}</div></details>
@@ -3690,6 +3694,23 @@ bottomNav.addEventListener("lostpointercapture", event => {
 });
 window.addEventListener("popstate", () => setView(viewFromLocation() || "home", { history: false }));
 settingsToggle.addEventListener("click", () => setView("settings"));
+
+function isEditableSurface(target) {
+  const element = target instanceof Element ? target : target?.parentElement;
+  return Boolean(element?.closest("input, textarea") || element?.isContentEditable);
+}
+document.addEventListener("selectstart", event => {
+  if (!isEditableSurface(event.target)) event.preventDefault();
+});
+document.addEventListener("contextmenu", event => {
+  if (!isEditableSurface(event.target) && (event.pointerType === "touch" || window.matchMedia("(pointer: coarse)").matches)) {
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+  }
+});
+document.addEventListener("pointerdown", event => {
+  if (event.pointerType === "touch" && !isEditableSurface(event.target)) window.getSelection()?.removeAllRanges();
+}, { passive: true });
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();

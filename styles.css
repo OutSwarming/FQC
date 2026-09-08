@@ -3192,3 +3192,19 @@ button:active, .hack-outline-link:active { filter: brightness(.9); }
 .hackathon-preview .hack-small { color: #c4cad2; }
 
 .hackathon-preview .hack-hero .hack-coming-soon { margin: 0; max-width: 760px; font-size: clamp(2.8rem, 6vw, 5.5rem); line-height: 1.08; }
+
+/* App surfaces do not enter browser text-selection mode on a long press. */
+body, body * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Preserve selection, correction, and paste inside forms. */
+input, textarea, [contenteditable]:not([contenteditable="false"]),
+[contenteditable]:not([contenteditable="false"]) * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+#browser-appearance-help[hidden] { display: none; }
