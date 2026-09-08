@@ -3,7 +3,8 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null
+        && !exists(/databases/$(database)/documents/accountDeletions/$(request.auth.uid));
     }
 
     function isSelf(uid) {
@@ -11,11 +12,14 @@ service cloud.firestore {
     }
 
     function isOfficer() {
-      return signedIn() && request.auth.token.role == 'officer';
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roleOverride', '') == 'officer'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('leadership', '') in ['president', 'vice_president', 'treasurer']);
     }
 
     function canManageOfficers() {
-      return signedIn() && request.auth.token.manageOfficers == true;
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('leadership', '') in ['president', 'treasurer'];
     }
 
     match /users/{uid} {

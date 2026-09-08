@@ -1,4 +1,8 @@
 {
   "indexes": [],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {"collectionGroup": "requestLimits", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
+    {"collectionGroup": "passkeyChallenges", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
+    {"collectionGroup": "usernameDirectory", "fieldPath": "reservationExpiresAt", "ttl": true, "indexes": []}
+  ]
 }

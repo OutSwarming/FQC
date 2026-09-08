@@ -34,7 +34,7 @@ const locationsCsv = `"Location","Address","Lat","Long","Historical Event Count"
 "Weil Hall","1949 Stadium Road, Gainesville, FL 32611","29.64835","-82.34843","0","9","https://campusmap.ufl.edu/#/index/0024"
 "Smathers Library","1508 Union Road, Gainesville, FL 32611","29.65092","-82.34181","0","10","https://campusmap.ufl.edu/#/index/0005"`;
 const logisticsEventsCsv = `"Date","Time","Type","Location","Backup Room","Attendance","GatorConnect","SGF Request","Permit (y/n)","Permit Number"
-"7/9/2026","6:00:00 PM","Intro Event","Reitz G325","","40","","Pending registration","Confirmed (Reitz G325)","058982-GP"
+"7/9/2026","6:00:00 PM","Intro Event","Reitz G325","","40","","Pending registration","Confirmed (Reitz G325)","TEST-PERMIT"
 "8/27/2026","6:00:00 PM","GBM 1 - LinuxCL Workshop","Reitz G320","","70","","","Pending (Reitz G320)","059100-GP"
 "9/3/2026","5:30:00 PM","GBM 2 - Siddharth Speaker","Reitz 2350 (Capacity: 16)","Larsen 234","","","","Confirmed (Reitz 2350)","059118-GP"
 "9/17/2026","6:00:00 PM","GBM 3 - CUDAQ Workshop","Campus"
@@ -42,12 +42,12 @@ const logisticsEventsCsv = `"Date","Time","Type","Location","Backup Room","Atten
 const logisticsLocationsCsv = `${locationsCsv}
 "University of Florida","Gainesville, FL 32611","29.643632","-82.35493","0","11","https://campusmap.ufl.edu/"`;
 const budgetCsv = `"Event ID","Event","Date","Item","Quantity","Unit","Unit Cost","Planned Cost","Actual Cost","Funding Source","Status","Notes","Budget Summary","Amount"
-"fqc-2026-03-03-ionq","IonQ Quantum Networking Speaker Session","3/3/2026","Speaker catering","1","order","80","80","","Operational Funding","Estimate","Planning estimate","Base Funding","1050"
-"","","","","","","","","","","","","Operational Funding","2490"
-"","","","","","","","","","","","","Total Approved","3540"
+"fqc-2026-03-03-ionq","IonQ Quantum Networking Speaker Session","3/3/2026","Speaker catering","1","order","80","80","","Operational Funding","Estimate","Planning estimate","Base Funding","2000"
+"","","","","","","","","","","","","Operational Funding","3000"
+"","","","","","","","","","","","","Total Approved","5000"
 "","","","","","","","","","","","","Planned Spend","80"
 "","","","","","","","","","","","","Actual Spend","0"
-"","","","","","","","","","","","","Available After Actual","3540"
+"","","","","","","","","","","","","Available After Actual","5000"
 "","","","","","","","","","","","","Uncommitted After Plan","3460"`;
 
 test.beforeEach(async ({ page }) => {
@@ -67,7 +67,7 @@ test.beforeEach(async ({ page }) => {
     const transparentPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
     await route.fulfill({ status: 200, contentType: "image/png", body: transparentPixel });
   });
-  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+  await page.route("**/api/public-events?*", async (route) => {
     const sheetName = new URL(route.request().url()).searchParams.get("sheet");
     await route.fulfill({
       status: 200,
@@ -129,8 +129,8 @@ test("moves events into Past 24 hours after their scheduled start", async ({ pag
 "Archived Workshop","2026-02-27","6:00 PM","Larsen Hall","234","This event is more than 24 hours old.","Yes","fqc-2026-02-27-archived"
 "Grace Period GBM","2026-02-28","6:00 PM","Reitz Student Union","2340","This event remains current until 24 hours pass.","Yes","fqc-2026-02-28-grace"
 "Upcoming Workshop","2026-03-03","6:00 PM","Malachowsky Hall","1142","Future event.","Yes","fqc-2026-03-03-upcoming"`;
-  await page.unroute("https://docs.google.com/spreadsheets/**");
-  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+  await page.unroute("**/api/public-events?*");
+  await page.route("**/api/public-events?*", async (route) => {
     const sheetName = new URL(route.request().url()).searchParams.get("sheet");
     await route.fulfill({
       status: 200,
@@ -139,7 +139,7 @@ test("moves events into Past 24 hours after their scheduled start", async ({ pag
     });
   });
   await page.evaluate(() => {
-    localStorage.removeItem("fqc:event-data");
+    localStorage.removeItem("fqc:public-events-v2");
     localStorage.setItem("fqc:event-mode", "list");
     localStorage.setItem("fqc:selected-event", "fqc-2026-03-03-upcoming");
   });
@@ -164,8 +164,8 @@ test("moves events into Past 24 hours after their scheduled start", async ({ pag
 });
 
 test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", async ({ page }) => {
-  await page.unroute("https://docs.google.com/spreadsheets/**");
-  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+  await page.unroute("**/api/public-events?*");
+  await page.route("**/api/public-events?*", async (route) => {
     const sheetName = new URL(route.request().url()).searchParams.get("sheet");
     await route.fulfill({
       status: 200,
@@ -174,7 +174,7 @@ test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", a
     });
   });
   await page.evaluate(() => {
-    localStorage.removeItem("fqc:event-data");
+    localStorage.removeItem("fqc:public-events-v2");
     localStorage.setItem("fqc:calendar-month", "2026-03");
   });
   await page.reload();
@@ -189,10 +189,10 @@ test("loads the 2026 logistics workbook schema and maps abbreviated UF rooms", a
 });
 
 test("rejects cached locations outside the UF Gainesville campus", async ({ page }) => {
-  await page.unroute("https://docs.google.com/spreadsheets/**");
-  await page.route("https://docs.google.com/spreadsheets/**", (route) => route.abort());
+  await page.unroute("**/api/public-events?*");
+  await page.route("**/api/public-events?*", (route) => route.abort());
   await page.evaluate(() => {
-    localStorage.setItem("fqc:event-data", JSON.stringify({
+    localStorage.setItem("fqc:public-events-v2", JSON.stringify({
       updatedAt: new Date().toISOString(),
       events: [{
         id: "ucf-event",
@@ -224,7 +224,7 @@ test("rejects cached locations outside the UF Gainesville campus", async ({ page
 
 test("rejects an unsafe saved schedule and replaces it with live Sheet data", async ({ page }) => {
   await page.evaluate(() => {
-    localStorage.setItem("fqc:event-data", JSON.stringify({
+    localStorage.setItem("fqc:public-events-v2", JSON.stringify({
       events: [{
         id: '\"><img src=x onerror=alert(1)>',
         date: "2026-03-03",
@@ -275,8 +275,8 @@ test("the map only pins events for the tab in view", async ({ page }) => {
   const archiveEventsCsv = `"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"
 "Archived Workshop","2026-02-27","6:00 PM","Larsen Hall","234","More than 24 hours old.","Yes","fqc-2026-02-27-archived"
 "Upcoming Workshop","2026-03-03","6:00 PM","Malachowsky Hall","1142","Future event.","Yes","fqc-2026-03-03-upcoming"`;
-  await page.unroute("https://docs.google.com/spreadsheets/**");
-  await page.route("https://docs.google.com/spreadsheets/**", async (route) => {
+  await page.unroute("**/api/public-events?*");
+  await page.route("**/api/public-events?*", async (route) => {
     const sheetName = new URL(route.request().url()).searchParams.get("sheet");
     await route.fulfill({
       status: 200,
@@ -285,7 +285,7 @@ test("the map only pins events for the tab in view", async ({ page }) => {
     });
   });
   await page.evaluate(() => {
-    localStorage.removeItem("fqc:event-data");
+    localStorage.removeItem("fqc:public-events-v2");
     localStorage.setItem("fqc:event-mode", "list");
     localStorage.setItem("fqc:selected-event", "fqc-2026-03-03-upcoming");
   });
@@ -634,11 +634,11 @@ test("an officer login exposes officer controls in Profile", async ({ page }) =>
   await expect(page.getByRole("link", { name: /2026 Event Logistics/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Officer Recommendations" })).toHaveCount(0);
   await expect(page.locator(".profile-role-line").getByText("Officer", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Club budget overview").getByText("$3,540.00")).toBeVisible();
+  await expect(page.getByLabel("Club budget overview").getByText("$5,000.00")).toBeVisible();
   await page.getByRole("button", { name: /available now/i }).click();
   await expect(page.getByRole("heading", { name: "Funding breakdown" })).toBeVisible();
-  await expect(page.getByText("$1,050.00")).toBeVisible();
-  await expect(page.getByText("$2,490.00")).toBeVisible();
+  await expect(page.getByText("$2,000.00")).toBeVisible();
+  await expect(page.getByText("$3,000.00")).toBeVisible();
   await page.getByRole("button", { name: "Close budget breakdown" }).click();
 
   const firstEvent = page.locator('[data-officer-event="fqc-2026-03-03-ionq"]');
@@ -694,7 +694,7 @@ test("keeps the officer profile minimal with four current events and a completed
         officerRsvps: []
       }],
       budgetItems: [],
-      totals: { baseFunding: 1050, operationalFunding: 2490, totalApproved: 3540, plannedSpend: 120, actualSpend: 35, availableAfterActual: 3505, uncommittedAfterPlan: 3420 },
+      totals: { baseFunding: 2000, operationalFunding: 3000, totalApproved: 5000, plannedSpend: 120, actualSpend: 35, availableAfterActual: 4965, uncommittedAfterPlan: 4880 },
       locations: ["Reitz G320", "Larsen 234"],
       updatedAt: new Date().toISOString()
     });
@@ -1368,7 +1368,7 @@ test("a passkey member can email themselves a link to set a backup password", as
   await page.getByRole("button", { name: "Open settings" }).click();
 
   await page.getByText("Password", { exact: true }).click();
-  await expect(page.getByText(/A password is how you get back in on a device that has no passkey/)).toBeVisible();
+  await expect(page.getByText(/Set or reset your password by email to sign in on another device/)).toBeVisible();
   await page.getByRole("button", { name: "Email Me a Password Link" }).click();
   await expect(page.locator("#action-feedback")).toContainText("Password link sent to robin@ufl.edu");
 });

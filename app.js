@@ -36,9 +36,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.26.14";
+const APP_VERSION = "2.27.0";
 const APP_RELEASE_DATE = "September 8, 2026";
 const RELEASE_HISTORY = [
+  ["2.27.0", "Protected private club records, checked current officer access, and strengthened sign-in abuse protection"],
   ["2.26.14", "Streamlined officer events and Settings with focused sections and preserved drafts"],
   ["2.26.13", "Recorded attendance directly from the event Check In button"],
   ["2.26.12", "Balanced sheet travel and momentum so short swipes keep the middle stop"],
@@ -126,8 +127,8 @@ const EVENTS_SHEET_NAME = "Events";
 const TREASURER_SHEET_NAME = "Treasurer Breakdown";
 const UF_LOCATIONS_SHEET_NAME = "UF Locations";
 const EVENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const EVENT_DATA_CACHE_KEY = "fqc:event-data";
-const EVENT_BUDGET_CACHE_KEY = "fqc:event-budget";
+const EVENT_DATA_CACHE_KEY = "fqc:public-events-v2";
+try { localStorage.removeItem("fqc:event-data"); localStorage.removeItem("fqc:event-budget"); } catch {}
 const MAX_DISPLAY_NAME = 80;
 const LEADERBOARD_PREVIEW = 10;
 const FUNDING_SOURCES = ["Advertising Operation", "Food Operation", "Base Funds"];
@@ -329,17 +330,8 @@ let events = fallbackEvents.map((event) => ({ ...event }));
 let eventDataSource = "Bundled schedule copy";
 let eventDataUpdatedAt = null;
 let eventRefreshInFlight = null;
-let eventBudget = {
-  baseFunding: 1050,
-  operationalFunding: 2490,
-  totalApproved: 3540,
-  plannedSpend: 0,
-  actualSpend: 0,
-  availableAfterActual: 3540,
-  uncommittedAfterPlan: 3540,
-  items: []
-};
-let eventBudgetSource = "Verified FQC funding copy";
+let eventBudget = { baseFunding: 0, operationalFunding: 0, totalApproved: 0, plannedSpend: 0, actualSpend: 0, availableAfterActual: 0, uncommittedAfterPlan: 0, items: [] };
+let eventBudgetSource = "Officer budget loading";
 let eventBudgetUpdatedAt = null;
 
 function locationIdFor(name) {
@@ -410,89 +402,6 @@ function sheetMoney(value) {
   if (!normalized || normalized === "-" || normalized === ".") return 0;
   const amount = Number(normalized);
   return Number.isFinite(amount) ? amount : 0;
-}
-
-function buildSheetBudgetData(budgetCsv) {
-  const rows = csvObjects(budgetCsv);
-  const summaries = Object.fromEntries(rows
-    .filter((row) => row["Budget Summary"])
-    .map((row) => [row["Budget Summary"], sheetMoney(row.Amount)]));
-  const items = rows
-    .filter((row) => row["Event ID"] && row.Item)
-    .slice(0, MAX_BUDGET_ITEMS)
-    .map((row) => ({
-      eventId: row["Event ID"],
-      event: row.Event,
-      date: normalizeSheetDate(row.Date),
-      item: row.Item,
-      quantity: sheetMoney(row.Quantity),
-      unit: row.Unit,
-      unitCost: sheetMoney(row["Unit Cost"]),
-      plannedCost: sheetMoney(row["Planned Cost"]),
-      actualCost: sheetMoney(row["Actual Cost"]),
-      fundingSource: row["Funding Source"],
-      status: row.Status,
-      notes: row.Notes
-    }));
-  const baseFunding = summaries["Base Funding"];
-  const operationalFunding = summaries["Operational Funding"];
-  const totalApproved = summaries["Total Approved"] || baseFunding + operationalFunding;
-  if (!Number.isFinite(totalApproved) || totalApproved <= 0 || items.length > MAX_BUDGET_ITEMS) {
-    throw new Error("The budget sheet did not contain a valid FQC funding summary.");
-  }
-  const plannedSpend = summaries["Planned Spend"] || items.reduce((sum, item) => sum + item.plannedCost, 0);
-  const actualSpend = summaries["Actual Spend"] || items.reduce((sum, item) => sum + item.actualCost, 0);
-  return {
-    baseFunding,
-    operationalFunding,
-    totalApproved,
-    plannedSpend,
-    actualSpend,
-    availableAfterActual: summaries["Available After Actual"] || totalApproved - actualSpend,
-    uncommittedAfterPlan: summaries["Uncommitted After Plan"] || totalApproved - plannedSpend,
-    items
-  };
-}
-
-function isValidBudgetData(nextBudget) {
-  return Boolean(
-    nextBudget &&
-    Number.isFinite(nextBudget.totalApproved) &&
-    nextBudget.totalApproved > 0 &&
-    Number.isFinite(nextBudget.plannedSpend) &&
-    Number.isFinite(nextBudget.actualSpend) &&
-    Array.isArray(nextBudget.items) &&
-    nextBudget.items.length <= MAX_BUDGET_ITEMS &&
-    nextBudget.items.every((item) => SAFE_ID_PATTERN.test(item.eventId) && item.item && item.plannedCost >= 0 && item.actualCost >= 0)
-  );
-}
-
-function applyBudgetData(nextBudget, options = {}) {
-  if (!isValidBudgetData(nextBudget)) return false;
-  const changed = JSON.stringify(eventBudget) !== JSON.stringify(nextBudget);
-  eventBudget = {
-    ...nextBudget,
-    items: nextBudget.items.map((item) => ({ ...item }))
-  };
-  eventBudgetSource = options.source || EVENT_DATA_SOURCE;
-  eventBudgetUpdatedAt = options.updatedAt || new Date().toISOString();
-  if (options.persist !== false) {
-    try {
-      localStorage.setItem(EVENT_BUDGET_CACHE_KEY, JSON.stringify({ ...eventBudget, updatedAt: eventBudgetUpdatedAt }));
-    } catch {}
-  }
-  return changed;
-}
-
-function loadCachedBudgetData() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(EVENT_BUDGET_CACHE_KEY) || "null");
-    if (!cached) return false;
-    const { updatedAt, ...budget } = cached;
-    return applyBudgetData(budget, { source: "Saved Google Sheet budget", updatedAt, persist: false });
-  } catch {
-    return false;
-  }
 }
 
 function logisticsLocation(value) {
@@ -673,8 +582,8 @@ function loadCachedEventData() {
 }
 
 function sheetCsvUrl(sheetName) {
-  const query = new URLSearchParams({ tqx: "out:csv", sheet: sheetName, cache_bypass: String(Date.now()) });
-  return `https://docs.google.com/spreadsheets/d/${EVENT_SHEET_ID}/gviz/tq?${query}`;
+  const query = new URLSearchParams({ sheet: sheetName });
+  return `/api/public-events?${query}`;
 }
 
 async function refreshEventData(reason = "scheduled refresh") {
@@ -683,19 +592,16 @@ async function refreshEventData(reason = "scheduled refresh") {
 
   eventRefreshInFlight = Promise.all([
     fetch(sheetCsvUrl(EVENTS_SHEET_NAME), { cache: "no-store" }),
-    fetch(sheetCsvUrl(UF_LOCATIONS_SHEET_NAME), { cache: "no-store" }),
-    fetch(sheetCsvUrl(TREASURER_SHEET_NAME), { cache: "no-store" })
+    fetch(sheetCsvUrl(UF_LOCATIONS_SHEET_NAME), { cache: "no-store" })
   ])
-    .then(async ([eventsResponse, locationsResponse, budgetResponse]) => {
-      if (!eventsResponse.ok || !locationsResponse.ok || !budgetResponse.ok) {
-        throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}/${budgetResponse.status}).`);
+    .then(async ([eventsResponse, locationsResponse]) => {
+      if (!eventsResponse.ok || !locationsResponse.ok) {
+        throw new Error(`Sheet request failed (${eventsResponse.status}/${locationsResponse.status}).`);
       }
       const nextData = buildSheetEventData(await eventsResponse.text(), await locationsResponse.text());
-      const nextBudget = buildSheetBudgetData(await budgetResponse.text());
       const previousSource = eventDataSource;
       const changed = applyEventData(nextData, { source: EVENT_DATA_SOURCE });
-      const budgetChanged = applyBudgetData(nextBudget, { source: EVENT_DATA_SOURCE });
-      if ((changed || budgetChanged || previousSource !== eventDataSource) && (state.view === "home" || state.view === "profile")) render();
+      if ((changed || previousSource !== eventDataSource) && (state.view === "home" || state.view === "profile")) render();
       return true;
     })
     .catch((error) => {
@@ -710,7 +616,7 @@ async function refreshEventData(reason = "scheduled refresh") {
 }
 
 loadCachedEventData();
-loadCachedBudgetData();
+
 
 if (!events.some((event) => event.id === state.selectedEventId)) state.selectedEventId = events[0].id;
 if (!/^(member|officer)$/.test(state.memberRole)) state.memberRole = "member";

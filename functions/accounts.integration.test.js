@@ -24,7 +24,7 @@ test("Firebase onboarding, attendance, and resilient 10K export", { skip: !enabl
     });
     const credential = await response.json();
     assert.ok(credential.localId, JSON.stringify(credential));
-    const request = { auth: { uid: credential.localId, token: { email } }, data: {} };
+    const request = { auth: { uid: credential.localId, token: { email, auth_time: Math.floor(Date.now() / 1000) } }, data: {} };
     const profile = await finalizeAccount.run(request);
     assert.equal(profile.role, "member");
     assert.equal(profile.username, "");
@@ -108,11 +108,13 @@ test("custom domain supports every callable and its own passkeys", () => {
 test("deleted members and former presidents can recreate an account safely", { skip: !enabled, timeout: 30000 }, async () => {
   const db = getFirestore();
   const auth = getAuth();
-  const manager = { uid: "deletion-manager", token: { leadership: "treasurer" } };
+  await auth.createUser({ uid: "deletion-manager", email: "manager@ufl.edu" });
+  await db.collection("users").doc("deletion-manager").set({ leadership: "treasurer" });
+  const manager = { uid: "deletion-manager", token: { leadership: "treasurer", auth_time: Math.floor(Date.now() / 1000) } };
   for (const role of ["member", "president"]) {
     const email = `recreated-${role}@ufl.edu`;
     const user = await auth.createUser({ email, password: "recreate-test-password" });
-    const request = { auth: { uid: user.uid, token: { email } }, data: {} };
+    const request = { auth: { uid: user.uid, token: { email, auth_time: Math.floor(Date.now() / 1000) } }, data: {} };
     await finalizeAccount.run(request);
     const userRef = db.collection("users").doc(user.uid);
     await userRef.set({ displayName: "Already Reclaimed", username: `old-${role}`, checkedInEvents: ["old-event"] }, { merge: true });
@@ -147,7 +149,7 @@ test("deleted members and former presidents can recreate an account safely", { s
     await db.collection("passkeyChallenges").doc(`challenge-${role}`).set({ type: "authentication", expiresAt: Timestamp.fromMillis(Date.now() + 60000) });
     await assert.rejects(finishPasskeySignIn.run({ data: { challengeId: `challenge-${role}`, response: { id: `orphan-${role}` } } }), { code: "unauthenticated" });
     const recreated = await auth.createUser({ email, password: "new-test-password" });
-    const newRequest = { auth: { uid: recreated.uid, token: { email } }, data: {} };
+    const newRequest = { auth: { uid: recreated.uid, token: { email, auth_time: Math.floor(Date.now() / 1000) } }, data: {} };
     const profile = await finalizeAccount.run(newRequest);
     assert.notEqual(recreated.uid, user.uid);
     assert.equal(profile.role, "member");

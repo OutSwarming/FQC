@@ -1,4 +1,9 @@
+export function isAppAttestationError(error) {
+  return String(error?.code || '') === 'functions/unauthenticated' && String(error?.message || '').trim() === 'Unauthenticated';
+}
+
 export function isInvalidSessionError(error) {
+  if (isAppAttestationError(error)) return false;
   return ['auth/user-not-found', 'auth/user-disabled', 'auth/user-token-expired', 'auth/invalid-user-token', 'functions/unauthenticated']
     .includes(String(error?.code || ''));
 }

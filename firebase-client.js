@@ -1,5 +1,6 @@
-import { createSessionRestorer, isInvalidSessionError, withAuthTimeout } from "./auth-session.js";
+import { createSessionRestorer, isAppAttestationError, isInvalidSessionError, withAuthTimeout } from "./auth-session.js";
 import { initializeApp } from "firebase/app";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
   browserLocalPersistence,
   createUserWithEmailAndPassword,
@@ -52,7 +53,7 @@ let mockOfficerEventOperations = {
   events: [
     {
       id: "fqc-2026-03-03-ionq", row: 2, date: "2026-03-03", time: "3:30 PM", title: "IonQ Quantum Networking Speaker Session",
-      location: "Reitz Student Union 2340", backupRoom: "Larsen 234", attendance: "40", permitStatus: "Confirmed", permitNumber: "058982-GP",
+      location: "Reitz Student Union 2340", backupRoom: "Larsen 234", attendance: "40", permitStatus: "Confirmed", permitNumber: "TEST-PERMIT",
       roomStatus: "Confirmed", backupRoomStatus: "Submitted", notes: "Confirm the catering pickup owner.", plannedBudget: 80, actualSpend: 0,
       remainingBudget: 80, fundingSource: "Operational Funding", budgetStatus: "Planned", eventStatus: "Confirmed",
       rsvps: [{ uid: "member-2", displayName: "Jordan", role: "member" }], officerRsvps: []
@@ -67,7 +68,7 @@ let mockOfficerEventOperations = {
   budgetItems: [
     { row: 2, eventId: "fqc-2026-03-03-ionq", event: "IonQ Quantum Networking Speaker Session", date: "2026-03-03", item: "Speaker catering", quantity: 1, unit: "order", unitCost: 80, plannedCost: 80, actualCost: 0, fundingSource: "Operational Funding", status: "Estimate", notes: "Confirm final receipt." }
   ],
-  totals: { baseFunding: 1050, operationalFunding: 2490, totalApproved: 3540, plannedSpend: 220, actualSpend: 40, availableAfterActual: 3500, uncommittedAfterPlan: 3320 },
+  totals: { baseFunding: 2000, operationalFunding: 3000, totalApproved: 5000, plannedSpend: 220, actualSpend: 40, availableAfterActual: 4960, uncommittedAfterPlan: 4780 },
   attendanceSync: { state: "current", processed: 0, remaining: false, lastError: "", lastSuccessAt: "" },
   locations: ["Malachowsky Hall", "Larsen Hall", "Reitz Student Union", "Marston Science Library"],
   updatedAt: new Date().toISOString()
@@ -78,6 +79,7 @@ let pendingAccountCreation = null;
 
 if (!testMode) {
   const firebaseApp = initializeApp(firebaseConfig);
+  initializeAppCheck(firebaseApp, { provider: new ReCaptchaEnterpriseProvider("6Ld-wq8tAAAAADsMVsc5R2wW0enHzR_kFFjkm65d"), isTokenAutoRefreshEnabled: true });
   auth = getAuth(firebaseApp);
   db = getFirestore(firebaseApp);
   functions = getFunctions(firebaseApp, "us-central1");
@@ -254,14 +256,6 @@ export function observeCheckIn(callback, onError = () => {}) {
   }, onError);
 }
 
-async function emailForLoginIdentifier(identifier) {
-  const value = String(identifier || "").trim().toLowerCase();
-  if (value.includes("@")) return value;
-  if (testMode) return String(mockUsernameDirectory.get(value) || "");
-  const result = await retryOnceWhenTransient(() => callable("resolveLoginIdentifier")({ identifier: value }));
-  return String(result.data?.email || "");
-}
-
 export async function checkUsername(username, reservationToken = "") {
   const normalized = String(username || "").trim().toLowerCase();
   if (testMode) {
@@ -277,15 +271,24 @@ export async function checkUsername(username, reservationToken = "") {
 }
 
 export async function signInWithEmail(identifier, password) {
-  const email = await emailForLoginIdentifier(identifier);
-  if (!email) throw new Error("The username or password is incorrect.");
+  const value = String(identifier || "").trim().toLowerCase();
   if (testMode) {
-    const username = String(identifier).includes("@") ? "" : String(identifier).trim().toLowerCase();
+    const email = value.includes("@") ? value : mockUsernameDirectory.get(value);
+    if (!email) throw new Error("The username or password is incorrect.");
+    const username = value.includes("@") ? "" : value;
     mockSignIn({ uid: "email-user", username, displayName: username || "Email Member", email });
     return;
   }
-  const credential = await withAuthTimeout(() => signInWithEmailAndPassword(auth, email, password));
-  // Do not report successful login before the member profile is ready.
+  const credential = await withAuthTimeout(async () => {
+    if (value.includes("@")) return signInWithEmailAndPassword(auth, value, password);
+    const result = await callable("signInWithUsername")({ identifier: value, password }).catch(error => {
+      if (error?.code === "functions/unauthenticated" && error?.message === "The username or password is incorrect.") {
+        throw Object.assign(new Error(error.message), { code: "auth/invalid-credential" });
+      }
+      throw error;
+    });
+    return signInWithCustomToken(auth, result.data.customToken);
+  });
   await restoreSession(credential.user);
 }
 
@@ -340,12 +343,7 @@ export async function requestPasswordReset(identifier) {
   const value = String(identifier || "").trim();
   if (!value) throw new Error("Enter your username or UF email.");
   if (testMode) return { sent: true, email: value };
-  try {
-    const email = await emailForLoginIdentifier(value);
-    if (email) await sendPasswordResetEmail(auth, email);
-  } catch (error) {
-    console.debug("Password reset lookup did not resolve", error);
-  }
+  await callable("requestAccountPasswordReset")({ identifier: value });
   return { sent: true };
 }
 
@@ -685,6 +683,7 @@ export function readableAuthError(error) {
   if (code.includes("operation-not-allowed")) return "This sign-in method is still being configured.";
   if (code.includes("account-exists-with-different-credential")) return "That email already uses another sign-in method. Sign in with the original method first.";
   if (code.includes("email-already-in-use")) return "An account already exists for that email. Use Log In or Forgot Password.";
+  if (isAppAttestationError(error)) return "FQC could not verify this app session. Refresh the page and try again.";
   if (isInvalidSessionError(error)) return "This saved session is no longer valid. Log in with your current account, or create an account if it was deleted.";
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found") || code.includes("not-found")) return "The username, UF email, or password is incorrect.";
   if (code.includes("weak-password")) return "Use a password with at least eight characters.";

@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, Timestamp, getFirestore } from "firebase-admin/firestore";
-import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { HttpsError, onCall, onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { memberExportChanged, enqueueMemberExport, seedMemberExport, drainMemberExports } from "./lib/member-sync.js";
 import { onSchedule } from "firebase-functions/v2/scheduler";
@@ -36,6 +36,8 @@ export {
   usernameForInput,
   usernameForSignupEmail
 };
+
+import { enforceRateLimit, publicScheduleCsv, sessionIsRevoked } from "./lib/security.js";
 
 initializeApp();
 
@@ -92,8 +94,16 @@ export const allowedOrigins = new Map([
 const callableOptions = {
   region,
   cors: [...allowedOrigins.keys()],
-  maxInstances: 10
+  maxInstances: 10,
+  enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true"
 };
+
+function secureCallable(name, handler) {
+  return onCall(callableOptions, async request => {
+    await enforceRateLimit(db, name, request);
+    return handler(request);
+  });
+}
 
 // The browser checks for a UF address at signup, but that check is only a
 // courtesy: anything calling Firebase Auth directly skips it. New accounts are
@@ -112,9 +122,12 @@ export function assertEligibleSignupEmail(email) {
   }
 }
 
-function requireAuth(request) {
+async function requireAuth(request) {
   if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Sign in is required.");
-  return request.auth;
+  const user = await activeAuthUser(request.auth.uid);
+  if (sessionIsRevoked(user, request.auth.token)) throw new HttpsError("unauthenticated", "Your session ended. Please sign in again.");
+  if ((await db.collection("accountDeletions").doc(user.uid).get()).exists) throw new HttpsError("unauthenticated", "This account was deleted. Please sign in again.");
+  return { ...request.auth, userRecord: user };
 }
 
 function cleanText(value, maxLength = 120) {
@@ -790,20 +803,19 @@ async function setAccessClaims(userRecord, access) {
   }
 }
 
-function requireOfficerManager(request) {
-  const caller = requireAuth(request);
-  if (!canManageOfficerRoles(caller.token)) {
-    throw new HttpsError("permission-denied", "Only the President or Treasurer can change officer roles.");
-  }
+async function requireOfficerManager(request) {
+  const caller = await requireOfficer(request);
+  if (!canManageOfficerRoles(caller.token)) throw new HttpsError("permission-denied", "Only the President or Treasurer can change officer roles.");
   return caller;
 }
 
-function requireOfficer(request) {
-  const caller = requireAuth(request);
-  if (caller.token.role !== "officer" && !canManageOfficerRoles(caller.token)) {
-    throw new HttpsError("permission-denied", "Officer access is required.");
-  }
-  return caller;
+async function requireOfficer(request) {
+  const caller = await requireAuth(request);
+  const profile = await db.collection("users").doc(caller.uid).get();
+  const access = resolvedAccess(profile.data());
+  if (!profile.exists || access.role !== "officer") throw new HttpsError("permission-denied", "Officer access is required.");
+  // Token claims are a UI hint, never the authority for an officer operation.
+  return { ...caller, token: { ...caller.token, role: access.role, leadership: access.leadership, manageOfficers: access.canManageOfficers } };
 }
 
 function relyingParty(request) {
@@ -880,20 +892,20 @@ async function ensureProfileForUser(userRecord) {
   return publicProfile(userRecord.uid, data);
 }
 
-export const ensureUserProfile = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const ensureUserProfile = secureCallable("ensureUserProfile", async (request) => {
+  const caller = await requireAuth(request);
   const userRecord = await activeAuthUser(caller.uid);
   return ensureProfileForUser(userRecord);
 });
 
-export const finalizeAccount = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const finalizeAccount = secureCallable("finalizeAccount", async (request) => {
+  const caller = await requireAuth(request);
   const userRecord = await activeAuthUser(caller.uid);
   assertEligibleSignupEmail(userRecord.email);
   return ensureProfileForUser(userRecord);
 });
 
-export const checkUsernameAvailability = onCall(callableOptions, async (request) => {
+export const checkUsernameAvailability = secureCallable("checkUsernameAvailability", async (request) => {
   const username = usernameForInput(request.data?.username);
   if (!username) throw new HttpsError("invalid-argument", "Use 3–24 letters, numbers, periods, or underscores.");
   const suppliedToken = cleanText(request.data?.reservationToken, 180);
@@ -985,8 +997,8 @@ async function claimUsernameForUser(userRecord, requestedUsername, reservationTo
   return claimedUsername;
 }
 
-export const claimUsername = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const claimUsername = secureCallable("claimUsername", async (request) => {
+  const caller = await requireAuth(request);
   const userRecord = await auth.getUser(caller.uid);
   if (!(await db.collection("users").doc(caller.uid).get()).exists) assertEligibleSignupEmail(userRecord.email);
   const username = await claimUsernameForUser(
@@ -997,32 +1009,73 @@ export const claimUsername = onCall(callableOptions, async (request) => {
   return { username };
 });
 
-export const resolveLoginIdentifier = onCall(callableOptions, async (request) => {
-  const identifier = cleanText(request.data?.identifier, 180).toLowerCase();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) return { email: identifier };
-  const username = usernameForInput(identifier);
-  if (!username) throw new HttpsError("not-found", "The username or password is incorrect.");
-  const snapshot = await db.collection("usernameDirectory").doc(username).get();
-  const uid = cleanText(snapshot.data()?.uid, 160);
-  if (!uid) throw new HttpsError("not-found", "The username or password is incorrect.");
-  let userRecord;
-  try {
-    userRecord = await auth.getUser(uid);
-  } catch (error) {
-    if (!isMissingAuthUser(error)) throw new HttpsError("unavailable", "Sign-in is temporarily unavailable. Try again.");
-    await db.runTransaction(async (transaction) => {
-      const usernameRef = db.collection("usernameDirectory").doc(username);
-      const current = await transaction.get(usernameRef);
-      if (cleanText(current.data()?.uid, 160) === uid) transaction.delete(usernameRef);
-    });
-    throw new HttpsError("not-found", "The username or password is incorrect.");
-  }
-  if (!userRecord.email) throw new HttpsError("not-found", "The username or password is incorrect.");
-  return { email: userRecord.email };
+// Retire the legacy endpoint without leaking whether a username exists.
+export const resolveLoginIdentifier = secureCallable("resolveLoginIdentifier", async () => {
+  throw new HttpsError("failed-precondition", "Please refresh FQC and sign in again, or use your UF email.");
 });
 
-export const updateUserProfile = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+const identityApiKey = "AIzaSyDB_R45SNkEJT9LoNE6BuX2bt4TDO_Bs4g";
+async function lookupUsername(identifier) {
+  const username = usernameForInput(identifier);
+  if (!username) return null;
+  const entry = await db.collection("usernameDirectory").doc(username).get();
+  const uid = cleanText(entry.data()?.uid, 160);
+  if (!uid) return null;
+  try { return await activeAuthUser(uid); }
+  catch (error) { if (error.code === "unauthenticated") return null; throw error; }
+}
+async function identityRequest(method, body) {
+  const origin = process.env.FIREBASE_AUTH_EMULATOR_HOST ? `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com` : "https://identitytoolkit.googleapis.com";
+  return fetch(`${origin}/v1/accounts:${method}?key=${identityApiKey}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000)
+  });
+}
+export const signInWithUsername = secureCallable("signInWithUsername", async request => {
+  const identifier = cleanText(request.data?.identifier, 180);
+  const password = typeof request.data?.password === "string" ? request.data.password : "";
+  if (!password || password.length > 4096) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
+  const user = await lookupUsername(identifier);
+  // Both unknown usernames and incorrect passwords follow the Firebase password check.
+  const response = await identityRequest("signInWithPassword", { email: user?.email || "missing-account@invalid.example", password, returnSecureToken: true });
+  if (!response.ok || !user) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
+  const result = await response.json();
+  if (result.localId !== user.uid) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
+  await activeAuthUser(user.uid);
+  if ((await db.collection("accountDeletions").doc(user.uid).get()).exists) throw new HttpsError("unauthenticated", "The username or password is incorrect.");
+  return { customToken: await auth.createCustomToken(user.uid) };
+});
+export const requestAccountPasswordReset = secureCallable("requestAccountPasswordReset", async request => {
+  const identifier = cleanText(request.data?.identifier, 180).toLowerCase();
+  const user = identifier.includes("@") ? null : await lookupUsername(identifier);
+  const email = identifier.includes("@") ? identifier : user?.email;
+  if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    // Always return the same result; never return the email resolved from a username.
+    await identityRequest("sendOobCode", { requestType: "PASSWORD_RESET", email });
+  }
+  return { sent: true };
+});
+
+let scheduleCache;
+let scheduleLoading;
+export const publicEventSchedule = onRequest({ region, maxInstances: 3, cors: [...allowedOrigins.keys()] }, async (request, response) => {
+  if (request.method !== "GET") { response.set("Allow", "GET").status(405).end(); return; }
+  if (!["Events", "UF Locations"].includes(request.query.sheet)) { response.set("Cache-Control", "no-store").status(400).json({ error: "Unknown public feed" }); return; }
+  try {
+    if (!scheduleCache || scheduleCache.expires < Date.now()) {
+      scheduleLoading ||= Promise.all([getSheetValues("'Events'!A1:W251"), getSheetValues("'UF Locations'!A1:F251")])
+        .then(([eventRows, locationRows]) => {
+          scheduleCache = { expires: Date.now() + 300000, data: { eventsCsv: publicScheduleCsv(eventRows, "events"), locationsCsv: publicScheduleCsv(locationRows, "locations") } };
+        }).finally(() => { scheduleLoading = null; });
+      await scheduleLoading;
+    }
+    const kind = request.query.sheet;
+    if (!["Events", "UF Locations"].includes(kind)) { response.set("Cache-Control", "no-store").status(400).json({ error: "Unknown public feed" }); return; }
+    response.set("Cache-Control", "public, max-age=60, s-maxage=300").type("text/csv").send(kind === "Events" ? scheduleCache.data.eventsCsv : scheduleCache.data.locationsCsv);
+  } catch { response.set("Cache-Control", "no-store").status(503).json({ error: "Schedule temporarily unavailable" }); }
+});
+
+export const updateUserProfile = secureCallable("updateUserProfile", async (request) => {
+  const caller = await requireAuth(request);
   const displayName = cleanText(request.data?.displayName, maxDisplayNameLength);
   if (displayName.length < 2) throw new HttpsError("invalid-argument", `Use 2 to ${maxDisplayNameLength} characters for your display name.`);
 
@@ -1051,8 +1104,8 @@ export const updateUserProfile = onCall(callableOptions, async (request) => {
   return publicProfile(caller.uid, profile);
 });
 
-export const listMembers = onCall(callableOptions, async (request) => {
-  requireOfficer(request);
+export const listMembers = secureCallable("listMembers", async (request) => {
+  await requireOfficer(request);
   const [snapshot, leadershipRows] = await Promise.all([
     db.collection("users").orderBy("displayName").limit(250).get(),
     loadLeadershipRows()
@@ -1064,8 +1117,8 @@ export const listMembers = onCall(callableOptions, async (request) => {
   };
 });
 
-export const getOfficerResources = onCall(callableOptions, (request) => {
-  requireOfficer(request);
+export const getOfficerResources = secureCallable("getOfficerResources", async (request) => {
+  await requireOfficer(request);
   return { resources: officerResourceCatalog };
 });
 
@@ -1132,8 +1185,8 @@ function rsvpEntriesForEvent(rsvpData = {}, eventId) {
   return Array.isArray(entries) ? entries.slice(0, 300) : [];
 }
 
-export const getOfficerEventOperations = onCall(callableOptions, async (request) => {
-  requireOfficer(request);
+export const getOfficerEventOperations = secureCallable("getOfficerEventOperations", async (request) => {
+  await requireOfficer(request);
   const [workbook, rsvpSnapshot, attendanceSyncSnapshot] = await Promise.all([
     loadEventOperationsWorkbook(),
     db.collection("system").doc("eventRsvps").get(),
@@ -1171,8 +1224,8 @@ export const getOfficerEventOperations = onCall(callableOptions, async (request)
   };
 });
 
-export const saveOfficerEvent = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const saveOfficerEvent = secureCallable("saveOfficerEvent", async (request) => {
+  const caller = await requireOfficer(request);
   const input = eventFormData(request.data?.event);
   const requestedId = cleanText(request.data?.event?.id, 100);
   const workbook = await loadEventOperationsWorkbook();
@@ -1230,8 +1283,8 @@ export function budgetItemData(value = {}) {
   };
 }
 
-export const saveOfficerBudgetItem = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const saveOfficerBudgetItem = secureCallable("saveOfficerBudgetItem", async (request) => {
+  const caller = await requireOfficer(request);
   const input = budgetItemData(request.data?.item);
   const workbook = await loadEventOperationsWorkbook();
   if (!workbook.eventRowById.has(input.eventId)) throw new HttpsError("not-found", "That event is no longer in the workbook.");
@@ -1266,8 +1319,8 @@ export const saveOfficerBudgetItem = onCall(callableOptions, async (request) => 
   return { saved: true, row };
 });
 
-export const deleteOfficerBudgetItem = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const deleteOfficerBudgetItem = secureCallable("deleteOfficerBudgetItem", async (request) => {
+  const caller = await requireOfficer(request);
   const row = Math.trunc(Number(request.data?.row) || 0);
   if (row < 2) throw new HttpsError("invalid-argument", "Choose a saved budget line to remove.");
   const workbook = await loadEventOperationsWorkbook();
@@ -1285,8 +1338,8 @@ export const deleteOfficerBudgetItem = onCall(callableOptions, async (request) =
   return { removed: true, row };
 });
 
-export const removeMember = onCall(callableOptions, async (request) => {
-  const caller = requireOfficerManager(request);
+export const removeMember = secureCallable("removeMember", async (request) => {
+  const caller = await requireOfficerManager(request);
   const uid = cleanText(request.data?.uid, 160);
   if (!uid) throw new HttpsError("invalid-argument", "Choose a member to remove.");
   if (uid === caller.uid) throw new HttpsError("failed-precondition", "You cannot remove your own account.");
@@ -1353,8 +1406,8 @@ export const removeMember = onCall(callableOptions, async (request) => {
   return { removed: true, uid, displayName };
 });
 
-export const setEventRsvp = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const setEventRsvp = secureCallable("setEventRsvp", async (request) => {
+  const caller = await requireAuth(request);
   const eventId = cleanText(request.data?.eventId, 100);
   const going = request.data?.going === true;
   if (!isSafeEventId(eventId)) throw new HttpsError("invalid-argument", "Choose a valid event.");
@@ -1396,8 +1449,8 @@ export const setEventRsvp = onCall(callableOptions, async (request) => {
   return { eventId, going, entries: result.entries };
 });
 
-export const setMemberRole = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const setMemberRole = secureCallable("setMemberRole", async (request) => {
+  const caller = await requireOfficer(request);
   const uid = cleanText(request.data?.uid, 160);
   const role = profileRole(request.data?.role);
   if (!uid) throw new HttpsError("invalid-argument", "Choose a member.");
@@ -1442,8 +1495,8 @@ export const setMemberRole = onCall(callableOptions, async (request) => {
   return { uid, role, leadership: "", canManageOfficers: false };
 });
 
-export const assignMemberLeadership = onCall(callableOptions, async (request) => {
-  const caller = requireOfficerManager(request);
+export const assignMemberLeadership = secureCallable("assignMemberLeadership", async (request) => {
+  const caller = await requireOfficerManager(request);
   const uid = cleanText(request.data?.uid, 160);
   const row = Number(request.data?.row);
   if (!uid || !Number.isInteger(row) || row < 2 || row > 250) {
@@ -1529,8 +1582,8 @@ async function remainingOfficerManagers(excludedUid) {
 // Opening a seat clears it on the Current Leadership tab and drops the holder to
 // a plain officer. The President or Treasurer can demote them the rest of the way
 // afterwards; ending a term should not silently remove someone from the team.
-export const unassignMemberLeadership = onCall(callableOptions, async (request) => {
-  const caller = requireOfficerManager(request);
+export const unassignMemberLeadership = secureCallable("unassignMemberLeadership", async (request) => {
+  const caller = await requireOfficerManager(request);
   const row = Number(request.data?.row);
   if (!Number.isInteger(row) || row < 2 || row > 250) {
     throw new HttpsError("invalid-argument", "Choose a leadership seat to open.");
@@ -1605,8 +1658,8 @@ function requireNearbyLocation(checkIn = {}, requestLocation = {}) {
   return true;
 }
 
-export const setActiveCheckIn = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const setActiveCheckIn = secureCallable("setActiveCheckIn", async (request) => {
+  const caller = await requireOfficer(request);
   const eventId = cleanText(request.data?.eventId, 100);
   const open = request.data?.open === true;
   if (open && !eventId) throw new HttpsError("invalid-argument", "Choose an event.");
@@ -1637,8 +1690,8 @@ export const setActiveCheckIn = onCall(callableOptions, async (request) => {
   return { eventId, open, requireLocation };
 });
 
-export const setCheckInLocationRequirement = onCall(callableOptions, async (request) => {
-  const caller = requireOfficer(request);
+export const setCheckInLocationRequirement = secureCallable("setCheckInLocationRequirement", async (request) => {
+  const caller = await requireOfficer(request);
   const requireLocation = request.data?.requireLocation !== false;
   const settingRef = db.collection("settings").doc("checkin");
   const current = await settingRef.get();
@@ -1650,8 +1703,8 @@ export const setCheckInLocationRequirement = onCall(callableOptions, async (requ
   return { requireLocation };
 });
 
-export const recordEventCheckIn = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const recordEventCheckIn = secureCallable("recordEventCheckIn", async (request) => {
+  const caller = await requireAuth(request);
   const settingRef = db.collection("settings").doc("checkin");
   const userRef = db.collection("users").doc(caller.uid);
   const checkedInAt = new Date().toISOString();
@@ -1779,8 +1832,8 @@ export const runDeferredMaintenance = onSchedule({
   }
 });
 
-export const beginPasskeyRegistration = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const beginPasskeyRegistration = secureCallable("beginPasskeyRegistration", async (request) => {
+  const caller = await requireAuth(request);
   const { origin, rpID } = relyingParty(request);
   const userRecord = await auth.getUser(caller.uid);
   const credentials = await db.collection("users").doc(caller.uid).collection("passkeys").get();
@@ -1811,8 +1864,8 @@ export const beginPasskeyRegistration = onCall(callableOptions, async (request) 
   return { challengeId, options };
 });
 
-export const finishPasskeyRegistration = onCall(callableOptions, async (request) => {
-  const caller = requireAuth(request);
+export const finishPasskeyRegistration = secureCallable("finishPasskeyRegistration", async (request) => {
+  const caller = await requireAuth(request);
   const challengeId = cleanText(request.data?.challengeId, 100);
   const response = request.data?.response;
   const challengeRef = db.collection("passkeyChallenges").doc(challengeId);
@@ -1865,7 +1918,7 @@ export const finishPasskeyRegistration = onCall(callableOptions, async (request)
   return { verified: true };
 });
 
-export const beginPasskeySignIn = onCall(callableOptions, async (request) => {
+export const beginPasskeySignIn = secureCallable("beginPasskeySignIn", async (request) => {
   const { origin, rpID } = relyingParty(request);
   const options = await generateAuthenticationOptions({
     rpID,
@@ -1883,7 +1936,7 @@ export const beginPasskeySignIn = onCall(callableOptions, async (request) => {
   return { challengeId, options };
 });
 
-export const finishPasskeySignIn = onCall(callableOptions, async (request) => {
+export const finishPasskeySignIn = secureCallable("finishPasskeySignIn", async (request) => {
   const challengeId = cleanText(request.data?.challengeId, 100);
   const response = request.data?.response;
   const credentialId = cleanText(response?.id, 1024);

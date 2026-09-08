@@ -16,7 +16,7 @@ const mapPoint = async page => {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__FQC_AUTH_TEST__ = true; });
   await page.route('https://*.tile.openstreetmap.org/**', route => route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') }));
-  await page.route('https://docs.google.com/spreadsheets/**', route => {
+  await page.route('**/api/public-events?*', route => {
     const sheet = new URL(route.request().url()).searchParams.get('sheet');
     const body = sheet === 'UF Locations' ? '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive, Gainesville, FL 32611","29.64631","-82.34788"' : sheet === 'Events' ? '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"\n"Quantum Workshop","2027-03-24","6:00 PM","Reitz Student Union","2340","Build quantum circuits together.","Yes","phone-workshop"' : '"Budget Summary","Amount"\n"Total Approved","100"';
     return route.fulfill({ status: 200, contentType: 'text/csv', body });
@@ -332,7 +332,7 @@ test.use({ serviceWorkers: 'block' });
 test('original event popup covers the dock, resizes, and keeps the last event tappable', async ({ page }, info) => {
   const header = '"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"';
   const rows = Array.from({ length: 16 }, (_, i) => `"Archived quantum workshop ${i + 1}","2020-03-${String(i + 1).padStart(2, '0')}","6:00 PM","Reitz Student Union","2315","A hands-on quantum computing workshop with circuits, discussion and exercises for members working together.","Yes","archive-${i + 1}"`);
-  await page.route('https://docs.google.com/spreadsheets/**', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
+  await page.route('**/api/public-events?*', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
     ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
     : route.fallback());
   await page.reload();
@@ -489,7 +489,7 @@ test.describe('pin navigation between event views', () => {
       '"Later at ten","2027-03-24","10:00 AM","Reitz Student Union","2315","Later workshop","Yes","home-later"',
       '"Next at nine","2027-03-24","9:00 AM","Larsen Hall","234","Next workshop","Yes","home-next"'
     ];
-    await page.route('https://docs.google.com/spreadsheets/**', route => {
+    await page.route('**/api/public-events?*', route => {
       const sheet = new URL(route.request().url()).searchParams.get('sheet');
       if (sheet === 'Events') return route.fulfill({ status: 200, contentType: 'text/csv', body: ['"Event Name","Event Date","Start Time","Location","Room","Event Description","Published","Event ID"', ...rows].join('\n') });
       if (sheet === 'UF Locations') return route.fulfill({ status: 200, contentType: 'text/csv', body: '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive","29.64631","-82.34788"\n"Larsen Hall","968 Center Drive","29.64311","-82.34738"' });
@@ -534,7 +534,7 @@ test.describe('pin navigation between event views', () => {
       '"Larsen archive","2020-03-02","6:00 PM","Larsen Hall","234","Past workshop","Yes","larsen-archive"',
       '"Next Reitz workshop","2027-03-24","6:00 PM","Reitz Student Union","2315","Upcoming workshop","Yes","reitz-next"'
     ];
-    await page.route('https://docs.google.com/spreadsheets/**', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
+    await page.route('**/api/public-events?*', route => new URL(route.request().url()).searchParams.get('sheet') === 'Events'
       ? route.fulfill({ status: 200, contentType: 'text/csv', body: [header, ...rows].join('\n') })
       : new URL(route.request().url()).searchParams.get('sheet') === 'UF Locations'
         ? route.fulfill({ status: 200, contentType: 'text/csv', body: '"Location","Address","Lat","Long"\n"Reitz Student Union","655 Reitz Union Drive","29.64631","-82.34788"\n"Larsen Hall","968 Center Drive","29.64311","-82.34738"' })

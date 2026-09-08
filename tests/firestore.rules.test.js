@@ -23,6 +23,8 @@ beforeEach(async () => {
     const database = context.firestore();
     await setDoc(doc(database, "users", "member-1"), { displayName: "Member", role: "member" });
     await setDoc(doc(database, "users", "member-2"), { displayName: "Other Member", role: "member" });
+    await setDoc(doc(database, "users", "officer-1"), { roleOverride: "officer" });
+    await setDoc(doc(database, "users", "treasurer-1"), { leadership: "treasurer" });
     await setDoc(doc(database, "settings", "checkin"), { eventId: "gbm-1", open: true });
     await setDoc(doc(database, "system", "leaderboardData"), {
       entries: [{ uid: "member-1", displayName: "Member", points: 1 }]
@@ -126,4 +128,17 @@ test("hackathon interest rejects incomplete accounts and forged records", async 
   for (const extra of [{ uid: "member-2" }, { eventId: "other-event" }, { interested: "yes" }, { updatedAt: new Date(0) }, { role: "officer" }]) {
     await assertFails(setDoc(doc(member, "hackathonInterest", "member-1"), { ...interestRecord("member-1"), ...extra }));
   }
+});
+
+ test("stale officer claims cannot read other members after demotion or deletion", async () => {
+  const officer = testEnvironment.authenticatedContext("officer-1", { role: "officer", manageOfficers: true }).firestore();
+  await testEnvironment.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), "users", "officer-1"), { roleOverride: "member", leadership: "" });
+  });
+  await assertFails(getDoc(doc(officer, "users", "member-1")));
+  await assertFails(getDoc(doc(officer, "events", "gbm-1", "checkins", "member-1")));
+  await testEnvironment.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(), "accountDeletions", "officer-1"), { startedAt: serverTimestamp() });
+  });
+  await assertFails(getDoc(doc(officer, "users", "officer-1")));
 });

@@ -32,3 +32,9 @@ test('signing out while setup runs cannot resurrect a session',async()=>{
  const pending=deferred();const s=setup(()=>pending.promise);const first=s.restore(s.user);s.user=null;await s.restore(null);
  pending.resolve({role:'member'});await first;assert.deepEqual(s.sessions,[null]);
 });
+
+test('an App Check rejection does not delete a valid local sign-in session',async()=>{
+ const s=setup(async()=>{throw {code:'functions/unauthenticated',message:'Unauthenticated'};});
+ await assert.rejects(s.restore(s.user));
+ assert.ok(s.user);
+});
