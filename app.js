@@ -35,9 +35,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.25.12";
+const APP_VERSION = "2.25.13";
 const APP_RELEASE_DATE = "September 7, 2026";
 const RELEASE_HISTORY = [
+  ["2.25.13", "Kept map attribution below the event popup while retaining its bottom-right position"],
   ["2.25.12", "Expanded List on tap and made event controls reveal continuously with the swipe"],
   ["2.25.11", "Placed map attribution below the mobile navigation in the bottom-right corner"],
   ["2.25.10", "Reset pin selections to List and softened the event controls as the sheet expands"],

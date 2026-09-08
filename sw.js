@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v324-finger-following-controls";
+const CACHE_NAME = "fqc-app-v325-credit-below-popup";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];
