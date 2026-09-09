@@ -1,4 +1,4 @@
-import { renderHackathonDraft } from "./drafts/hackathon/landing.js";
+import { renderHackathonLanding } from "./drafts/hackathon/landing.js";
 import { pendingMemberActions, observeMemberActions, prepareOfflineAttendance, loadMyRsvps } from "./firebase-client.js";
 import { chooseSheetDestination } from "./sheet-gesture.js";
 import { renderWorkshopStories, bindWorkshopStories } from "./workshop-stories.js";
@@ -38,9 +38,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.29.1";
+const APP_VERSION = "2.29.2";
 const APP_RELEASE_DATE = "September 9, 2026";
 const RELEASE_HISTORY = [
+  ["2.29.2", "Restored the revised drug discovery hackathon page and interest list"],
   ["2.29.1", "Withheld unconfirmed hackathon details pending organizer review"],
   ["2.29.0", "Introduced the drug discovery hackathon with a compact mobile and desktop landing page"],
   ["2.28.1", "Kept the selected map pin highlighted while resizing the event popup"],
@@ -1037,18 +1038,12 @@ function renderAbout() {
 }
 
 function renderHackathon() {
-  // Compile-time gate: the draft and its copy are removed from production builds.
-  if (import.meta.env.DEV && new URLSearchParams(location.search).has("preview-hackathon")) {
-    return renderHackathonDraft({
-      photo: hackathonPhoto,
-      cta: hackathonCta(),
-      interested: state.hackathonInterested,
-      error: escapeHtml(state.hackathonError || "")
-    });
-  }
-  return `<section class="hackathon-landing hackathon-preview" data-screen="hackathon">
-    <header class="hack-hero"><h2 class="hack-coming-soon">More details coming soon</h2></header>
-  </section>`;
+  return renderHackathonLanding({
+    photo: hackathonPhoto,
+    cta: hackathonCta(),
+    interested: state.hackathonInterested,
+    error: escapeHtml(state.hackathonError || "")
+  });
 }
 
 async function registerHackathonInterest(interested = true) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "fqc-app-v343-public-shell";
+const CACHE_NAME = "fqc-app-v344-public-shell";
 const ASSETS = [
   "/assets/fqc-app-icon-192.png?v=29"
 ];

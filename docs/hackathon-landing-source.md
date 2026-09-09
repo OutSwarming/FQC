@@ -1,16 +1,16 @@
 # Hackathon landing page · September 8, 2026
 
-## September 9 organizer review
+## September 9 public restoration
 
-The announcement has been withdrawn pending confirmation with Daniel. Public Hackathon routes show only “More details coming soon,” without dates, format, promises, or an interest button. Existing interest records are preserved.
+The revised page is public again. It avoids unconfirmed dates, format and resource commitments while restoring the interest-list button and preserving existing interest records.
 
-The revised draft is saved in `drafts/hackathon/landing.js`. It is available only through the local Vite development server at `/hackathon?preview-hackathon=1`. `import.meta.env.DEV` removes the renderer and draft styles from production builds; the query parameter does not enable it on the live site.
+The public renderer is saved in `drafts/hackathon/landing.js` and is shown on the Hackathon tab, `/hackathon`, and legacy Hackathon links.
 
 The draft now opens with “FQC Drug Discovery Hackathon,” explains applying quantum computing to drug-discovery problems and optimizing quantum algorithms, and emphasizes student collaboration and creative approaches. Standard system typography, theme-aware surfaces and a real workshop photo replace the slogan-driven presentation. Dates and resource commitments await confirmation.
 
 Interest email behavior: `hackathonInterest/{uid}` stores `uid`, `eventId`, `interested`, and `updatedAt`. The UID links to the member’s account/profile email; no email is copied into the interest record and saving interest does not send an email. Current rules permit only the member or an officer to read the interest record. Account deletion removes the record.
 
-The original launch notes below describe the withdrawn September 8 release.
+The original launch notes below describe the September 8 version that was replaced by the revised public page.
 
 Source: [UF 2027 Hackathon](https://docs.google.com/document/d/1Q4sjOD96t7P8NfF37MNfDXVkUIY1V89uA13-b6-vws8/edit), read through the club’s signed-in Google Docs session. The connected Drive account did not have access. The document was not edited.
 

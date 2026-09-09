@@ -1,6 +1,6 @@
-// Local review only. app.js gates this renderer with import.meta.env.DEV.
-// Keep styling with the draft so neither its CSS nor its copy ships publicly.
-export function renderHackathonDraft({ photo, cta, interested, error }) {
+// The public hackathon landing page. Its inline styles keep this campaign layout
+// self-contained while reusing the app's established color and type tokens.
+export function renderHackathonLanding({ photo, cta, interested, error }) {
   return `<section class="hackathon-draft" data-screen="hackathon" aria-labelledby="discovery-title">
     <style>${draftStyles}</style>
     <header class="draft-intro">
@@ -22,7 +22,6 @@ export function renderHackathonDraft({ photo, cta, interested, error }) {
       <p>Creativity matters here. A useful question or a different way of approaching the problem can be just as valuable as getting the code to run.</p>
       <details class="draft-depth"><summary>What kind of quantum algorithm? <span aria-hidden="true">+</span></summary><div><p>We’re exploring a variational quantum eigensolver (VQE) as a starting point. It pairs a quantum circuit that estimates an energy with a classical optimizer that adjusts the circuit and tries again.</p><p>The exact challenge, format and support are still being confirmed. We’ll share those details when they’re ready.</p></div></details>
     </section>
-    <p class="draft-review-note">Preview for organizer review · Not published</p>
   </section>`;
 }
 
@@ -48,7 +47,6 @@ const draftStyles = `
 .draft-depth[open] summary span { transform: rotate(45deg); }
 .draft-depth summary:focus-visible { outline: 3px solid var(--accent-strong); outline-offset: 3px; border-radius: 8px; }
 .draft-depth > div { padding-bottom: 4px; }
-.hackathon-draft .draft-review-note { margin: 22px 0 0; font-size: .75rem; }
 @media(max-width:680px) {
   .hackathon-draft { padding: 26px 20px; }
   .draft-intro { grid-template-columns: 1fr; gap: 26px; }
@@ -57,5 +55,8 @@ const draftStyles = `
   .hackathon-draft p { font-size: .94rem; }
   .draft-photo img { aspect-ratio: 1.5; }
   .draft-approach { margin-top: 26px; padding-top: 24px; }
+}
+@media(max-height:500px) and (pointer:coarse) {
+  .hackathon-draft { padding-bottom: 120px; }
 }
 `;

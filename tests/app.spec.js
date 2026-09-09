@@ -1564,22 +1564,22 @@ test('event check-in replaces RSVP only for the open event and survives closing 
   await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
 });
 
-test('Hackathon withholds unconfirmed details on public routes', async ({ page }) => {
+test('Hackathon shows the revised drug discovery page on public routes', async ({ page }) => {
   await expect(page.locator('.bottom-nav .nav-item')).toHaveText(['About', 'Events', 'Hackathon', 'Profile']);
   await navButton(page, 'Hackathon').click();
-  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
-  await expect(page.locator('[data-hackathon-rsvp]')).toHaveCount(0);
+  await expect(page.locator('#discovery-title')).toHaveText('FQC Drug Discovery Hackathon');
+  await expect(page.locator('[data-hackathon-rsvp]')).toHaveCount(1);
   await page.goto('/hackathon');
-  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
+  await expect(page.locator('#discovery-title')).toHaveText('FQC Drug Discovery Hackathon');
   await page.goto('/?release=2.25.2#hackathon');
-  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
+  await expect(page.locator('#discovery-title')).toHaveText('FQC Drug Discovery Hackathon');
   await navButton(page, 'About').click();
   await expect(page.locator('.hack-hero h2')).toContainText('zero');
   await expect(page.locator('[data-screen=about]')).not.toContainText(/hackathon/i);
 });
 
-test('local hackathon draft uses natural copy and an approachable layout', async ({ page }, info) => {
-  await page.goto('/hackathon?preview-hackathon=1');
+test('public hackathon page uses natural copy and an approachable layout', async ({ page }, info) => {
+  await page.goto('/hackathon');
   await expect(page.locator('#discovery-title')).toHaveText('FQC Drug Discovery Hackathon');
   await expect(page.locator('.draft-lead')).toContainText('optimize quantum algorithms');
   await expect(page.locator('.hackathon-draft')).toContainText('Creativity matters');
@@ -1734,7 +1734,7 @@ test("officer demotion immediately removes private screens in the open app", asy
 
 // Re-enabled with the 2027 hackathon landing page.
 test("existing members can RSVP, withdraw, and keep interest separate between accounts", async ({ page }) => {
-  await page.goto("/hackathon?preview-hackathon=1");
+  await page.goto("/hackathon");
   const signIn = uid => page.evaluate(uid => window.__FQC_AUTH_TEST_API__.signInAs({ uid, email: `${uid}@ufl.edu`, displayName: uid, role: "member" }), uid);
   await navButton(page, "Hackathon").click();
   await signIn("interested-member");
@@ -1753,7 +1753,7 @@ test("existing members can RSVP, withdraw, and keep interest separate between ac
 });
 
 test("hackathon RSVP resumes after existing-account login", async ({ page }) => {
-  await page.goto("/hackathon?preview-hackathon=1");
+  await page.goto("/hackathon");
   await navButton(page, "Hackathon").click();
   await page.locator("[data-hackathon-rsvp]").first().click();
   await page.getByRole("button", { name: "Log In", exact: true }).click();
@@ -1763,7 +1763,7 @@ test("hackathon RSVP resumes after existing-account login", async ({ page }) => 
 });
 
 test("hackathon RSVP creates an account and saves interest automatically", async ({ page }) => {
-  await page.goto("/hackathon?preview-hackathon=1");
+  await page.goto("/hackathon");
   await navButton(page, "Hackathon").click();
   await page.locator("[data-hackathon-rsvp]").first().click();
   await page.getByRole("button", { name: "Create Account", exact: true }).click();
@@ -1776,7 +1776,7 @@ test("hackathon RSVP creates an account and saves interest automatically", async
 });
 
 test("failed hackathon RSVP shows retry and never falsely confirms", async ({ page }) => {
-  await page.goto("/hackathon?preview-hackathon=1");
+  await page.goto("/hackathon");
   await navButton(page, "Hackathon").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "retry-member", email: "retry@ufl.edu", role: "member" });

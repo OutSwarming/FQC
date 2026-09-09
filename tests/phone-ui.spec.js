@@ -845,7 +845,8 @@ test('photo bubbles compress, spring back, cancel for scrolling, and respect red
 
 test('event check-in and the new Hackathon destination fit every phone', async ({ page }, info) => {
   await goTab(page, 'Hackathon');
-  await expect(page.getByText('More details coming soon', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'FQC Drug Discovery Hackathon' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join the interest list' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/${info.project.name}-new-hackathon.png` });
   await page.evaluate(() => {
@@ -856,12 +857,10 @@ test('event check-in and the new Hackathon destination fit every phone', async (
   await page.locator('#event-sheet-handle').tap();
   const action = page.locator('.event-list [data-event-checkin]').first();
   await action.tap();
-  await expect(page.locator('.checkin-hero h2')).toHaveText('Quantum Workshop');
-  await page.getByRole('button', { name: 'I’m Here', exact: true }).tap();
-  await expect(page.getByRole('button', { name: 'Checked In', exact: true })).toBeDisabled();
+  await expect(action).toHaveText('Checked in');
+  await expect(action).toBeDisabled();
+  await expect(page.locator('#action-feedback')).toContainText('1 point added');
   await page.evaluate(() => window.__FQC_AUTH_TEST_API__.setCheckIn({ open: false }));
-  await expect(page.getByRole('heading', { name: 'Check-in isn’t open for this event' })).toBeVisible();
-  await page.getByRole('button', { name: 'Back to Events', exact: true }).tap();
   await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
   await expect(page.locator('.event-list [data-rsvp]').first()).toHaveText('RSVP');
 });
@@ -1182,10 +1181,8 @@ test('selected pin stays highlighted while the event sheet is dragged', async ({
 });
 
 
-test('private hackathon draft stays readable in both themes', async ({ page }, info) => {
+test('public hackathon page stays readable in both themes', async ({ page }, info) => {
   await goTab(page, 'Hackathon');
-  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
-  await page.goto('/hackathon?preview-hackathon=1');
   const landing = page.locator('.hackathon-draft');
   await expect(landing.locator('h2')).toHaveText('FQC Drug Discovery Hackathon');
   const detail = landing.locator('details');
@@ -1200,6 +1197,7 @@ test('private hackathon draft stays readable in both themes', async ({ page }, i
     await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({ path: `test-results/hackathon-draft-${info.project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
   }
+  await detail.locator('summary').evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
   await detail.locator('summary').click();
   await expect(detail).toHaveAttribute('open', '');
   await expect(detail).toContainText('variational quantum eigensolver');
