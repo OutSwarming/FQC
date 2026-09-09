@@ -1,3 +1,4 @@
+import { renderHackathonDraft } from "./drafts/hackathon/landing.js";
 import { pendingMemberActions, observeMemberActions, prepareOfflineAttendance, loadMyRsvps } from "./firebase-client.js";
 import { chooseSheetDestination } from "./sheet-gesture.js";
 import { renderWorkshopStories, bindWorkshopStories } from "./workshop-stories.js";
@@ -37,9 +38,10 @@ import {
   updateProfileName
 } from "./firebase-client.js";
 
-const APP_VERSION = "2.29.0";
-const APP_RELEASE_DATE = "September 8, 2026";
+const APP_VERSION = "2.29.1";
+const APP_RELEASE_DATE = "September 9, 2026";
 const RELEASE_HISTORY = [
+  ["2.29.1", "Withheld unconfirmed hackathon details pending organizer review"],
   ["2.29.0", "Introduced the drug discovery hackathon with a compact mobile and desktop landing page"],
   ["2.28.1", "Kept the selected map pin highlighted while resizing the event popup"],
   ["2.28.0", "Private RSVPs, immediate officer access changes, and durable attendance through connection drops"],
@@ -1035,33 +1037,17 @@ function renderAbout() {
 }
 
 function renderHackathon() {
-  return `<section class="hackathon-landing discovery-landing" data-screen="hackathon" aria-labelledby="discovery-title">
-    <header class="hack-hero discovery-hero">
-      <div class="hack-eyebrow"><span class="hack-live-dot"></span> FQC HACKATHON · SPRING 2027</div>
-      <div class="discovery-hero-grid">
-        <div class="discovery-intro">
-          <h2 id="discovery-title">Small molecules<br><em>Big possibilities</em></h2>
-          <p class="discovery-lead">What can quantum + AI bring to drug discovery? Help explore the question in FQC’s next hackathon</p>
-          ${hackathonCta()}
-          ${state.hackathonInterested
-            ? '<p class="discovery-interest-note" role="status">Your interest is saved · Final registration will follow</p><button class="hack-cancel" type="button" id="cancel-hackathon-interest">Remove my interest</button>'
-            : '<p class="discovery-interest-note">Save your interest with an FQC account<br>Final registration will follow</p>'}
-          ${state.hackathonError ? `<p class="hack-interest-status hack-interest-error" role="alert">${escapeHtml(state.hackathonError)}</p>` : ""}
-        </div>
-        <figure class="hack-hero-shot discovery-photo">${hackathonPhoto('full-room-clear', 'FQC members sharing ideas and working at laptops during a club session', true)}<figcaption>Our workshop room today · Your team’s next problem</figcaption></figure>
-      </div>
-      <dl class="discovery-facts"><div><dt>WHEN · TENTATIVE</dt><dd>February 1–13, 2027</dd></div><div><dt>THE FORMAT</dt><dd>Two weeks · Code on your schedule</dd></div></dl>
-    </header>
-    <section class="discovery-path" aria-labelledby="discovery-path-title">
-      <div class="discovery-section-heading"><p class="hack-kicker">FROM A FIRST RUN TO A BETTER ANSWER</p><h2 id="discovery-path-title">Learn it<br><em>Improve it</em></h2><p>The plan: drug discovery challenges, quantum + AI optimization, and a guided start on UF’s HiPerGator</p></div>
-      <ol class="discovery-steps">
-        <li><span aria-hidden="true">01 / PREPARE</span><h3>Start together</h3><p>A setup bootcamp and a quantum algorithm template to get your first run working</p></li>
-        <li><span aria-hidden="true">02 / OPTIMIZE</span><h3>Find a better result</h3><p>Work with your team, test ideas, and get help through workshops and office hours</p></li>
-        <li><span aria-hidden="true">03 / DEMONSTRATE</span><h3>Show what changed</h3><p>Bring your results to demo day and explain how you improved them</p></li>
-      </ol>
-      <details class="discovery-depth"><summary>A little more quantum <span aria-hidden="true">+</span></summary><div><p>The planned starting point is a <strong>variational quantum eigensolver (VQE)</strong> template: a quantum circuit estimates an energy, then a classical optimizer adjusts its parameters and tries again</p><p>Week one helps you understand and run the template; week two focuses on optimization for the challenge. Workshops and office hours support the coding along the way</p><small>Challenge specifics, access details and the final schedule are still being developed</small></div></details>
-      <footer class="discovery-footer"><span>FLORIDA QUANTUM COMPUTING · UNIVERSITY OF FLORIDA</span><p>More details coming soon</p></footer>
-    </section>
+  // Compile-time gate: the draft and its copy are removed from production builds.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has("preview-hackathon")) {
+    return renderHackathonDraft({
+      photo: hackathonPhoto,
+      cta: hackathonCta(),
+      interested: state.hackathonInterested,
+      error: escapeHtml(state.hackathonError || "")
+    });
+  }
+  return `<section class="hackathon-landing hackathon-preview" data-screen="hackathon">
+    <header class="hack-hero"><h2 class="hack-coming-soon">More details coming soon</h2></header>
   </section>`;
 }
 

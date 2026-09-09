@@ -1182,11 +1182,12 @@ test('selected pin stays highlighted while the event sheet is dragged', async ({
 });
 
 
-test('drug discovery landing stays compact, readable, and usable in both themes', async ({ page }, info) => {
+test('private hackathon draft stays readable in both themes', async ({ page }, info) => {
   await goTab(page, 'Hackathon');
-  const landing = page.locator('.discovery-landing');
-  await expect(landing).toContainText('February 1–13, 2027');
-  await expect(landing).toContainText('TENTATIVE');
+  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
+  await page.goto('/hackathon?preview-hackathon=1');
+  const landing = page.locator('.hackathon-draft');
+  await expect(landing.locator('h2')).toHaveText('FQC Drug Discovery Hackathon');
   const detail = landing.locator('details');
   await expect(detail).not.toHaveAttribute('open');
   for (const colorScheme of ['light', 'dark']) {
@@ -1197,7 +1198,7 @@ test('drug discovery landing stays compact, readable, and usable in both themes'
     // No text spills out of its own column at narrow or landscape sizes.
     expect(await landing.locator('h2, h3, p, dd, summary').evaluateAll(nodes => nodes.every(el => el.scrollWidth <= el.clientWidth + 1))).toBe(true);
     await page.evaluate(() => scrollTo(0, 0));
-    await page.screenshot({ path: `test-results/discovery-${info.project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
+    await page.screenshot({ path: `test-results/hackathon-draft-${info.project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
   }
   await detail.locator('summary').click();
   await expect(detail).toHaveAttribute('open', '');

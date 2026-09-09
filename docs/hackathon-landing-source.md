@@ -1,5 +1,17 @@
 # Hackathon landing page · September 8, 2026
 
+## September 9 organizer review
+
+The announcement has been withdrawn pending confirmation with Daniel. Public Hackathon routes show only “More details coming soon,” without dates, format, promises, or an interest button. Existing interest records are preserved.
+
+The revised draft is saved in `drafts/hackathon/landing.js`. It is available only through the local Vite development server at `/hackathon?preview-hackathon=1`. `import.meta.env.DEV` removes the renderer and draft styles from production builds; the query parameter does not enable it on the live site.
+
+The draft now opens with “FQC Drug Discovery Hackathon,” explains applying quantum computing to drug-discovery problems and optimizing quantum algorithms, and emphasizes student collaboration and creative approaches. Standard system typography, theme-aware surfaces and a real workshop photo replace the slogan-driven presentation. Dates and resource commitments await confirmation.
+
+Interest email behavior: `hackathonInterest/{uid}` stores `uid`, `eventId`, `interested`, and `updatedAt`. The UID links to the member’s account/profile email; no email is copied into the interest record and saving interest does not send an email. Current rules permit only the member or an officer to read the interest record. Account deletion removes the record.
+
+The original launch notes below describe the withdrawn September 8 release.
+
 Source: [UF 2027 Hackathon](https://docs.google.com/document/d/1Q4sjOD96t7P8NfF37MNfDXVkUIY1V89uA13-b6-vws8/edit), read through the club’s signed-in Google Docs session. The connected Drive account did not have access. The document was not edited.
 
 The public page summarizes the drug discovery theme, AI/quantum optimization, HiPerGator, a guided VQE start, asynchronous team coding, workshops, office hours, and demo day. It preserves the early-announcement nature of the brief. Interest uses the existing per-account interest flow; it does not reserve a team or confirm event registration.

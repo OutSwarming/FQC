@@ -1564,30 +1564,32 @@ test('event check-in replaces RSVP only for the open event and survives closing 
   await expect(page.locator('[data-event-checkin]')).toHaveCount(0);
 });
 
-test('About preserves the club story while Hackathon has its own drug discovery page', async ({ page }) => {
+test('Hackathon withholds unconfirmed details on public routes', async ({ page }) => {
   await expect(page.locator('.bottom-nav .nav-item')).toHaveText(['About', 'Events', 'Hackathon', 'Profile']);
+  await navButton(page, 'Hackathon').click();
+  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
+  await expect(page.locator('[data-hackathon-rsvp]')).toHaveCount(0);
+  await page.goto('/hackathon');
+  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
+  await page.goto('/?release=2.25.2#hackathon');
+  await expect(page.locator('[data-screen=hackathon]')).toHaveText('More details coming soon');
   await navButton(page, 'About').click();
   await expect(page.locator('.hack-hero h2')).toContainText('zero');
-  await expect(page.locator('.hackathon-landing img').first()).toBeVisible();
-  await navButton(page, 'Hackathon').click();
-  await expect(page.locator('#screen-title')).toHaveText('Hackathon');
-  await expect(page.getByText('More details coming soon', { exact: true })).toBeVisible();
-  await expect(page.locator('.workshop-phase')).toHaveCount(0);
-  await expect(page.locator('[data-screen=hackathon]')).toContainText('drug discovery');
-  await expect(page.locator('[data-hackathon-rsvp]')).toHaveCount(1);
+  await expect(page.locator('[data-screen=about]')).not.toContainText(/hackathon/i);
+});
+
+test('local hackathon draft uses natural copy and an approachable layout', async ({ page }, info) => {
+  await page.goto('/hackathon?preview-hackathon=1');
+  await expect(page.locator('#discovery-title')).toHaveText('FQC Drug Discovery Hackathon');
+  await expect(page.locator('.draft-lead')).toContainText('optimize quantum algorithms');
+  await expect(page.locator('.hackathon-draft')).toContainText('Creativity matters');
+  await expect(page.locator('.hackathon-draft')).not.toContainText(/February|2027|Small molecules|Learn it|Improve it/);
   for (const colorScheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme });
-    await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme);
-    await expect.poll(() => page.locator('.discovery-photo img').evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
-    await page.screenshot({ path: `test-results/discovery-${test.info().project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
+    await expect.poll(() => page.locator('.draft-photo img').evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `test-results/hackathon-draft-${info.project.name}-${colorScheme}.png`, fullPage: true, animations: 'disabled' });
   }
-  await navButton(page, 'Events').click();
-  await expect(page).toHaveURL(/#events$/);
-  await expect(page.locator('#screen-title')).toHaveText('Events');
-  await page.goto('/about');
-  await expect(navButton(page, 'About')).toHaveAttribute('aria-current', 'page');
-  await page.goto('/hackathon');
-  await expect(navButton(page, 'Hackathon')).toHaveAttribute('aria-current', 'page');
 });
 
 
@@ -1732,6 +1734,7 @@ test("officer demotion immediately removes private screens in the open app", asy
 
 // Re-enabled with the 2027 hackathon landing page.
 test("existing members can RSVP, withdraw, and keep interest separate between accounts", async ({ page }) => {
+  await page.goto("/hackathon?preview-hackathon=1");
   const signIn = uid => page.evaluate(uid => window.__FQC_AUTH_TEST_API__.signInAs({ uid, email: `${uid}@ufl.edu`, displayName: uid, role: "member" }), uid);
   await navButton(page, "Hackathon").click();
   await signIn("interested-member");
@@ -1750,6 +1753,7 @@ test("existing members can RSVP, withdraw, and keep interest separate between ac
 });
 
 test("hackathon RSVP resumes after existing-account login", async ({ page }) => {
+  await page.goto("/hackathon?preview-hackathon=1");
   await navButton(page, "Hackathon").click();
   await page.locator("[data-hackathon-rsvp]").first().click();
   await page.getByRole("button", { name: "Log In", exact: true }).click();
@@ -1759,6 +1763,7 @@ test("hackathon RSVP resumes after existing-account login", async ({ page }) => 
 });
 
 test("hackathon RSVP creates an account and saves interest automatically", async ({ page }) => {
+  await page.goto("/hackathon?preview-hackathon=1");
   await navButton(page, "Hackathon").click();
   await page.locator("[data-hackathon-rsvp]").first().click();
   await page.getByRole("button", { name: "Create Account", exact: true }).click();
@@ -1771,6 +1776,7 @@ test("hackathon RSVP creates an account and saves interest automatically", async
 });
 
 test("failed hackathon RSVP shows retry and never falsely confirms", async ({ page }) => {
+  await page.goto("/hackathon?preview-hackathon=1");
   await navButton(page, "Hackathon").click();
   await page.evaluate(() => {
     window.__FQC_AUTH_TEST_API__.signInAs({ uid: "retry-member", email: "retry@ufl.edu", role: "member" });
